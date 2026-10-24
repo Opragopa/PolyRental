@@ -1,0 +1,24 @@
+services:
+  web:
+    build:
+      secrets:
+        - proxy_ca
+    volumes:
+      - ${CODEX_PROXY_CERT}:/run/proxy-ca.pem:ro
+    environment:
+      SSL_CERT_FILE: /run/proxy-ca.pem
+  bot:
+    build:
+      secrets:
+        - proxy_ca
+    volumes:
+      - ${CODEX_PROXY_CERT}:/run/proxy-ca.pem:ro
+    environment:
+      SSL_CERT_FILE: /run/proxy-ca.pem
+  test:
+    build:
+      secrets:
+        - proxy_ca
+secrets:
+  proxy_ca:
+    file: ${CODEX_PROXY_CERT}

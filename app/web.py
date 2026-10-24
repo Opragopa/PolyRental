@@ -1,0 +1,202 @@
+import asyncio
+import hashlib
+import hmac
+import os
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from urllib.parse import quote
+
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from icalendar import Calendar, Event
+from itsdangerous import BadSignature, URLSafeSerializer
+from sqlalchemy.exc import IntegrityError
+from starlette.middleware.sessions import SessionMiddleware
+
+from .db import Session, init_db
+from .documents import ensure_templates, render_document
+from .service import Conflict, expire_holds, list_bookings, list_equipment, save_equipment, transition
+
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+async def expiry_loop():
+    while True:
+        await asyncio.sleep(60)
+        def expire():
+            with Session.begin() as session:
+                expire_holds(session)
+        await asyncio.to_thread(expire)
+
+
+def admin_ids():
+    return {int(value.strip()) for value in os.getenv("ADMIN_IDS", "").split(",") if value.strip().isdigit()}
+
+
+def verify_telegram(data):
+    token = os.getenv("BOT_TOKEN", "")
+    if not token or not data.get("hash") or not data.get("id") or not data.get("auth_date"):
+        return False
+    if not str(data["id"]).isdigit() or not str(data["auth_date"]).isdigit():
+        return False
+    age = time.time() - int(data["auth_date"])
+    if age < 0 or age > int(os.getenv("TELEGRAM_AUTH_MAX_AGE", "86400")):
+        return False
+    check = "\n".join(f"{key}={data[key]}" for key in sorted(data) if key != "hash")
+    secret = hashlib.sha256(token.encode()).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, data["hash"])
+
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    ensure_templates()
+    task = asyncio.create_task(expiry_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "change-me-before-deploy"), same_site="lax", https_only=os.getenv("PUBLIC_URL", "").startswith("https://"))
+
+
+def require_admin(request):
+    admin = request.session.get("admin_id")
+    if admin not in admin_ids():
+        raise HTTPException(403, "Войдите через Telegram как менеджер")
+    return admin
+
+
+def page(title, body):
+    return HTMLResponse(f'''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title><style>body{{font:16px system-ui;max-width:1100px;margin:30px auto;padding:0 15px;background:#f7f8fa;color:#17212b}}section{{background:white;padding:18px;margin:15px 0;border-radius:10px}}input,select,button{{padding:8px;margin:4px}}table{{border-collapse:collapse;width:100%}}td,th{{border-bottom:1px solid #ddd;text-align:left;padding:8px}}a{{color:#1673bd}}</style><h1>{title}</h1>{body}</html>''')
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/login")
+def login():
+    from html import escape
+    token = os.getenv("BOT_TOKEN", "")
+    username = os.getenv("BOT_USERNAME", "")
+    if not token or not username:
+        return page("Вход", "<p>Настройте BOT_TOKEN и BOT_USERNAME.</p>")
+    callback = escape(os.getenv("PUBLIC_URL", "http://localhost:8000").rstrip("/") + "/auth/telegram", quote=True)
+    return page("Вход менеджера", f'<script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{escape(username, quote=True)}" data-size="large" data-auth-url="{callback}" data-request-access="write"></script>')
+
+
+@app.get("/auth/telegram")
+def auth_telegram(request: Request):
+    data = dict(request.query_params)
+    if not verify_telegram(data) or int(data["id"]) not in admin_ids():
+        raise HTTPException(403, "Telegram ID не разрешен или подпись неверна")
+    request.session["admin_id"] = int(data["id"])
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/admin")
+def dashboard(request: Request):
+    from html import escape
+    require_admin(request)
+    parts = ['<p><a href="/admin/calendar">Календарь</a> · <a href="/admin/equipment">Оборудование</a></p><form method="post" action="/logout"><button>Выйти</button></form>']
+    parts.append('<section><h2>Заявки</h2><table><tr><th>№</th><th>Клиент</th><th>Период</th><th>Оборудование</th><th>Статус</th><th>Действия</th></tr>')
+    for booking in list_bookings():
+        items = ", ".join(escape(item.equipment.inventory_number) for item in booking.items)
+        actions = " ".join(f'<form style="display:inline" method="post" action="/admin/bookings/{booking.id}/{action}"><button>{label}</button></form>' for action, label in (("confirmed", "Подтвердить"), ("cancelled", "Отменить"), ("issued", "Выдать"), ("returned", "Вернуть")))
+        docs = " ".join(f'<a href="/admin/bookings/{booking.id}/documents/{kind}">{label}</a>' for kind, label in (("contract", "Договор"), ("issue", "Акт выдачи"), ("return", "Акт возврата")))
+        parts.append(f'<tr><td>{booking.id}</td><td>{escape(booking.customer_name)}<br>{escape(booking.customer_contact)}</td><td>{booking.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК</td><td>{items}</td><td>{booking.status}</td><td>{actions}<br>{docs}</td></tr>')
+    parts.append('</table></section>')
+    return page("PolyRental — менеджер", "".join(parts))
+
+
+@app.post("/admin/bookings/{booking_id}/{action}")
+async def change_booking(request: Request, booking_id: int, action: str):
+    admin = require_admin(request)
+    try:
+        status = await asyncio.to_thread(transition, booking_id, action, admin)
+    except (ValueError, Conflict) as exc:
+        raise HTTPException(409, str(exc))
+    if status == "expired":
+        raise HTTPException(409, "Удержание истекло; создайте новую заявку")
+    token = os.getenv("BOT_TOKEN", "")
+    if token:
+        from .bot import make_bot
+        from .service import get_booking
+        booking = await asyncio.to_thread(get_booking, booking_id)
+        try:
+            async with make_bot(token) as bot:
+                await bot.send_message(booking.customer_id, f"Статус заявки №{booking_id}: {status}")
+        except Exception:
+            pass
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.get("/admin/equipment")
+def equipment_page(request: Request):
+    from html import escape
+    require_admin(request)
+    rows = []
+    for item in list_equipment():
+        rows.append(f'<tr><td>{item.id}</td><td>{escape(item.inventory_number)}</td><td>{escape(item.name)}</td><td>{item.hourly_rate}</td><td>{item.condition}</td></tr>')
+    form = '''<section><h2>Добавить или обновить экземпляр</h2><form method="post"><input name="equipment_id" type="number" placeholder="ID для изменения"><input name="number" required placeholder="Инвентарный номер"><input name="name" required placeholder="Название"><input name="description" placeholder="Описание"><input name="rate" type="number" min="0" step="0.01" required placeholder="Цена за час"><select name="condition"><option value="available">Доступно</option><option value="maintenance">Ремонт</option><option value="retired">Списано</option></select><button>Сохранить</button></form></section>'''
+    return page("Оборудование", '<p><a href="/admin">← Заявки</a></p><section><table><tr><th>ID</th><th>Номер</th><th>Название</th><th>₽/час</th><th>Состояние</th></tr>' + "".join(rows) + '</table></section>' + form)
+
+
+@app.post("/admin/equipment")
+def equipment_save(request: Request, number: str = Form(), name: str = Form(), description: str = Form(""), rate: str = Form(), condition: str = Form(), equipment_id: str = Form("")):
+    require_admin(request)
+    try:
+        save_equipment(number, name, description, rate, condition, int(equipment_id) if equipment_id else None)
+    except (ValueError, Conflict, IntegrityError) as exc:
+        raise HTTPException(409, str(exc))
+    return RedirectResponse("/admin/equipment", status_code=303)
+
+
+@app.get("/admin/calendar")
+def calendar_page(request: Request):
+    require_admin(request)
+    bookings = [b for b in list_bookings() if b.status in {"pending", "confirmed", "issued"}]
+    rows = "".join(f'<tr><td>#{b.id}</td><td>{b.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.status}</td></tr>' for b in sorted(bookings, key=lambda b: b.starts_at))
+    url = "/calendar/" + quote(os.getenv("ICAL_TOKEN", "")) + ".ics"
+    return page("Календарь броней", f'<p><a href="/admin">← Заявки</a> · <a href="{url}">Подписка iCal</a></p><section><table><tr><th>Заявка</th><th>Начало МСК</th><th>Конец МСК</th><th>Статус</th></tr>{rows}</table></section>')
+
+
+@app.get("/calendar/{token}.ics")
+def calendar_feed(token: str):
+    expected = os.getenv("ICAL_TOKEN", "")
+    if not expected or not hmac.compare_digest(token, expected):
+        raise HTTPException(404)
+    cal = Calendar()
+    cal.add("prodid", "-//PolyRental//Calendar//RU")
+    cal.add("version", "2.0")
+    for booking in list_bookings():
+        if booking.status not in {"confirmed", "issued"}:
+            continue
+        event = Event()
+        event.add("uid", f"booking-{booking.id}@polyrental")
+        event.add("summary", "Аренда: " + ", ".join(item.equipment.name for item in booking.items))
+        event.add("dtstart", booking.starts_at)
+        event.add("dtend", booking.ends_at)
+        cal.add_component(event)
+    return Response(cal.to_ical(), media_type="text/calendar")
+
+
+@app.get("/admin/bookings/{booking_id}/documents/{kind}")
+def document(request: Request, booking_id: int, kind: str):
+    require_admin(request)
+    try:
+        body = render_document(booking_id, kind)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})

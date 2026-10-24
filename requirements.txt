@@ -1,0 +1,13 @@
+aiogram==3.24.0
+aiohttp-socks==0.10.1
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+SQLAlchemy==2.0.45
+psycopg[binary]==3.3.2
+Jinja2==3.1.6
+python-multipart==0.0.21
+docxtpl==0.20.2
+icalendar==6.3.2
+itsdangerous==2.2.0
+pytest==9.0.2
+httpx==0.28.1
