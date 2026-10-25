@@ -28,6 +28,7 @@ from .documents import render_document
 from . import __version__
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
+                  reusable_identity_fields,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
 from .rental import (Conflict, assign_booking_assets, availability, create_booking,
@@ -382,6 +383,15 @@ async def customer_identity_status(booking_id: int, user=Depends(require_custome
     _limit_pii(user["id"], "customer_read", 20)
     try:
         return await asyncio.to_thread(identity_status, booking_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/identity/reusable-profile")
+async def customer_reusable_identity_profile(booking_id: int, user=Depends(require_customer)):
+    _limit_pii(user["id"], "customer_read", 20)
+    try:
+        return await asyncio.to_thread(reusable_identity_fields, booking_id, user["id"])
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 

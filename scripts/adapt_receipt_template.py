@@ -62,6 +62,8 @@ def adapt(source: Path, target: Path):
         for source_token, target_token in TOKEN_MAP.items():
             value = value.replace("{{" + source_token + "}}", "{{ " + target_token + " }}")
         value = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", lambda match: "{{ " + match.group(1).strip() + " }}", value)
+        value = value.replace("{{ identity_document }} {{ passport_number }}", "{{ identity_document }}")
+        value = value.replace("моб. тел.: +{{ phone }}", "Контакт: {{ phone }}")
         if "материально-ответственным" in value or "полную материальную ответственность" in value:
             value = ("Я принимаю оборудование без взимания платы на согласованный срок и несу полную материальную "
                      "ответственность за его сохранность. При утрате, повреждении или невозврате обязуюсь возместить "

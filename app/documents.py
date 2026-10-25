@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import io
 import os
 from pathlib import Path
@@ -96,18 +97,25 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         template_path = RECEIPT_TEMPLATE
         if not template_path.exists():
             raise ValueError("Шаблон сохранной расписки не найден")
+        # Use the recorded act signature when available; otherwise this receipt's
+        # issue date is the time it is generated for signing, not booking creation.
+        receipt_moment = booking.act_signed_at or datetime.now(local)
+        if receipt_moment.tzinfo is None:
+            receipt_moment = receipt_moment.replace(tzinfo=timezone.utc)
+        receipt_moment = receipt_moment.astimezone(local)
+        if not identity_payload.get("full_name"):
+            raise Conflict("В проверенной анкете не указано ФИО получателя")
         context.update({
-            "date": booking.created_at.astimezone(local).strftime("%d.%m.%Y"),
-            "time": booking.created_at.astimezone(local).strftime("%H:%M"),
+            "date": receipt_moment.strftime("%d.%m.%Y"),
+            "time": receipt_moment.strftime("%H:%M"),
             # Booking IDs are monotonically allocated and never reused after deletion.
             # The year makes the human-facing number easier to sort and recognize.
             "receipt_number": f"SR-{booking.created_at.astimezone(local).year}-{booking.id:08d}",
             "issuer_name": os.getenv("OPERATOR_NAME", "сотрудником организации"),
             "identity_document": f"паспорт {identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
-            "passport_number": f"{identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
             "passport_issued_at": identity_payload.get("passport_issued_at", ""),
             "residential_address": identity_payload.get("residential_address", ""),
-            "full_name": identity_payload.get("full_name", booking.customer_name),
+            "full_name": identity_payload["full_name"],
             "phone": booking.customer_contact,
             "email": "",
             "equipment_name": "\n".join(asset.equipment.article.name if asset.equipment.article else asset.equipment.name for asset in booking.assets),

@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from PIL import Image, ImageOps, UnidentifiedImageError
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, exists, or_, select
 
 from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyConsent,
                  RepairTicket, Session)
@@ -116,7 +116,10 @@ def consent_text():
         "сотрудником без OCR; перед сохранением изображения декодируются, пересохраняются без EXIF и шифруются. "
         "Реквизиты и фотографии не передаются в сообщения Telegram и не используются для рекламы.\n\n"
         "Полные данные доступны только сотрудникам, включённым в закрытый список проверки документов. "
-        "Данные удаляются по утверждённым срокам хранения или раньше при наличии законного основания и обращения. "
+        "Анкета и фотографии хранятся во время оформления и исполнения аренды, затем удаляются через 90 дней после возврата оборудования; "
+        "если в этот период оформляется новая заявка, введённые реквизиты могут быть предложены для повторного заполнения, "
+        "а согласие на обработку для новой заявки запрашивается отдельно. Фотографии документов в новую заявку не переносятся. "
+        "При открытом ремонте срок хранения отсчитывается после его закрытия. Данные могут быть удалены раньше при наличии законного основания и обращения. "
         "Запрос, уточнение, отзыв согласия или обращение по удалению можно направить через "
         + os.environ["OPERATOR_CONTACT"] + ". Отказ предоставить данные означает невозможность оформить документы "
         "и передать оборудование во временное пользование. Настоящее согласие оформляется отдельно от расписки "
@@ -194,6 +197,42 @@ def identity_status(booking_id, customer_id=None):
             result["fields"] = payload
             result["documents"] = sorted(document.kind for document in identity.documents)
         return result
+
+
+def reusable_identity_fields(booking_id, customer_id):
+    """Return the customer's latest still-retained identity fields for prefill.
+
+    Document photos are deliberately not reused: a new application must include
+    its own current images. Active bookings retain their identity until return;
+    returned bookings are eligible only until their configured deletion date.
+    """
+    active_statuses = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+    with Session.begin() as session:
+        target = session.get(Booking, booking_id)
+        if not target or target.customer_id != customer_id:
+            raise ValueError("Заявка не найдена")
+        eligible = or_(
+            and_(Booking.status.in_(active_statuses), CustomerIdentity.delete_after.is_(None)),
+            and_(Booking.status == "returned", CustomerIdentity.delete_after > now()),
+            and_(Booking.status == "returned", exists(select(RepairTicket.id).where(
+                RepairTicket.booking_id == Booking.id, RepairTicket.status != "closed"))),
+        )
+        identity = session.scalar(
+            select(CustomerIdentity)
+            .join(Booking, Booking.id == CustomerIdentity.booking_id)
+            .where(CustomerIdentity.customer_id == customer_id,
+                   CustomerIdentity.booking_id != booking_id,
+                   CustomerIdentity.status.in_({"submitted", "needs_changes", "verified"}),
+                   eligible)
+            .order_by(CustomerIdentity.updated_at.desc(), CustomerIdentity.id.desc())
+            .limit(1)
+        )
+        if identity is None:
+            return {"reusable": False, "fields": {}}
+        payload, _ = _decrypt_payload(identity)
+        session.add(PIIAudit(booking_id=booking_id, actor_id=customer_id,
+                             action="identity_prefilled"))
+        return {"reusable": True, "fields": payload}
 
 
 def submit_identity(booking_id, customer_id, payload, documents, policy_version="", text_hash=""):

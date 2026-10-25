@@ -465,7 +465,16 @@
       state.universities = universityResult.items || []; renderUniversityOptions();
       await restoreIdentityPhotos(current.documents || []);
       const fields = current.fields || {};
-      state.identityLegacyInstitution = state.identityNeedsChanges && !state.universities.includes(fields.student_institution)
+      if (!state.identityNeedsChanges && !Object.values(fields).some((value) => Boolean(value))) {
+        const saved = await api(`/api/miniapp/bookings/${bookingId}/identity/reusable-profile`);
+        if (saved.reusable) {
+          Object.assign(fields, saved.fields || {});
+          const feedback = $("identity-feedback");
+          feedback.textContent = "Данные из предыдущей анкеты заполнены автоматически. Проверьте их и при необходимости исправьте. Для новой заявки нужно загрузить актуальные фотографии документов. Данные анкеты хранятся до 90 дней после возврата оборудования.";
+          feedback.hidden = false;
+        }
+      }
+      state.identityLegacyInstitution = !state.universities.includes(fields.student_institution)
         ? (fields.student_institution || null) : null;
       const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
       if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
@@ -519,7 +528,7 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.birth_date) || fields.birth_date > dateToday) { showIdentityFieldError("birth_date", "Проверьте дату рождения."); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) { showIdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта."); return; }
     if (!/^\d{8}$/.test(fields.student_id_number)) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр."); return; }
-    if (!state.universities.includes(fields.student_institution) && !(state.identityNeedsChanges && fields.student_institution === state.identityLegacyInstitution)) { showIdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга."); return; }
+    if (!state.universities.includes(fields.student_institution) && fields.student_institution !== state.identityLegacyInstitution) { showIdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга."); return; }
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields));
     if (state.consent) { upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash); }
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
@@ -573,11 +582,25 @@
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
-          const ready = actionButton("Заказ готов", transitionAction("ready"), order.id, "primary");
-          ready.disabled = order.assets.some((asset) => inspectionFor(order, asset, "pre_issue")?.result !== "pass");
+          const ready = actionButton("Подтвердить комплектацию", transitionAction("ready"), order.id, "primary");
+          const canConfirm = () => order.assets.length > 0 && order.assets.every((asset) => inspectionFor(order, asset, "pre_issue")?.result === "pass");
+          const readinessHint = document.createElement("p"); readinessHint.className = "workflow-hint";
+          const updateReadinessHint = () => {
+            const failedCount = order.assets.filter((asset) => inspectionFor(order, asset, "pre_issue")?.result === "fail").length;
+            readinessHint.textContent = failedCount
+              ? `Неисправность отмечена у ${failedCount} экземпляр(а). Замените неисправную технику, затем повторите проверку.`
+              : "Кнопка подтверждения станет активной после успешной проверки всех экземпляров. Можно отметить все исправные сразу.";
+            readinessHint.hidden = canConfirm();
+          };
+          ready.disabled = !canConfirm();
+          ready.title = ready.disabled ? "Подтверждение доступно после успешной проверки всех назначенных экземпляров" : "Все экземпляры проверены — подтвердить готовность к выдаче";
           appendInspectionGroup(actions, order, "pre_issue", () => {
-            ready.disabled = order.assets.some((asset) => inspectionFor(order, asset, "pre_issue")?.result !== "pass");
+            ready.disabled = !canConfirm();
+            ready.title = ready.disabled ? "Подтверждение доступно после успешной проверки всех назначенных экземпляров" : "Все экземпляры проверены — подтвердить готовность к выдаче";
+            updateReadinessHint();
           });
+          updateReadinessHint(); actions.append(readinessHint);
+          actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id));
