@@ -1,0 +1,26 @@
+# Добавьте этот файл к compose.yaml и compose.miniapp.yaml для Nginx и HTTPS.
+services:
+  nginx:
+    image: nginx:1.28-alpine
+    depends_on:
+      - miniapp
+    ports:
+      # Порты 80/443 в Windows уже заняты другим Nginx.
+      # На роутере: WAN 80 -> этот компьютер:8080, WAN 443 -> этот компьютер:8443.
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/active.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot_www:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    restart: unless-stopped
+  certbot:
+    image: certbot/certbot:latest
+    profiles: [ops]
+    volumes:
+      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+
+volumes:
+  certbot_www:
+  letsencrypt:

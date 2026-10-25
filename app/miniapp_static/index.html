@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f4f0">
+  <title>PolyRental — бронирование</title>
+  <link rel="stylesheet" href="/miniapp/static/style.css?v=20261025-03">
+  <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+  <script defer src="/miniapp/static/app.js?v=20261025-03"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><span>PolyRental</span></div>
+      <span class="topbar-note">Аренда оборудования</span>
+    </header>
+
+    <main>
+      <div id="mode-banner" class="mode-banner" hidden></div>
+      <div class="heading-row">
+        <div><p class="eyebrow">БРОНИРОВАНИЕ В TELEGRAM</p><h1 id="page-title">Найдём всё для вашей съёмки</h1></div>
+        <span class="timezone">Время · МСК</span>
+      </div>
+      <p id="page-intro" class="intro">Выберите сроки и оборудование. На оформление уйдёт пара минут.</p>
+
+      <nav class="tabs" aria-label="Разделы">
+        <button id="tab-new" type="button" class="tab active" aria-current="page">Новая бронь</button>
+        <button id="tab-orders" type="button" class="tab">Мои заявки</button>
+        <button id="tab-admin" type="button" class="tab" hidden>Управление</button>
+      </nav>
+      <div id="global-error" class="notice error" role="alert" hidden></div>
+
+      <section id="booking-flow" aria-label="Оформление бронирования">
+        <ol id="steps" class="steps" aria-label="Шаги оформления">
+          <li class="current"><span>01</span><b>Сроки</b></li>
+          <li><span>02</span><b>Оборудование</b></li>
+          <li><span>03</span><b>Контакты</b></li>
+          <li><span>04</span><b>Проверка</b></li>
+        </ol>
+
+        <div id="step-dates" class="panel step-panel">
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда вам нужно оборудование?</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
+          <p class="supporting">Укажите дату и время выдачи и возврата по Москве.</p>
+          <div class="date-grid">
+            <label class="field"><span>Начало аренды</span><input id="start" type="datetime-local" required aria-describedby="start-hint start-error"><small id="start-hint">Дата и время получения</small><small id="start-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span>Возврат</span><input id="end" type="datetime-local" required aria-describedby="end-hint end-error"><small id="end-hint">Позже начала аренды</small><small id="end-error" class="field-error" role="alert" hidden></small></label>
+          </div>
+          <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>Мы проверим свободные экземпляры на выбранный срок. Заявка удерживает их на 30 минут после отправки.</p></div>
+        </div>
+
+        <div id="step-items" class="panel step-panel" hidden>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Что возьмёте в аренду?</h2></div><span class="panel-icon" aria-hidden="true">▦</span></div>
+          <p id="period-label" class="supporting"></p>
+          <div id="items-status" class="notice" role="status" hidden></div>
+          <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button>
+          <div id="items-grid" class="items-grid" aria-label="Доступное оборудование"></div>
+          <details id="unavailable-details" class="unavailable-details" hidden><summary>Занятые интервалы и недоступные экземпляры</summary><div id="unavailable-list"></div></details>
+          <div class="selection-bar"><span>Выбрано <strong id="selected-count">0</strong></span><strong id="selected-total">0 ₽</strong></div>
+        </div>
+
+        <div id="step-contact" class="panel step-panel" hidden>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Как с вами связаться?</h2></div><span class="panel-icon" aria-hidden="true">✳</span></div>
+          <p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
+          <label class="field"><span>Ваше имя</span><input id="customer-name" type="text" autocomplete="name" maxlength="200" placeholder="Например, Анна" aria-describedby="name-error"><small id="name-error" class="field-error" role="alert" hidden></small></label>
+          <label class="field"><span>Телефон или Telegram</span><input id="customer-contact" type="text" autocomplete="tel" maxlength="200" placeholder="+7 999 123-45-67 или @username" aria-describedby="contact-error"><small id="contact-error" class="field-error" role="alert" hidden></small></label>
+          <p class="privacy-note">Контакт можно изменить до отправки заявки.</p>
+        </div>
+
+        <div id="step-review" class="panel step-panel" hidden>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 4 ИЗ 4</p><h2>Проверьте заказ</h2></div><span class="panel-icon" aria-hidden="true">✓</span></div>
+          <div id="review-content"></div>
+          <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>После подтверждения заявка ждёт решения менеджера. Оборудование удерживается 30 минут. Оплата на этом шаге не списывается.</p></div>
+        </div>
+
+        <div id="step-done" class="panel done-panel" hidden>
+          <div class="success-mark" aria-hidden="true">✓</div>
+          <p class="step-kicker">ЗАЯВКА ОТПРАВЛЕНА</p><h2 id="done-title">Готово!</h2>
+          <p id="done-description"></p>
+          <div class="done-actions"><button id="done-orders" class="button secondary" type="button">Мои заявки</button><button id="done-chat" class="button primary" type="button">Вернуться в чат</button></div>
+        </div>
+      </section>
+
+      <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
+        <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2>Мои заявки</h2></div><span class="panel-icon" aria-hidden="true">≡</span></div>
+        <div id="orders-content" role="status"></div>
+      </section>
+
+      <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
+        <div class="panel-head"><div><p class="step-kicker">ЗАЩИЩЁННАЯ ФОРМА</p><h2>Данные для договора</h2></div><button id="identity-close" class="button ghost compact" type="button">Закрыть</button></div>
+        <div id="identity-status" class="notice" hidden></div>
+        <div id="consent-step">
+          <p class="supporting">Сначала ознакомьтесь с отдельным согласием на обработку персональных данных.</p>
+          <div id="consent-text" class="consent-box"></div>
+          <label class="check-row"><input id="consent-check" type="checkbox"><span>Я прочитал(а) текст и даю согласие добровольно</span></label>
+          <button id="consent-next" class="button primary" type="button">Продолжить к анкете</button>
+        </div>
+        <form id="identity-form" hidden autocomplete="off">
+          <p class="supporting">Поля и изображения передаются напрямую в PolyRental. Они не сохраняются в Telegram или черновиках браузера.</p>
+          <div class="form-grid">
+            <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200"></label>
+            <label class="field"><span>Дата рождения</span><input name="birth_date" type="date" required></label>
+            <label class="field"><span>Серия паспорта</span><input name="passport_series" required maxlength="20" inputmode="numeric"></label>
+            <label class="field"><span>Номер паспорта</span><input name="passport_number" required maxlength="30" inputmode="numeric"></label>
+            <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" type="date" required></label>
+            <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="20"></label>
+            <label class="field wide"><span>Кем выдан</span><input name="passport_issuer" required maxlength="500"></label>
+            <label class="field wide"><span>Адрес регистрации</span><input name="registration_address" required maxlength="500"></label>
+            <label class="field wide"><span>Фактический адрес проживания</span><input name="residential_address" required maxlength="500"></label>
+            <label class="field"><span>Номер студенческого</span><input name="student_id_number" required maxlength="100"></label>
+            <label class="field"><span>Действителен до</span><input name="student_valid_until" type="date" required></label>
+            <label class="field wide"><span>Учебное заведение</span><input name="student_institution" required maxlength="500"></label>
+          </div>
+          <h3>Фотографии документов</h3>
+          <p class="supporting">JPEG, PNG или WebP, до 8 МБ на файл и 32 МБ суммарно.</p>
+          <div class="form-grid">
+            <label class="field"><span>Паспорт: разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+            <label class="field"><span>Паспорт: регистрация</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+            <label class="field"><span>Студенческий: лицевая</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+            <label class="field"><span>Студенческий: оборот</span><input name="student_back" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+          </div>
+          <button id="identity-submit" class="button primary" type="submit">Отправить на проверку</button>
+        </form>
+      </section>
+
+      <section id="admin-panel" class="panel" hidden aria-label="Управление арендой">
+        <div class="panel-head"><div><p class="step-kicker">СЛУЖЕБНЫЙ РАЗДЕЛ</p><h2>Заказы и склад</h2></div><span class="panel-icon" aria-hidden="true">⚙</span></div>
+        <div class="admin-tabs">
+          <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>
+          <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
+          <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button>
+        </div>
+        <div id="admin-content" role="status"></div>
+      </section>
+    </main>
+
+    <footer id="action-bar" class="action-bar"><button id="back-button" class="button ghost" type="button" hidden>Назад</button><button id="main-button" class="button primary" type="button">Показать оборудование <span aria-hidden="true">→</span></button></footer>
+  </div>
+</body>
+</html>

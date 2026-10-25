@@ -1,0 +1,19 @@
+# Запуск только бота, базы и клиентского Mini App: docker compose -f compose.yaml -f compose.miniapp.yaml up -d --build
+services:
+  web:
+    profiles: [admin]
+  db_test:
+    profiles: [test]
+  test:
+    profiles: [test]
+  miniapp:
+    build: .
+    command: uvicorn app.miniapp_server:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://polyrental:${POSTGRES_PASSWORD:-polyrental}@db:5432/polyrental
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy

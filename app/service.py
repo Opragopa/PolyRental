@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+from urllib.parse import urlparse
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -39,24 +40,43 @@ def availability(start, end):
         for item in items:
             overlaps = session.scalars(select(Occupancy).where(Occupancy.equipment_id == item.id, Occupancy.starts_at < end, Occupancy.ends_at > start).order_by(Occupancy.ends_at)).all()
             upcoming = session.scalar(select(func.max(Occupancy.ends_at)).where(Occupancy.equipment_id == item.id, Occupancy.starts_at < end, Occupancy.ends_at > start))
-            result.append({"id": item.id, "number": item.inventory_number, "name": item.name, "rate": str(item.hourly_rate), "condition": item.condition, "available": item.condition == "available" and not overlaps, "next_free": upcoming})
+            result.append({"id": item.id, "number": item.inventory_number, "name": item.name, "description": item.description, "image_url": item.image_url, "rate": str(item.hourly_rate), "condition": item.condition, "available": item.condition == "available" and not overlaps, "next_free": upcoming, "busy_intervals": [{"start": occupancy.starts_at.isoformat(), "end": occupancy.ends_at.isoformat()} for occupancy in overlaps]})
         return result
 
 
-def create_booking(customer_id, customer_name, customer_contact, start, end, equipment_ids):
+def booking_total(start, end, rates):
+    hours = Decimal(str((end - start).total_seconds())) / Decimal("3600")
+    return (sum((Decimal(str(rate)) for rate in rates), Decimal("0")) * hours).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def create_booking(customer_id, customer_name, customer_contact, start, end, equipment_ids, request_id=None, expected_total=None):
+    if request_id:
+        previous = get_booking_by_request(customer_id, request_id)
+        if previous:
+            return previous
     validate_interval(start, end)
     ids = sorted(set(int(i) for i in equipment_ids))
     if not ids or not customer_name.strip() or not customer_contact.strip():
         raise ValueError("Нужны оборудование, имя и контакт клиента")
     try:
         with Session.begin() as session:
+            if request_id:
+                previous = session.scalar(select(Booking.id).where(Booking.customer_id == customer_id, Booking.client_request_id == request_id))
+                if previous:
+                    return previous
             for equipment_id in ids:
                 session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": equipment_id})
+            if request_id:
+                previous = session.scalar(select(Booking.id).where(Booking.customer_id == customer_id, Booking.client_request_id == request_id))
+                if previous:
+                    return previous
             expire_holds(session)
             items = session.scalars(select(Equipment).where(Equipment.id.in_(ids))).all()
             if len(items) != len(ids) or any(item.condition != "available" for item in items):
                 raise Conflict("Оборудование недоступно")
-            booking = Booking(customer_id=customer_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=now() + timedelta(minutes=30))
+            if expected_total is not None and booking_total(start, end, (item.hourly_rate for item in items)) != Decimal(str(expected_total)):
+                raise Conflict("Цена изменилась. Проверьте заказ ещё раз")
+            booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=now() + timedelta(minutes=30))
             session.add(booking)
             session.flush()
             for item in items:
@@ -66,16 +86,23 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, equ
             session.flush()
             return booking.id
     except IntegrityError as exc:
+        if request_id:
+            with Session() as session:
+                previous = session.scalar(select(Booking.id).where(Booking.customer_id == customer_id, Booking.client_request_id == request_id))
+                if previous:
+                    return previous
         raise Conflict("На выбранное время оборудование уже занято") from exc
 
 
 TRANSITIONS = {"pending": {"confirmed", "cancelled"}, "confirmed": {"issued", "cancelled"}, "issued": {"returned"}}
 
 
-def transition(booking_id, action, actor_id):
+def transition(booking_id, action, actor_id, customer_id=None):
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if booking is None:
+            raise ValueError("Заявка не найдена")
+        if customer_id is not None and booking.customer_id != customer_id:
             raise ValueError("Заявка не найдена")
         if booking.status == "pending" and booking.hold_expires_at <= now():
             session.execute(delete(Occupancy).where(Occupancy.booking_id == booking.id))
@@ -97,6 +124,11 @@ def get_booking(booking_id):
         return session.scalar(select(Booking).options(selectinload(Booking.items).selectinload(BookingItem.equipment)).where(Booking.id == booking_id))
 
 
+def get_booking_by_request(customer_id, request_id):
+    with Session() as session:
+        return session.scalar(select(Booking.id).where(Booking.customer_id == customer_id, Booking.client_request_id == request_id))
+
+
 def list_bookings():
     from sqlalchemy.orm import selectinload
     with Session.begin() as session:
@@ -104,15 +136,26 @@ def list_bookings():
         return session.scalars(select(Booking).options(selectinload(Booking.items).selectinload(BookingItem.equipment)).order_by(Booking.created_at.desc()).limit(200)).all()
 
 
+def list_customer_bookings(customer_id):
+    from sqlalchemy.orm import selectinload
+    with Session.begin() as session:
+        expire_holds(session)
+        return session.scalars(select(Booking).options(selectinload(Booking.items).selectinload(BookingItem.equipment)).where(Booking.customer_id == customer_id).order_by(Booking.created_at.desc()).limit(50)).all()
+
+
 def list_equipment():
     with Session() as session:
         return session.scalars(select(Equipment).order_by(Equipment.name, Equipment.inventory_number)).all()
 
 
-def save_equipment(number, name, description, rate, condition, equipment_id=None):
+def save_equipment(number, name, description, rate, condition, equipment_id=None, image_url=None):
     if condition not in {"available", "maintenance", "retired"} or Decimal(str(rate)) < 0:
         raise ValueError("Неверное состояние или ставка")
+    if image_url and (len(image_url) > 500 or urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):
+        raise ValueError("Ссылка на фото должна начинаться с HTTPS")
     with Session.begin() as session:
+        if equipment_id:
+            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": equipment_id})
         item = session.get(Equipment, equipment_id) if equipment_id else Equipment()
         if item is None:
             raise ValueError("Экземпляр не найден")
@@ -123,8 +166,21 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
         item.inventory_number = number.strip()
         item.name = name.strip()
         item.description = description.strip()
+        if image_url is not None:
+            item.image_url = image_url.strip()
         item.hourly_rate = Decimal(str(rate))
         item.condition = condition
         session.add(item)
         session.flush()
         return item.id
+
+
+# Article-based implementation. These aliases keep existing bot/web imports working
+# while the old functions above remain available for one migration cycle.
+from .rental import (  # noqa: E402,F401
+    Conflict, assign_booking_assets, availability, booking_total, create_booking,
+    close_repair, delete_dependency, expire_holds, get_booking, get_booking_by_request,
+    lines_total, list_articles, list_bookings, list_customer_bookings, list_dependencies,
+    list_equipment, list_repairs, mark_act_signed, now, record_inspection, save_article,
+    save_dependency, save_equipment, transition,
+)
