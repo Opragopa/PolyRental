@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import io
 import hashlib
 import os
@@ -18,6 +18,13 @@ from .rental import Conflict, get_booking
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 RECEIPT_TEMPLATE = Path(__file__).resolve().parent / "assets" / "receipt-template.docx"
 TITLES = {"contract": "Договор аренды", "issue": "Акт выдачи", "return": "Акт возврата", "receipt": "Сохранная расписка"}
+
+
+def _russian_date(value):
+    try:
+        return date.fromisoformat(str(value)).strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        return value
 
 
 def ensure_templates():
@@ -120,7 +127,7 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
             "receipt_number": receipt_number.removeprefix("ТС-"),
             "issuer_name": os.getenv("OPERATOR_NAME", "сотрудником организации"),
             "identity_document": f"паспорт {identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
-            "passport_issued_at": identity_payload.get("passport_issued_at", ""),
+            "passport_issued_at": _russian_date(identity_payload.get("passport_issued_at", "")),
             "residential_address": identity_payload.get("residential_address", ""),
             "full_name": identity_payload["full_name"],
             "phone": booking.customer_contact,
