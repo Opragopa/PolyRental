@@ -23,9 +23,11 @@ from fastapi.routing import APIRoute
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 
 from .documents import archived_document, operator_document
 from . import __version__
+from .db import BookingDocument, Session
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reusable_identity_fields,
@@ -37,7 +39,7 @@ from .rental import (Conflict, assign_booking_assets, availability, create_booki
                      list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, save_article, save_dependency, save_equipment,
-                     transition)
+                     transition, update_booking_contact)
 from .universities import SAINT_PETERSBURG_UNIVERSITIES
 
 class PrivateRoute(APIRoute):
@@ -154,13 +156,35 @@ class BookingRequest(BaseModel):
     @field_validator("contact")
     @classmethod
     def validate_contact(cls, value):
+        return validate_contact_value(value)
+
+
+def validate_contact_value(value):
+    value = value.strip()
+    phone = bool(re.fullmatch(r"\+?[0-9](?:[0-9 ()-]*[0-9])?", value)) and 10 <= len(re.sub(r"\D", "", value)) <= 15
+    username = value.removeprefix("@")
+    telegram = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username))
+    if not phone and not telegram:
+        raise ValueError("Укажите телефон (10–15 цифр) или Telegram username (5–32 символа: латиница, цифры, _)")
+    return value
+
+
+class BookingContactUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    contact: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value):
         value = value.strip()
-        phone = bool(re.fullmatch(r"\+?[0-9](?:[0-9 ()-]*[0-9])?", value)) and 10 <= len(re.sub(r"\D", "", value)) <= 15
-        username = value.removeprefix("@")
-        telegram = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username))
-        if not phone and not telegram:
-            raise ValueError("Укажите телефон (10–15 цифр) или Telegram username (5–32 символа: латиница, цифры, _)")
+        if not value:
+            raise ValueError("Укажите имя для заявки")
         return value
+
+    @field_validator("contact")
+    @classmethod
+    def validate_contact(cls, value):
+        return validate_contact_value(value)
 
 
 async def notify_new_booking(booking_id: int, customer_id: int):
@@ -308,6 +332,19 @@ async def current_role(user=Depends(require_customer)):
 async def customer_bookings(user=Depends(require_customer)):
     bookings = await asyncio.to_thread(list_customer_bookings, user["id"])
     return {"items": [booking_view(booking) for booking in bookings]}
+
+
+@router.patch("/api/miniapp/bookings/{booking_id}/contact")
+async def customer_update_booking_contact(booking_id: int, payload: BookingContactUpdate,
+                                         user=Depends(require_customer)):
+    try:
+        await asyncio.to_thread(update_booking_contact, booking_id, user["id"],
+                                payload.name, payload.contact)
+        return {"status": "updated"}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/api/miniapp/bookings/{booking_id}/cancel")
@@ -486,6 +523,9 @@ def admin_booking_view(booking):
                               "created_at": inspection.created_at.isoformat() if inspection.created_at else None}
                              for inspection in booking.inspections]
     result["act_signed_at"] = booking.act_signed_at.isoformat() if booking.act_signed_at else None
+    with Session() as session:
+        result["archived_documents"] = session.scalars(select(BookingDocument.kind).where(
+            BookingDocument.booking_id == booking.id)).all()
     result["lines"] = [{"id": line.id, "article_id": line.article_id,
                          "name": line.article.name, "quantity": line.quantity}
                         for line in booking.lines]

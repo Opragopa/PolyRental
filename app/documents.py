@@ -187,7 +187,7 @@ def operator_document(booking_id, kind, actor_id):
     booking = get_booking(booking_id)
     if booking is None:
         raise ValueError("Заявка не найдена")
-    if booking.status == "ready" and not booking.act_signed_at:
+    if booking.status in {"confirmed", "preparing"} or (booking.status == "ready" and not booking.act_signed_at):
         return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
             f"{'act' if kind == 'issue' else kind}-{booking_id}.docx"
     return archived_document(booking_id, kind, actor_id)

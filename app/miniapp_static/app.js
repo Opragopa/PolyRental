@@ -69,6 +69,7 @@
     $("end-hint").textContent = `Возврат — позже выдачи, не раньше ${bookingDateLabel($("end-date").min)}.`;
   }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
+  function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
   function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; $("global-error").scrollIntoView({ block: "nearest" }); }
@@ -251,7 +252,9 @@
     [...$("steps").children].forEach((element, index) => {
       element.classList.toggle("current", index === state.step);
       element.classList.toggle("complete", index < state.step);
-      if (index === state.step) element.setAttribute("aria-current", "step"); else element.removeAttribute("aria-current");
+      const button = element.querySelector(".step-button");
+      button.disabled = state.busy || index >= state.step;
+      if (index === state.step) button.setAttribute("aria-current", "step"); else button.removeAttribute("aria-current");
     });
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
@@ -349,7 +352,8 @@
   function reviewRow(label, value, extraClass = "") { return `<div class="review-row"><span>${escapeHtml(label)}</span><strong class="${extraClass}">${escapeHtml(value)}</strong></div>`; }
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
-    $("review-content").innerHTML = `<div class="review-group">${reviewRow("Выдача", dateText(toIso($("start").value)) + " МСК")}${reviewRow("Возврат", dateText(toIso($("end").value)) + " МСК")}</div><div class="review-group">${chosen.map((item) => `<div class="review-row"><span>${escapeHtml(item.name)}</span><strong>× ${state.quantities.get(item.id)}</strong></div>`).join("")}</div><div class="review-group">${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Связь", $("customer-contact").value.trim())}</div>`;
+    const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
+    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li><span>${escapeHtml(item.name)}</span><strong>${state.quantities.get(item.id)} шт.</strong></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
   }
 
   async function next() {
@@ -379,6 +383,14 @@
     if (state.view === "orders") { state.view = "flow"; render(); return; }
     if (state.step > 0 && state.step < 4) { state.step--; render(); }
   }
+
+  $("steps").addEventListener("click", (event) => {
+    const button = event.target.closest(".step-button");
+    if (!button || state.busy) return;
+    const target = Number(button.dataset.step);
+    if (!Number.isInteger(target) || target < 0 || target >= state.step) return;
+    clearError(); state.step = target; render();
+  });
   async function submit() {
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
     if (!state.requestId) state.requestId = newRequestId();
@@ -406,6 +418,23 @@
 
   const statusNames = { pending: "Ждёт менеджера", confirmed: "Подтверждена", preparing: "Комплектуется", ready: "Готова", issued: "В аренде", return_inspection: "Проверяется", returned: "Завершена", cancelled: "Отменена", expired: "Удержание истекло" };
   const identityStatusNames = { required: "Не заполнена", submitted: "На проверке", needs_changes: "Нужны исправления", verified: "Проверена", not_required: "Не требуется", deleted: "Удалена", blocked: "Заблокирована" };
+  function appendPendingContactEditor(card, order) {
+    const toggle = document.createElement("button"); toggle.className = "button ghost"; toggle.type = "button";
+    toggle.textContent = "Изменить имя или телефон"; toggle.setAttribute("aria-expanded", "false");
+    const form = document.createElement("form"); form.className = "contact-editor"; form.hidden = true;
+    form.innerHTML = `<label class="field"><span>Имя</span><input name="name" value="${escapeHtml(order.customer_name || "")}" maxlength="200" required></label><label class="field"><span>Телефон или Telegram</span><input name="contact" value="${escapeHtml(order.customer_contact || "")}" maxlength="200" autocomplete="tel" required></label><button class="button primary" type="submit">Сохранить изменения</button>`;
+    toggle.addEventListener("click", () => { form.hidden = !form.hidden; toggle.setAttribute("aria-expanded", String(!form.hidden)); });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true;
+      try {
+        const data = new FormData(form);
+        await api(`/api/miniapp/bookings/${order.id}/contact`, { method: "PATCH", body: JSON.stringify({ name: data.get("name"), contact: data.get("contact") }) });
+        await showOrders();
+      } catch (error) { showError(error.message); button.disabled = false; }
+    });
+    card.append(toggle, form);
+  }
+
   async function showOrders() {
     clearError(); state.view = "orders"; render();
     $("orders-content").textContent = "Загружаем заявки…";
@@ -418,7 +447,8 @@
       if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
+        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
+        if (order.status === "pending") appendPendingContactEditor(card, order);
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
           identity.textContent = order.identity_status === "needs_changes" ? "Исправить данные" : "Заполнить документы";
@@ -611,7 +641,7 @@
       if (!result.items.length) { content.textContent = "Заказов пока нет."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "admin-card";
-        card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(identityStatusNames[order.identity_status] || order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
+        card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(identityStatusNames[order.identity_status] || order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
         const actions = document.createElement("div"); actions.className = "action-row";
         const summary = document.createElement("p");
         summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact}`;
@@ -655,9 +685,23 @@
           student.append(actionButton("Студенческий — лицевая сторона", () => openDocumentViewer(order.id, "student_front"), order.id, "ghost document-button"));
           documents.append(passport, student); actions.append(documents);
         }
-        if (["ready", "issued", "return_inspection", "returned"].includes(order.status) && state.role?.pii_admin && order.identity_status === "verified") {
-          actions.append(actionButton("Скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false));
-          actions.append(actionButton("Сохранная расписка", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false));
+        if (["confirmed", "preparing", "ready", "issued", "return_inspection", "returned"].includes(order.status) && state.role?.pii_admin) {
+          const canGenerateDocuments = order.identity_status === "verified" && order.assets.length > 0;
+          const archivedDocuments = new Set(order.archived_documents || []);
+          const actButton = actionButton("Сформировать / скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false);
+          const receiptButton = actionButton("Сформировать / скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false);
+          actButton.disabled = !(archivedDocuments.has("issue") || canGenerateDocuments);
+          receiptButton.disabled = !(archivedDocuments.has("receipt") || canGenerateDocuments);
+          if (actButton.disabled || receiptButton.disabled) {
+            const note = document.createElement("p"); note.className = "workflow-hint";
+            note.textContent = order.identity_status !== "verified"
+              ? "Акт и расписка станут доступны после проверки анкеты клиента."
+              : "Акт и расписка станут доступны после назначения конкретных экземпляров при комплектации.";
+            actions.append(note);
+          }
+          actions.append(actButton, receiptButton);
+        }
+        if (order.status === "ready" && state.role?.pii_admin && order.identity_status === "verified") {
           actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id));
         }
         if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать", transitionAction("issued"), order.id, "primary"));

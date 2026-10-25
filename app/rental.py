@@ -279,6 +279,24 @@ def get_booking_by_request(customer_id, request_id):
             Booking.customer_id == customer_id, Booking.client_request_id == request_id))
 
 
+def update_booking_contact(booking_id, customer_id, customer_name, customer_contact):
+    """Allow the customer to correct name/contact only before manager approval."""
+    with Session.begin() as session:
+        expire_holds(session)
+        booking = session.scalar(select(Booking).where(
+            Booking.id == booking_id, Booking.customer_id == customer_id).with_for_update())
+        if booking is None:
+            raise ValueError("Заявка не найдена")
+        if booking.status != "pending":
+            raise Conflict("Имя и контакт можно изменить только до подтверждения менеджером")
+        if not customer_name.strip() or not customer_contact.strip():
+            raise ValueError("Укажите имя и телефон или Telegram username")
+        booking.customer_name = customer_name.strip()
+        booking.customer_contact = customer_contact.strip()
+        session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="contact_updated"))
+        return booking.id
+
+
 def list_bookings(limit=200):
     with Session.begin() as session:
         expire_holds(session)

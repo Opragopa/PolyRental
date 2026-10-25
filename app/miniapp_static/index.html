@@ -35,10 +35,10 @@
 
       <section id="booking-flow" aria-label="Оформление бронирования">
         <ol id="steps" class="steps" aria-label="Шаги оформления">
-          <li class="current"><span>01</span><b>Сроки</b></li>
-          <li><span>02</span><b>Оборудование</b></li>
-          <li><span>03</span><b>Контакты</b></li>
-          <li><span>04</span><b>Проверка</b></li>
+          <li class="current"><button class="step-button" type="button" data-step="0"><span>01</span><b>Сроки</b></button></li>
+          <li><button class="step-button" type="button" data-step="1"><span>02</span><b>Оборудование</b></button></li>
+          <li><button class="step-button" type="button" data-step="2"><span>03</span><b>Контакты</b></button></li>
+          <li><button class="step-button" type="button" data-step="3"><span>04</span><b>Проверка</b></button></li>
         </ol>
 
         <div id="step-dates" class="panel step-panel">
@@ -70,9 +70,9 @@
         </div>
 
         <div id="step-review" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 4 ИЗ 4</p><h2>Проверьте заказ</h2></div><span class="panel-icon" aria-hidden="true">✓</span></div>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 4 ИЗ 4</p><h2>Проверьте заявку</h2></div><span class="panel-icon" aria-hidden="true">✓</span></div>
           <div id="review-content"></div>
-          <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>Оборудование удерживается 30 минут после отправки заявки. Менеджер подтвердит бронь, затем вы заполните документы в разделе «Мои заявки». После проверки документов сотрудник подготовит оборудование к выдаче. Оплата на этом шаге не списывается.</p></div>
+          <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>После отправки менеджер проверит и подтвердит заявку. До подтверждения вы сможете изменить имя и контакт в разделе «Мои заявки».</p></div>
         </div>
 
         <div id="step-done" class="panel done-panel" hidden>
