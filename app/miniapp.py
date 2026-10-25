@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime
@@ -19,7 +20,7 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
 from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
 from icalendar import Calendar, Event
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
 from .documents import render_document
@@ -149,6 +150,17 @@ class BookingRequest(BaseModel):
     contact: str = Field(min_length=1, max_length=200)
     expected_total: Decimal = Field(ge=0)
 
+    @field_validator("contact")
+    @classmethod
+    def validate_contact(cls, value):
+        value = value.strip()
+        phone = bool(re.fullmatch(r"\+?[0-9](?:[0-9 ()-]*[0-9])?", value)) and 10 <= len(re.sub(r"\D", "", value)) <= 15
+        username = value.removeprefix("@")
+        telegram = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username))
+        if not phone and not telegram:
+            raise ValueError("Укажите телефон (10–15 цифр) или Telegram username (5–32 символа: латиница, цифры, _)")
+        return value
+
 
 async def notify_new_booking(booking_id: int, customer_id: int):
     token = os.getenv("BOT_TOKEN", "")
@@ -195,6 +207,27 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str):
     try:
         async with make_bot(token) as bot:
             await bot.send_message(customer_id, f"Заказ №{booking_id}: {labels.get(status, status)}.")
+    except Exception:
+        pass
+
+
+async def notify_identity_submitted(booking_id: int):
+    """Tell operators that identity data was submitted or corrected; never include PII."""
+    token = os.getenv("BOT_TOKEN", "")
+    if not token:
+        return
+    recipient_ids = _ids("ADMIN_IDS") | pii_admin_ids()
+    if not recipient_ids:
+        return
+    from .bot import make_bot
+    try:
+        async with make_bot(token) as bot:
+            for recipient_id in recipient_ids:
+                try:
+                    await bot.send_message(recipient_id,
+                        f"Клиент отправил анкету или исправления по заявке №{booking_id}. Проверьте документы в Mini App.")
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -354,6 +387,7 @@ async def customer_identity_status(booking_id: int, user=Depends(require_custome
 @router.post("/api/miniapp/bookings/{booking_id}/identity")
 async def customer_identity_submit(
     booking_id: int,
+    background_tasks: BackgroundTasks,
     payload: str = Form(),
     policy_version: str = Form(default=""),
     text_hash: str = Form(default=""),
@@ -399,6 +433,7 @@ async def customer_identity_submit(
                     raise HTTPException(422, {"field": kind, "message": f"Загрузите новое фото: {label}"})
         await asyncio.to_thread(submit_identity, booking_id, user["id"], fields, documents,
                                 policy_version, text_hash)
+        background_tasks.add_task(notify_identity_submitted, booking_id)
         return {"status": "submitted"}
     except json.JSONDecodeError as exc:
         raise HTTPException(422, "Неверный формат анкеты") from exc

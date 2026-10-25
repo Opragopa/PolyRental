@@ -344,7 +344,7 @@ def test_parallel_http_retry_only_notifies_once(monkeypatch):
     monkeypatch.setattr(miniapp, "notify_new_booking", notification)
     article_id = article_with_assets("HTTP-RETRY", 1)
     start, end = now_interval()
-    payload = {"request_id":str(uuid4()), "name":"Тест", "contact":"@qa",
+    payload = {"request_id":str(uuid4()), "name":"Тест", "contact":"@qa_user",
                "start":start.isoformat(), "end":end.isoformat(), "expected_total":"200.00",
                "lines":[{"article_id":article_id, "quantity":1}]}
     client = TestClient(app)

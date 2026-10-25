@@ -57,7 +57,7 @@ def create_confirmed(client, headers):
     article_id = availability(start, end)[0]["id"]
     payload = {"request_id": str(uuid4()), "start": start.isoformat(), "end": end.isoformat(),
                "lines": [{"article_id": article_id, "quantity": 1}], "name": "Анна",
-               "contact": "@anna", "expected_total": "200.00"}
+               "contact": "@anna1", "expected_total": "200.00"}
     result = client.post("/api/miniapp/bookings", json=payload, headers=headers)
     assert result.status_code == 201
     booking_id = result.json()["id"]
@@ -78,8 +78,33 @@ def test_signature_and_catalog_hides_serial(monkeypatch):
         assert body["items"][0]["identity_status"] == "required"
 
 
+@pytest.mark.parametrize("contact", ["+7 999 123-45-67", "89991234567", "@anna_123", "Alice123"])
+def test_booking_contact_accepts_phone_or_telegram_username(contact):
+    from app.miniapp import BookingRequest
+    payload = {"request_id": str(uuid4()), "start": now() + timedelta(hours=3),
+               "end": now() + timedelta(hours=5), "lines": [{"article_id": 1, "quantity": 1}],
+               "name": "Анна", "contact": contact, "expected_total": "200.00"}
+    assert BookingRequest.model_validate(payload).contact == contact
+
+
+@pytest.mark.parametrize("contact", ["", "12345", "8999123456x", "@abc", "Иван Иванов", "+ +79991234567"])
+def test_booking_contact_rejects_invalid_values(contact):
+    from app.miniapp import BookingRequest
+    from pydantic import ValidationError
+    payload = {"request_id": str(uuid4()), "start": now() + timedelta(hours=3),
+               "end": now() + timedelta(hours=5), "lines": [{"article_id": 1, "quantity": 1}],
+               "name": "Анна", "contact": contact or " ", "expected_total": "200.00"}
+    with pytest.raises(ValidationError):
+        BookingRequest.model_validate(payload)
+
+
 def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
+    import app.miniapp as miniapp_api
     configure(monkeypatch)
+    notified = []
+    async def capture_notification(booking_id):
+        notified.append(booking_id)
+    monkeypatch.setattr(miniapp_api, "notify_identity_submitted", capture_notification)
     customer = {"X-Telegram-Init-Data": signed_init_data(42)}
     admin = {"X-Telegram-Init-Data": signed_init_data(100)}
     pii_admin = {"X-Telegram-Init-Data": signed_init_data(200)}
@@ -97,6 +122,10 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
                                data={"payload": json.dumps(fields), "policy_version": consent["version"],
                                      "text_hash": consent["text_hash"]}, files=files)
         assert response.status_code == 200
+        assert notified == [booking_id]
+        customer_orders = client.get("/api/miniapp/bookings", headers=customer).json()["items"]
+        assert next(order for order in customer_orders if order["id"] == booking_id)["identity_status"] == "submitted"
+        assert client.get(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer).json()["status"] == "submitted"
         assert client.get(f"/api/miniapp/admin/bookings/{booking_id}/identity", headers=admin).status_code == 403
         masked = client.get(f"/api/miniapp/admin/bookings/{booking_id}/identity", headers=pii_admin)
         assert masked.status_code == 200 and masked.json()["passport"].endswith("56")
@@ -183,8 +212,13 @@ def test_identity_submit_returns_bad_photo_field(monkeypatch):
 
 
 def test_name_correction_omits_consent_fields_and_keeps_uploaded_photos(monkeypatch):
+    import app.miniapp as miniapp_api
     from app.pii import review_identity
     configure(monkeypatch)
+    notified = []
+    async def capture_notification(booking_id):
+        notified.append(booking_id)
+    monkeypatch.setattr(miniapp_api, "notify_identity_submitted", capture_notification)
     headers = {"X-Telegram-Init-Data": signed_init_data(42)}
     with TestClient(app) as client:
         booking_id = create_confirmed(client, headers)
@@ -208,6 +242,9 @@ def test_name_correction_omits_consent_fields_and_keeps_uploaded_photos(monkeypa
                              data={"payload": json.dumps(corrected)})
         assert second.status_code == 200, second.text
         after = client.get(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers).json()
+        orders = client.get("/api/miniapp/bookings", headers=headers).json()["items"]
+        assert next(order for order in orders if order["id"] == booking_id)["identity_status"] == "submitted"
+        assert notified == [booking_id, booking_id]
     assert after["fields"]["full_name"] == "Анна Петрова"
     assert set(after["documents"]) == set(files)
 

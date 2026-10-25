@@ -248,7 +248,11 @@
   function validateContacts() {
     fieldError("customer-name", ""); fieldError("customer-contact", "");
     if (!$("customer-name").value.trim()) { fieldError("customer-name", "Укажите имя для заявки и документов."); return false; }
-    if (!$("customer-contact").value.trim()) { fieldError("customer-contact", "Укажите телефон или Telegram для связи."); return false; }
+    const contact = $("customer-contact").value.trim();
+    const digits = (contact.match(/[0-9]/g) || []).length;
+    const phone = /^\+?[0-9](?:[0-9 ()-]*[0-9])?$/.test(contact) && digits >= 10 && digits <= 15;
+    const username = /^@?[A-Za-z][A-Za-z0-9_]{4,31}$/.test(contact);
+    if (!phone && !username) { fieldError("customer-contact", "Укажите телефон (10–15 цифр) или Telegram username (5–32 символа: латиница, цифры, _)."); return false; }
     return true;
   }
 
@@ -360,6 +364,7 @@
   }
 
   const statusNames = { pending: "Ждёт менеджера", confirmed: "Подтверждена", preparing: "Комплектуется", ready: "Готова", issued: "В аренде", return_inspection: "Проверяется", returned: "Завершена", cancelled: "Отменена", expired: "Удержание истекло" };
+  const identityStatusNames = { required: "Не заполнена", submitted: "На проверке", needs_changes: "Нужны исправления", verified: "Проверена", not_required: "Не требуется", deleted: "Удалена", blocked: "Заблокирована" };
   async function showOrders() {
     clearError(); state.view = "orders"; render();
     $("orders-content").textContent = "Загружаем заявки…";
@@ -533,7 +538,7 @@
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
       await clearIdentityPhotoDrafts(state.identityBookingId);
       form.reset(); $("identity-form").hidden = true; $("identity-status").hidden = false;
-      $("identity-status").textContent = "Данные отправлены. Менеджер сверит реквизиты с фотографиями.";
+      $("identity-status").textContent = "Анкета отправлена и находится на проверке. Статус обновлён в разделе «Мои заявки».";
     } catch (error) { showIdentityError(error); }
     finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
   }
@@ -555,7 +560,7 @@
       if (!result.items.length) { content.textContent = "Заказов пока нет."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "admin-card";
-        card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
+        card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(identityStatusNames[order.identity_status] || order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
         const actions = document.createElement("div"); actions.className = "action-row";
         const summary = document.createElement("p");
         summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact} · ${order.total} ₽ за период`;
