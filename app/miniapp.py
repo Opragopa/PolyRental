@@ -16,6 +16,7 @@ from uuid import UUID
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
 from fastapi.responses import FileResponse, Response
+from fastapi.routing import APIRoute
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
@@ -26,13 +27,27 @@ from .pii import (DOCUMENT_KINDS, block_identity, consent_text, delete_identity,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
 from .rental import (Conflict, assign_booking_assets, availability, create_booking,
-                     close_repair, delete_dependency, get_booking, get_booking_by_request,
+                     close_repair, delete_dependency, get_booking,
                      lines_total, list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, save_article, save_dependency, save_equipment,
                      transition)
 
-router = APIRouter()
+class PrivateRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def no_store(request):
+            response = await handler(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
+
+        return no_store
+
+
+router = APIRouter(route_class=PrivateRoute)
 STATIC_DIR = Path(__file__).with_name("miniapp_static")
 _PII_REQUESTS = defaultdict(deque)
 
@@ -194,8 +209,8 @@ def calendar_feed(token: str):
     calendar = Calendar()
     calendar.add("prodid", "-//PolyRental//Calendar//RU")
     calendar.add("version", "2.0")
-    for booking in list_bookings():
-        if booking.status not in {"confirmed", "issued"}:
+    for booking in list_bookings(limit=None):
+        if booking.status not in {"confirmed", "preparing", "ready", "issued", "return_inspection"}:
             continue
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
@@ -228,19 +243,18 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
 
 @router.post("/api/miniapp/bookings", status_code=201)
 async def create_customer_booking(payload: BookingRequest, background_tasks: BackgroundTasks, user=Depends(require_customer)):
-    previous = await asyncio.to_thread(get_booking_by_request, user["id"], str(payload.request_id))
     try:
-        booking_id = await asyncio.to_thread(
+        booking_id, created = await asyncio.to_thread(
             create_booking,
             user["id"], payload.name.strip(), payload.contact.strip(), payload.start,
-            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total,
+            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total, return_created=True,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Conflict as exc:
         raise HTTPException(409, str(exc)) from exc
     booking = await asyncio.to_thread(get_booking, booking_id)
-    if not previous:
+    if created:
         background_tasks.add_task(notify_new_booking, booking_id, user["id"])
     return booking_view(booking)
 
@@ -384,7 +398,7 @@ class ArticleRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
-    rate: Decimal = Field(ge=0)
+    rate: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
     category: str = Field(default="generic", max_length=40)
     inspection_profile: str = Field(default="generic", max_length=30)
     buffer_hours: int = Field(default=24, ge=0, le=168)
@@ -400,7 +414,9 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
             payload.category, payload.inspection_profile, payload.buffer_hours,
             payload.image_url, payload.id, payload.active)
         return {"id": article_id}
-    except (ValueError, Conflict, IntegrityError) as exc:
+    except IntegrityError as exc:
+        raise HTTPException(422, "Артикул с таким SKU уже существует") from exc
+    except (ValueError, Conflict) as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
@@ -421,7 +437,9 @@ async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_a
             save_equipment, payload.serial, "", "", 0, payload.condition, payload.id,
             None, payload.article_id, payload.location, payload.health, payload.charge)
         return {"id": equipment_id}
-    except (ValueError, Conflict, IntegrityError) as exc:
+    except IntegrityError as exc:
+        raise HTTPException(422, "Экземпляр с таким серийным номером уже существует") from exc
+    except (ValueError, Conflict) as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
@@ -486,7 +504,7 @@ class InspectionRequest(BaseModel):
     checklist: dict[str, bool] = Field(default_factory=dict)
     notes: str = Field(default="", max_length=2000)
     defect: str = Field(default="", max_length=4000)
-    estimated_cost: Decimal = Field(default=0, ge=0)
+    estimated_cost: Decimal = Field(default=0, ge=0, max_digits=12, decimal_places=2)
     charge_customer: bool = False
 
 

@@ -12,7 +12,7 @@ import re
 from datetime import date, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import delete, select
 
 from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyConsent,
@@ -129,7 +129,7 @@ def sanitize_image(raw, declared_type=""):
         with Image.open(io.BytesIO(raw)) as image:
             if image.format not in {"JPEG", "PNG", "WEBP"}:
                 raise ValueError("Поддерживаются только JPEG, PNG и WebP")
-            normalized = image.convert("RGB")
+            normalized = ImageOps.exif_transpose(image).convert("RGB")
             output = io.BytesIO()
             normalized.save(output, format="JPEG", quality=90, optimize=True)
             return output.getvalue(), "image/jpeg"
@@ -202,8 +202,13 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
         if identity and identity.status == "verified":
             raise Conflict("Проверенные документы нельзя заменить без запроса менеджера")
+        if booking.identity_status not in {"required", "needs_changes"}:
+            raise Conflict("Отправка документов недоступна в текущем состоянии")
         old_documents = {}
         if identity and identity.status == "needs_changes":
+            required_images = set(json.loads(identity.review_fields or "[]")) & DOCUMENT_KINDS
+            if not required_images.issubset(documents):
+                raise ValueError("Загрузите фотографии, для которых оператор запросил исправления")
             _, old_dek = _decrypt_payload(identity)
             for document in identity.documents:
                 old_documents[document.kind] = (AESGCM(old_dek).decrypt(document.nonce, document.encrypted_data,
@@ -235,7 +240,7 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         if consent is None:
             session.add(PrivacyConsent(booking_id=booking.id, customer_id=customer_id,
                                        policy_version=policy_version, text_hash=text_hash))
-        else:
+        elif policy_version and text_hash:
             consent.policy_version, consent.text_hash, consent.consented_at = policy_version, text_hash, now()
         booking.identity_status = "submitted"
         session.add(PIIAudit(booking_id=booking.id, actor_id=customer_id, action="submitted"))
@@ -289,10 +294,14 @@ def identity_document(booking_id, kind, actor_id):
 
 def review_identity(booking_id, actor_id, approved, comment="", fields=None):
     with Session.begin() as session:
-        booking = session.get(Booking, booking_id)
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not booking or not identity:
             raise ValueError("Анкета не найдена")
+        if booking.status not in {"confirmed", "preparing", "ready"} or identity.status not in {
+            "submitted", "needs_changes", "verified"
+        }:
+            raise ValueError("Проверка анкеты недоступна в текущем состоянии")
         identity.status = "verified" if approved else "needs_changes"
         allowed = {"full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
                    "passport_division_code", "registration_address", "residential_address", "student_id_number",
@@ -300,6 +309,8 @@ def review_identity(booking_id, actor_id, approved, comment="", fields=None):
         identity.review_comment = comment.strip()[:500]
         identity.review_fields = json.dumps([field for field in (fields or []) if field in allowed], ensure_ascii=False)
         booking.identity_status = identity.status
+        if not approved:
+            booking.act_signed_at = booking.act_signed_by = None
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
                              action="verified" if approved else "changes_requested"))
 
@@ -314,6 +325,7 @@ def delete_identity(booking_id, actor_id, reason="manual_delete"):
         session.delete(identity)
         if booking:
             booking.identity_status = "deleted"
+            booking.act_signed_at = booking.act_signed_by = None
         return True
 
 
@@ -326,6 +338,7 @@ def block_identity(booking_id, actor_id, blocked=True):
             raise ValueError("Анкета не найдена")
         identity.status = "blocked" if blocked else "needs_changes"
         booking.identity_status = identity.status
+        booking.act_signed_at = booking.act_signed_by = None
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
                              action="blocked" if blocked else "unblocked"))
 

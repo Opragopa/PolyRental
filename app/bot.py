@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -10,10 +11,11 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MenuButtonWebApp, Message, ReplyKeyboardMarkup, WebAppInfo
+from sqlalchemy.exc import IntegrityError
 
 from .db import init_db
 from .miniapp import BookingRequest
-from .service import Conflict, availability, booking_total, create_booking, get_booking, get_booking_by_request, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
+from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 
 router = Router()
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -171,20 +173,20 @@ async def booking_from_miniapp(message: Message, bot: Bot):
         return await message.answer("Заявка слишком большая. Откройте приложение и попробуйте ещё раз.")
     try:
         payload = BookingRequest.model_validate_json(raw)
-        previous = await asyncio.to_thread(get_booking_by_request, message.from_user.id, str(payload.request_id))
-        booking_id = await asyncio.to_thread(
+        booking_id, created = await asyncio.to_thread(
             create_booking, message.from_user.id, payload.name.strip(), payload.contact.strip(), payload.start,
-            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total,
+            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total, return_created=True,
         )
     except (ValueError, Conflict) as exc:
         return await message.answer(f"Не удалось создать заявку: {exc}. Откройте приложение и проверьте сроки, оборудование и контакты.", reply_markup=main_keyboard())
     await message.answer(f"Заявка №{booking_id} создана. Оборудование удерживается 30 минут, ожидайте подтверждения менеджера.", reply_markup=main_keyboard())
-    if not previous:
+    if created:
         await notify_managers(bot, booking_id)
 
 
 async def begin_chat_booking(message, state):
     await state.clear()
+    await state.update_data(request_id=str(uuid4()))
     await state.set_state(Rent.start)
     await message.answer("Когда получите оборудование? Введите дату и время по Москве: ДД.ММ.ГГГГ ЧЧ:ММ", reply_markup=flow_keyboard())
 
@@ -360,12 +362,13 @@ async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
     await query.answer("Создаём заявку…")
     try:
         requested = [{"article_id": article_id, "quantity": 1} for article_id in data["ids"]]
-        booking_id = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, None, data.get("expected_total"))
+        booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), data.get("expected_total"), return_created=True)
     except (Conflict, ValueError) as exc:
         return await query.message.answer(f"Не удалось создать заявку: {exc}. Измените сроки или оборудование и попробуйте снова.")
     await state.clear()
     await query.message.answer(f"Заявка №{booking_id} создана. Оборудование удерживается 30 минут, ожидайте подтверждения менеджера.", reply_markup=main_keyboard())
-    await notify_managers(bot, booking_id)
+    if created:
+        await notify_managers(bot, booking_id)
 
 
 @router.message(Command("mybookings"))
@@ -433,6 +436,8 @@ async def add_equipment(message: Message):
         _, number, rate, name = (message.text or "").split(" ", 3)
         item_id = await asyncio.to_thread(save_equipment, number, name, "", rate, "available")
         await message.answer(f"Экземпляр #{item_id} добавлен. Изменение и состояние доступны в веб-панели.")
+    except IntegrityError:
+        await message.answer("Экземпляр с таким серийным номером уже существует.")
     except (ValueError, Conflict) as exc:
         await message.answer(f"Формат: /add НОМЕР ЦЕНА_ЗА_ЧАС НАЗВАНИЕ. {exc}")
 
@@ -445,6 +450,8 @@ async def set_equipment(message: Message):
         _, identifier, number, rate, condition, name = (message.text or "").split(" ", 5)
         item_id = await asyncio.to_thread(save_equipment, number, name, "", rate, condition, int(identifier))
         await message.answer(f"Экземпляр #{item_id} обновлен")
+    except IntegrityError:
+        await message.answer("Экземпляр с таким серийным номером уже существует.")
     except (ValueError, Conflict) as exc:
         await message.answer(f"Формат: /set ID НОМЕР ЦЕНА available|maintenance|retired НАЗВАНИЕ. {exc}")
 

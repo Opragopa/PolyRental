@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .db import Session, init_db
 from .documents import ensure_templates, render_document
 from .miniapp import STATIC_DIR, router as miniapp_router
+from .rental import TRANSITIONS
 from .service import Conflict, expire_holds, list_bookings, list_equipment, save_equipment, transition
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -116,8 +117,10 @@ def dashboard(request: Request):
     parts = ['<p><a href="/admin/calendar">Календарь</a> · <a href="/admin/equipment">Оборудование</a></p><form method="post" action="/logout"><button>Выйти</button></form>']
     parts.append('<section><h2>Заявки</h2><table><tr><th>№</th><th>Клиент</th><th>Период</th><th>Оборудование</th><th>Статус</th><th>Действия</th></tr>')
     for booking in list_bookings():
-        items = ", ".join(escape(item.equipment.inventory_number) for item in booking.items)
-        actions = " ".join(f'<form style="display:inline" method="post" action="/admin/bookings/{booking.id}/{action}"><button>{label}</button></form>' for action, label in (("confirmed", "Подтвердить"), ("cancelled", "Отменить"), ("issued", "Выдать"), ("returned", "Вернуть")))
+        items = ", ".join(f"{escape(line.article.name)} × {line.quantity}" for line in booking.lines)
+        labels = {"confirmed": "Подтвердить", "cancelled": "Отменить", "preparing": "Подготовить",
+                  "ready": "Готов", "issued": "Выдать", "return_inspection": "Начать возврат", "returned": "Завершить возврат"}
+        actions = " ".join(f'<form style="display:inline" method="post" action="/admin/bookings/{booking.id}/{action}"><button>{labels[action]}</button></form>' for action in sorted(TRANSITIONS.get(booking.status, set())))
         docs = " ".join(f'<a href="/admin/bookings/{booking.id}/documents/{kind}">{label}</a>' for kind, label in (("contract", "Договор"), ("issue", "Акт выдачи"), ("return", "Акт возврата")))
         parts.append(f'<tr><td>{booking.id}</td><td>{escape(booking.customer_name)}<br>{escape(booking.customer_contact)}</td><td>{booking.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК</td><td>{items}</td><td>{booking.status}</td><td>{actions}<br>{docs}</td></tr>')
     parts.append('</table></section>')
@@ -170,7 +173,7 @@ def equipment_save(request: Request, number: str = Form(), name: str = Form(), d
 @app.get("/admin/calendar")
 def calendar_page(request: Request):
     require_admin(request)
-    bookings = [b for b in list_bookings() if b.status in {"pending", "confirmed", "issued"}]
+    bookings = [b for b in list_bookings(limit=None) if b.status in {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}]
     rows = "".join(f'<tr><td>#{b.id}</td><td>{b.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.status}</td></tr>' for b in sorted(bookings, key=lambda b: b.starts_at))
     url = "/calendar/" + quote(os.getenv("ICAL_TOKEN", "")) + ".ics"
     return page("Календарь броней", f'<p><a href="/admin">← Заявки</a> · <a href="{url}">Подписка iCal</a></p><section><table><tr><th>Заявка</th><th>Начало МСК</th><th>Конец МСК</th><th>Статус</th></tr>{rows}</table></section>')
@@ -184,8 +187,8 @@ def calendar_feed(token: str):
     cal = Calendar()
     cal.add("prodid", "-//PolyRental//Calendar//RU")
     cal.add("version", "2.0")
-    for booking in list_bookings():
-        if booking.status not in {"confirmed", "issued"}:
+    for booking in list_bookings(limit=None):
+        if booking.status not in {"confirmed", "preparing", "ready", "issued", "return_inspection"}:
             continue
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
@@ -205,4 +208,6 @@ def document(request: Request, booking_id: int, kind: str):
         body = render_document(booking_id, kind)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
-    return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})
+    except Conflict as exc:
+        raise HTTPException(409, str(exc))
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})

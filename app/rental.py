@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -23,6 +23,16 @@ ACTIVE_STATUSES = {"pending", "confirmed", "preparing", "ready", "issued", "retu
 
 def now():
     return datetime.now(timezone.utc)
+
+
+def validated_rate(value):
+    try:
+        rate = Decimal(str(value))
+        if not rate.is_finite() or rate < 0 or rate > Decimal("9999999999.99") or rate.as_tuple().exponent < -2:
+            raise ValueError("Укажите неотрицательную ставку с точностью до копеек")
+        return rate
+    except InvalidOperation as exc:
+        raise ValueError("Укажите корректную ставку") from exc
 
 
 def validate_interval(start, end):
@@ -70,14 +80,37 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
         Booking.returned_at.is_not(None),
         Booking.returned_at + buffer_interval > start,
     )
-    query = select(func.coalesce(func.sum(BookingLine.quantity), 0)).join(
-        Booking, Booking.id == BookingLine.booking_id).where(
+    query = select(Booking, BookingLine.quantity).join(
+        BookingLine, Booking.id == BookingLine.booking_id).where(
         BookingLine.article_id == article_id,
-        or_(scheduled, actual_return),
+        or_(scheduled, actual_return, and_(
+            Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= now())),
     )
     if exclude_booking_id:
         query = query.where(Booking.id != exclude_booking_id)
-    return int(session.scalar(query) or 0)
+    # Count the peak simultaneous occupancy, not the sum of every booking
+    # touching a long requested interval. End events precede start events.
+    events = []
+    buffer = timedelta(hours=article.buffer_hours)
+    for booking, quantity in session.execute(query):
+        if booking.status == "returned":
+            occupied_start, occupied_end = booking.returned_at, booking.returned_at + buffer
+            quantity = session.scalar(select(func.count()).select_from(BookingAsset).join(
+                Equipment, Equipment.id == BookingAsset.equipment_id).where(
+                BookingAsset.booking_id == booking.id, Equipment.article_id == article_id,
+                Equipment.condition == "available")) or 0
+        else:
+            occupied_start, occupied_end = booking.starts_at, booking.ends_at + buffer
+            if booking.status in {"issued", "return_inspection"} and booking.ends_at <= now():
+                occupied_end = datetime.max.replace(tzinfo=timezone.utc)
+        left, right = max(start, occupied_start), min(end + buffer, occupied_end)
+        if left < right:
+            events.extend(((left, quantity), (right, -quantity)))
+    current = peak = 0
+    for _, delta in sorted(events):
+        current += delta
+        peak = max(peak, current)
+    return peak
 
 
 def _capacity(session, article_id):
@@ -123,6 +156,8 @@ def _normalize_lines(session, requested):
             raise ValueError("Количество каждой позиции должно быть от 1 до 30")
         quantities[article_id] += quantity
         billable_quantities[article_id] += quantity
+        if quantities[article_id] > 30:
+            raise ValueError("Количество каждой позиции должно быть от 1 до 30")
     if not quantities or len(quantities) > 30:
         raise ValueError("Выберите оборудование")
     articles = {article.id: article for article in session.scalars(
@@ -135,17 +170,19 @@ def _normalize_lines(session, requested):
 
 
 def create_booking(customer_id, customer_name, customer_contact, start, end, requested,
-                   request_id=None, expected_total=None):
-    validate_interval(start, end)
-    if not customer_name.strip() or not customer_contact.strip():
-        raise ValueError("Нужны имя и контакт клиента")
+                   request_id=None, expected_total=None, return_created=False):
     try:
         with Session.begin() as session:
             if request_id:
+                session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                                {"key": f"request:{customer_id}:{request_id}"})
                 previous = session.scalar(select(Booking.id).where(
                     Booking.customer_id == customer_id, Booking.client_request_id == request_id))
                 if previous:
-                    return previous
+                    return (previous, False) if return_created else previous
+            validate_interval(start, end)
+            if not customer_name.strip() or not customer_contact.strip():
+                raise ValueError("Нужны имя и контакт клиента")
             normalized = _normalize_lines(session, requested)
             for article, _, _, _, _ in sorted(normalized, key=lambda row: row[0].id):
                 session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article.id})
@@ -171,14 +208,14 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                                         hourly_rate=rate, auto_added=auto_added))
             session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="created"))
             session.flush()
-            return booking.id
+            return (booking.id, True) if return_created else booking.id
     except IntegrityError as exc:
         if request_id:
             with Session() as session:
                 previous = session.scalar(select(Booking.id).where(
                     Booking.customer_id == customer_id, Booking.client_request_id == request_id))
                 if previous:
-                    return previous
+                    return (previous, False) if return_created else previous
         raise Conflict("На выбранное время нужного количества уже нет") from exc
 
 
@@ -202,10 +239,10 @@ def get_booking_by_request(customer_id, request_id):
             Booking.customer_id == customer_id, Booking.client_request_id == request_id))
 
 
-def list_bookings():
+def list_bookings(limit=200):
     with Session.begin() as session:
         expire_holds(session)
-        return session.scalars(_booking_query().order_by(Booking.created_at.desc()).limit(200)).all()
+        return session.scalars(_booking_query().order_by(Booking.created_at.desc()).limit(limit)).all()
 
 
 def list_customer_bookings(customer_id):
@@ -232,7 +269,8 @@ def _asset_conflicts(session, booking, equipment_id):
         Booking, Booking.id == BookingAsset.booking_id).where(
         BookingAsset.equipment_id == equipment_id,
         Booking.id != booking.id,
-        or_(scheduled, actual_return),
+        or_(scheduled, actual_return, and_(
+            Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= now())),
     )) > 0
 
 
@@ -254,7 +292,10 @@ def assign_booking_assets(booking_id, actor_id, assignments=None):
             raise Conflict("Комплектация доступна только для подтверждённого заказа")
         if booking.identity_status != "verified":
             raise Conflict("Сначала клиент должен заполнить документы и пройти проверку у оператора")
+        old_assets = set(session.scalars(select(BookingAsset.equipment_id).where(
+            BookingAsset.booking_id == booking.id)).all())
         session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking.id))
+        new_assets = set()
         for line in booking.lines:
             selected = assignments.get(str(line.id), assignments.get(line.id, [])) if assignments else []
             if not selected:
@@ -281,6 +322,13 @@ def assign_booking_assets(booking_id, actor_id, assignments=None):
                     raise Conflict(f"Экземпляр {asset.inventory_number} уже назначен")
                 session.add(BookingAsset(booking_id=booking.id, booking_line_id=line.id,
                                          equipment_id=asset.id))
+                new_assets.add(asset.id)
+        # Results for removed assets must never satisfy checks for replacements.
+        if old_assets != new_assets:
+            session.execute(delete(Inspection).where(
+                Inspection.booking_id == booking.id,
+                Inspection.equipment_id.in_(old_assets ^ new_assets)))
+            booking.act_signed_at = booking.act_signed_by = None
         booking.status = "preparing"
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="preparing"))
         return booking.status
@@ -291,6 +339,10 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
     if stage not in {"pre_issue", "check_in"} or result not in {"pass", "fail"}:
         raise ValueError("Неверный результат проверки")
     with Session.begin() as session:
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        expected_status = "preparing" if stage == "pre_issue" else "return_inspection"
+        if not booking or booking.status != expected_status:
+            raise ValueError("Проверка недоступна на текущем этапе заказа")
         assigned = session.get(BookingAsset, (booking_id, equipment_id))
         if not assigned:
             raise ValueError("Экземпляр не назначен заказу")
@@ -340,12 +392,16 @@ TRANSITIONS = {
 
 
 def transition(booking_id, action, actor_id, customer_id=None):
+    if customer_id is not None and action != "cancelled":
+        raise Conflict("Клиент может только отменить свою заявку")
     if action == "preparing":
         return assign_booking_assets(booking_id, actor_id)
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if booking is None or (customer_id is not None and booking.customer_id != customer_id):
             raise ValueError("Заявка не найдена")
+        if customer_id is not None and booking.status not in {"pending", "confirmed"}:
+            raise Conflict("Отмена клиентом доступна только до начала комплектации")
         if booking.status == "pending" and booking.hold_expires_at <= now():
             booking.status = "expired"
             session.add(Audit(booking_id=booking.id, actor_id=0, action="expired"))
@@ -359,10 +415,15 @@ def transition(booking_id, action, actor_id, customer_id=None):
                 BookingAsset.booking_id == booking.id))
             required = session.scalar(select(func.coalesce(func.sum(BookingLine.quantity), 0)).where(
                 BookingLine.booking_id == booking.id))
-            passed = session.scalar(select(func.count()).select_from(Inspection).where(
+            passed = session.scalar(select(func.count()).select_from(Inspection).join(
+                BookingAsset, and_(BookingAsset.booking_id == Inspection.booking_id,
+                                   BookingAsset.equipment_id == Inspection.equipment_id)).where(
                 Inspection.booking_id == booking.id, Inspection.stage == "pre_issue",
                 Inspection.result == "pass"))
-            if assigned != required or passed != assigned:
+            unavailable = session.scalar(select(func.count()).select_from(BookingAsset).join(
+                Equipment, Equipment.id == BookingAsset.equipment_id).where(
+                BookingAsset.booking_id == booking.id, Equipment.condition != "available"))
+            if not required or assigned != required or passed != assigned or unavailable:
                 raise Conflict("Комплектация или предвыдачная проверка не завершена")
         elif action == "issued":
             if booking.identity_status != "verified" or not booking.act_signed_at:
@@ -439,6 +500,9 @@ def delete_dependency(parent_article_id, child_article_id):
 
 def save_article(sku, name, description, rate, category="generic", profile="generic",
                  buffer_hours=24, image_url="", article_id=None, active=True):
+    rate = validated_rate(rate)
+    if not sku.strip() or not name.strip():
+        raise ValueError("Укажите артикул и название модели")
     if (Decimal(str(rate)) < 0 or not 0 <= int(buffer_hours) <= 168 or
             category not in {"generic", "camera", "optics", "light", "battery", "accessory"} or
             profile not in {"generic", "camera", "optics", "light", "battery"}):
@@ -460,6 +524,9 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
 
 def save_equipment(number, name, description, rate, condition, equipment_id=None, image_url=None,
                    article_id=None, storage_location="", health_percent=None, charge_percent=None):
+    rate = validated_rate(rate)
+    if not number.strip():
+        raise ValueError("Укажите серийный номер")
     if condition not in {"available", "maintenance", "retired"} or Decimal(str(rate)) < 0:
         raise ValueError("Неверное состояние или ставка")
     if image_url and (len(image_url) > 500 or urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):
@@ -482,7 +549,7 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
         item = session.get(Equipment, equipment_id) if equipment_id else Equipment()
         if item is None:
             raise ValueError("Экземпляр не найден")
-        if equipment_id and condition != "available":
+        if equipment_id and (condition != "available" or item.article_id != article.id):
             active = session.scalar(select(func.count()).select_from(BookingAsset).join(
                 Booking, Booking.id == BookingAsset.booking_id).where(
                 BookingAsset.equipment_id == equipment_id,
@@ -515,7 +582,10 @@ def close_repair(ticket_id, actor_id):
             return
         ticket.status, ticket.closed_at = "closed", now()
         equipment = session.get(Equipment, ticket.equipment_id)
-        if equipment:
+        other_open = session.scalar(select(RepairTicket.id).where(
+            RepairTicket.equipment_id == ticket.equipment_id,
+            RepairTicket.id != ticket.id, RepairTicket.status != "closed").limit(1))
+        if equipment and equipment.condition == "maintenance" and not other_open:
             equipment.condition = "available"
         if ticket.booking_id:
             identity = session.scalar(select(CustomerIdentity).where(
