@@ -18,6 +18,7 @@ from sqlalchemy import delete, select
 from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyConsent,
                  RepairTicket, Session)
 from .rental import Conflict, now
+from .universities import UNIVERSITY_SET
 
 
 DOCUMENT_KINDS = {"passport_main", "passport_registration", "student_front"}
@@ -26,7 +27,13 @@ MAX_TOTAL_SIZE = 32 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 30_000_000
 
 
-def validate_identity_payload(payload):
+class IdentityFieldError(ValueError):
+    def __init__(self, field, message):
+        super().__init__(message)
+        self.field = field
+
+
+def validate_identity_payload(payload, legacy_institution=None):
     """Validate user-entered identity fields without logging their values."""
     required = {
         "full_name", "birth_date", "passport_series", "passport_number",
@@ -34,32 +41,48 @@ def validate_identity_payload(payload):
         "registration_address", "residential_address", "student_id_number",
         "student_institution",
     }
-    if not isinstance(payload, dict) or set(payload) != required:
-        raise ValueError("Заполните все поля анкеты")
-    if any(not isinstance(value, str) or not value.strip() or len(value.strip()) > 500
-           for value in payload.values()):
-        raise ValueError("Все поля анкеты должны быть заполнены корректно")
+    if not isinstance(payload, dict):
+        raise IdentityFieldError("full_name", "Проверьте данные анкеты")
+    missing = required - set(payload)
+    if missing:
+        field = sorted(missing)[0]
+        raise IdentityFieldError(field, "Заполните это поле")
+    if set(payload) != required:
+        raise IdentityFieldError("full_name", "Форма устарела. Перезапустите приложение и повторите отправку")
+    for field, value in payload.items():
+        if not isinstance(value, str) or not value.strip():
+            raise IdentityFieldError(field, "Заполните это поле")
+        if len(value.strip()) > 500:
+            raise IdentityFieldError(field, "Слишком длинное значение")
     if not re.fullmatch(r"[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}", payload["full_name"].strip()) or len(payload["full_name"].split()) < 2:
-        raise ValueError("Укажите ФИО буквами, минимум два слова")
+        raise IdentityFieldError("full_name", "Укажите ФИО буквами, минимум два слова")
     if not re.fullmatch(r"\d{4}", payload["passport_series"]):
-        raise ValueError("Серия паспорта должна содержать 4 цифры")
+        raise IdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера")
     if not re.fullmatch(r"\d{6}", payload["passport_number"]):
-        raise ValueError("Номер паспорта должен содержать 6 цифр")
+        raise IdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера")
     if not re.fullmatch(r"\d{3}-\d{3}", payload["passport_division_code"]):
-        raise ValueError("Код подразделения должен быть в формате 000-000")
+        raise IdentityFieldError("passport_division_code", "Введите код в формате 000-000")
     try:
         birth_date = date.fromisoformat(payload["birth_date"])
+    except ValueError as exc:
+        raise IdentityFieldError("birth_date", "Проверьте дату рождения") from exc
+    try:
         passport_issued_at = date.fromisoformat(payload["passport_issued_at"])
     except ValueError as exc:
-        raise ValueError("Даты должны быть указаны в формате ГГГГ-ММ-ДД") from exc
+        raise IdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта") from exc
     today = date.today()
     if birth_date < date(1900, 1, 1) or birth_date > today:
-        raise ValueError("Дата рождения указана некорректно")
+        raise IdentityFieldError("birth_date", "Дата рождения указана некорректно")
     if passport_issued_at < birth_date or passport_issued_at > today:
-        raise ValueError("Дата выдачи паспорта указана некорректно")
+        raise IdentityFieldError("passport_issued_at", "Дата выдачи паспорта указана некорректно")
+    if not re.fullmatch(r"\d{8}", payload["student_id_number"]):
+        raise IdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр")
+    institution = payload["student_institution"].strip()
+    if institution not in UNIVERSITY_SET and institution != legacy_institution:
+        raise IdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга")
     for field in ("passport_issuer", "registration_address", "residential_address", "student_id_number", "student_institution"):
         if any(ord(char) < 32 for char in payload[field]):
-            raise ValueError("Поля анкеты не должны содержать управляющие символы")
+            raise IdentityFieldError(field, "Уберите недопустимые управляющие символы")
     return {key: value.strip() for key, value in payload.items()}
 
 
@@ -180,7 +203,8 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         existing_payload = _decrypt_payload(existing)[0] if existing and existing.status == "needs_changes" else {}
         existing_kinds = {document.kind for document in existing.documents} if existing and existing.status == "needs_changes" else set()
     merged_payload = {**existing_payload, **payload}
-    payload = validate_identity_payload(merged_payload)
+    payload = validate_identity_payload(merged_payload,
+                                        legacy_institution=existing_payload.get("student_institution"))
     if existing_payload:
         if not documents and not existing_kinds:
             raise ValueError("Загрузите исправленное изображение документа")

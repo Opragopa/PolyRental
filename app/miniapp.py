@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 from uuid import UUID
 
+import httpx
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
 from fastapi.responses import HTMLResponse, Response
@@ -23,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .documents import render_document
 from . import __version__
-from .pii import (DOCUMENT_KINDS, block_identity, consent_text, delete_identity,
+from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
@@ -33,6 +34,7 @@ from .rental import (Conflict, assign_booking_assets, availability, create_booki
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, save_article, save_dependency, save_equipment,
                      transition)
+from .universities import SAINT_PETERSBURG_UNIVERSITIES
 
 class PrivateRoute(APIRoute):
     def get_route_handler(self):
@@ -300,6 +302,46 @@ async def privacy_consent(user=Depends(require_customer)):
             "text_hash": hashlib.sha256(body.encode()).hexdigest()}
 
 
+class AddressSuggestionRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=300)
+
+
+async def _dadata_address_suggestions(query, token):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(4.0)) as client:
+        response = await client.post(
+            "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address",
+            headers={"Authorization": f"Token {token}", "Accept": "application/json",
+                     "Content-Type": "application/json"},
+            json={"query": query, "count": 7},
+        )
+    response.raise_for_status()
+    result = response.json()
+    suggestions = result.get("suggestions", []) if isinstance(result, dict) else []
+    if not isinstance(suggestions, list):
+        return []
+    return [{"value": item.get("value", ""),
+             "address": item.get("unrestricted_value") or item.get("value", "")}
+            for item in suggestions if isinstance(item, dict) and isinstance(item.get("value"), str) and item.get("value")]
+
+
+@router.post("/api/miniapp/address-suggestions")
+async def address_suggestions(payload: AddressSuggestionRequest, user=Depends(require_customer)):
+    _limit_pii(user["id"], "address_suggest", 30, 60)
+    token = os.getenv("DADATA_API_KEY", "").strip()
+    if not token:
+        raise HTTPException(503, "Поиск адреса временно недоступен. Введите адрес вручную")
+    try:
+        return {"items": await _dadata_address_suggestions(payload.query, token)}
+    except (httpx.HTTPError, ValueError):
+        # Never include the request, response body or token in logs/errors.
+        raise HTTPException(503, "Не удалось получить подсказки адреса. Введите адрес вручную") from None
+
+
+@router.get("/api/miniapp/universities")
+async def universities(user=Depends(require_customer)):
+    return {"items": SAINT_PETERSBURG_UNIVERSITIES}
+
+
 @router.get("/api/miniapp/bookings/{booking_id}/identity")
 async def customer_identity_status(booking_id: int, user=Depends(require_customer)):
     _limit_pii(user["id"], "customer_read", 20)
@@ -323,7 +365,9 @@ async def customer_identity_submit(
     _limit_pii(user["id"], "customer_submit", 5, 300)
     try:
         fields = json.loads(payload)
-        fields = validate_identity_payload(fields)
+        current = await asyncio.to_thread(identity_status, booking_id, user["id"])
+        legacy_institution = (current.get("fields") or {}).get("student_institution") if current.get("status") == "needs_changes" else None
+        fields = validate_identity_payload(fields, legacy_institution=legacy_institution)
         uploads = {
             "passport_main": passport_main, "passport_registration": passport_registration,
             "student_front": student_front,
@@ -333,13 +377,36 @@ async def customer_identity_submit(
             if upload is None:
                 continue
             raw = await upload.read(8 * 1024 * 1024 + 1)
-            documents[kind] = await asyncio.to_thread(sanitize_image, raw, upload.content_type or "")
+            try:
+                documents[kind] = await asyncio.to_thread(sanitize_image, raw, upload.content_type or "")
+            except ValueError as exc:
+                raise HTTPException(422, {"field": kind, "message": str(exc)}) from exc
+        photo_order = ("passport_main", "passport_registration", "student_front")
+        if current["status"] != "needs_changes":
+            for kind in photo_order:
+                if kind not in documents:
+                    label = {"passport_main": "паспорт — страница с фото",
+                             "passport_registration": "паспорт — страница регистрации",
+                             "student_front": "студенческий — лицевая сторона"}[kind]
+                    raise HTTPException(422, {"field": kind, "message": f"Загрузите фото: {label}"})
+        else:
+            required_photos = set(current.get("review_fields", [])) & DOCUMENT_KINDS
+            for kind in photo_order:
+                if kind in required_photos and kind not in documents:
+                    label = {"passport_main": "паспорт — страница с фото",
+                             "passport_registration": "паспорт — страница регистрации",
+                             "student_front": "студенческий — лицевая сторона"}[kind]
+                    raise HTTPException(422, {"field": kind, "message": f"Загрузите новое фото: {label}"})
         await asyncio.to_thread(submit_identity, booking_id, user["id"], fields, documents,
                                 policy_version, text_hash)
         return {"status": "submitted"}
     except json.JSONDecodeError as exc:
         raise HTTPException(422, "Неверный формат анкеты") from exc
+    except IdentityFieldError as exc:
+        raise HTTPException(422, {"field": exc.field, "message": str(exc)}) from exc
     except ValueError as exc:
+        if any(word in str(exc).lower() for word in ("фотограф", "изображен")):
+            raise HTTPException(422, {"field": "passport_main", "message": str(exc)}) from exc
         raise HTTPException(422, str(exc)) from exc
     except Conflict as exc:
         raise HTTPException(409, str(exc)) from exc

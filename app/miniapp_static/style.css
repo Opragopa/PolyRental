@@ -57,6 +57,14 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .field input[aria-invalid="true"] { border-color: var(--danger); }
 .field small { color: var(--muted); font-size: 12px; font-weight: 500; }
 .field .field-error { color: var(--danger); font-weight: 700; }
+.field .identity-field-error { display: block; margin-top: 2px; color: var(--danger); font-weight: 700; }
+.field input[aria-invalid="true"], .field select[aria-invalid="true"], .field textarea[aria-invalid="true"] { border: 2px solid var(--danger); }
+.address-search { position: relative; }
+.address-search input { width: 100%; }
+.address-suggestions { position: absolute; z-index: 20; top: calc(100% + 5px); left: 0; right: 0; max-height: min(45vh, 320px); overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 30px rgba(0, 0, 0, .18); }
+.address-suggestion { display: block; width: 100%; padding: 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; line-height: 1.35; }
+.address-suggestion:hover, .address-suggestion:focus-visible { background: var(--soft); }
+.address-suggestion-status { margin: 0; padding: 11px; color: var(--muted); font-size: 14px; }
 .info-strip, .notice { padding: 14px 16px; border-radius: 13px; background: var(--soft); color: var(--text); }
 .info-strip { display: flex; gap: 12px; margin-top: 10px; }
 .info-strip p { margin: 0; font-size: 13px; }

@@ -156,7 +156,8 @@ def identity_case(monkeypatch):
               "passport_series": "0000", "passport_number": "000000",
               "passport_issued_at": "2020-01-01", "passport_issuer": "Тест",
               "passport_division_code": "000-000", "registration_address": "Тест",
-              "residential_address": "Тест", "student_id_number": "TEST", "student_institution": "Тест"}
+              "residential_address": "Тест", "student_id_number": "12345678",
+              "student_institution": "Санкт-Петербургский государственный университет"}
     text_hash = hashlib.sha256(consent_text().encode()).hexdigest()
     documents = {kind: (image_bytes(), "image/png") for kind in
                  ("passport_main", "passport_registration", "student_front")}

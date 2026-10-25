@@ -89,8 +89,8 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
         fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Москва",
-                  "residential_address": "Москва", "student_id_number": "S-123",
-                  "student_institution": "Университет"}
+                  "residential_address": "Москва", "student_id_number": "12345678",
+                  "student_institution": "Санкт-Петербургский государственный университет"}
         files = {kind: (f"{kind}.png", image_bytes(), "image/png") for kind in
                      ("passport_main", "passport_registration", "student_front")}
         response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer,
@@ -129,14 +129,114 @@ def test_identity_sensitive_fields_are_validated():
     valid = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
              "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
              "passport_division_code": "770-001", "registration_address": "Москва",
-             "residential_address": "Москва", "student_id_number": "S-123",
-             "student_institution": "Университет"}
+             "residential_address": "Москва", "student_id_number": "12345678",
+             "student_institution": "Санкт-Петербургский государственный университет"}
     assert validate_identity_payload(valid)["passport_series"] == "4510"
     for key, value in (("passport_series", "45"), ("passport_number", "123"),
                        ("passport_division_code", "770001"), ("birth_date", "2099-01-01")):
         invalid = {**valid, key: value}
         with pytest.raises(ValueError):
             validate_identity_payload(invalid)
+    for student_id in ("1234567", "123456789", "1234abcd", "1234 5678"):
+        with pytest.raises(ValueError, match="ровно 8 цифр"):
+            validate_identity_payload({**valid, "student_id_number": student_id})
+    legacy = {**valid, "student_institution": "Мой старый вуз"}
+    with pytest.raises(ValueError, match="списка Санкт-Петербурга"):
+        validate_identity_payload(legacy)
+    assert validate_identity_payload(legacy, legacy_institution="Мой старый вуз")["student_institution"] == "Мой старый вуз"
+
+
+def test_identity_submit_returns_student_field_error(monkeypatch):
+    configure(monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data(42)}
+    with TestClient(app) as client:
+        booking_id = create_confirmed(client, headers)
+        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+                  "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
+                  "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
+                  "residential_address": "Санкт-Петербург", "student_id_number": "1234567",
+                  "student_institution": "Санкт-Петербургский государственный университет"}
+        response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers,
+                               data={"payload": json.dumps(fields), "policy_version": "test-v1", "text_hash": "test-hash"})
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], dict), response.text
+    assert response.json()["detail"]["field"] == "student_id_number"
+
+
+def test_identity_submit_returns_bad_photo_field(monkeypatch):
+    configure(monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data(42)}
+    with TestClient(app) as client:
+        booking_id = create_confirmed(client, headers)
+        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+                  "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
+                  "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
+                  "residential_address": "Санкт-Петербург", "student_id_number": "12345678",
+                  "student_institution": "Санкт-Петербургский государственный университет"}
+        files = {"passport_main": ("passport.png", b"not an image", "image/png"),
+                 "passport_registration": ("registration.png", image_bytes(), "image/png"),
+                 "student_front": ("student.png", image_bytes(), "image/png")}
+        response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers,
+                               data={"payload": json.dumps(fields), "policy_version": "test-v1", "text_hash": "test-hash"}, files=files)
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "passport_main", response.text
+
+
+def test_address_suggestions_requires_auth_and_falls_back_without_token(monkeypatch):
+    configure(monkeypatch)
+    monkeypatch.delenv("DADATA_API_KEY", raising=False)
+    with TestClient(app) as client:
+        assert client.post("/api/miniapp/address-suggestions", json={"query": "СПб Невский"}).status_code == 401
+        response = client.post("/api/miniapp/address-suggestions",
+                               headers={"X-Telegram-Init-Data": signed_init_data(42)},
+                               json={"query": "СПб Невский"})
+    assert response.status_code == 503
+    assert "вручную" in response.json()["detail"]
+
+
+def test_address_suggestions_proxy_returns_only_public_suggestion_values(monkeypatch):
+    import app.miniapp as miniapp_api
+    configure(monkeypatch)
+    monkeypatch.setenv("DADATA_API_KEY", "test-key-never-sent-to-browser")
+    calls = []
+    async def fake_suggest(query, token):
+        calls.append((query, token))
+        return [{"value": "г Санкт-Петербург, Невский пр-кт", "address": "191025, г Санкт-Петербург, Невский пр-кт"}]
+    monkeypatch.setattr(miniapp_api, "_dadata_address_suggestions", fake_suggest)
+    with TestClient(app) as client:
+        response = client.post("/api/miniapp/address-suggestions",
+                               headers={"X-Telegram-Init-Data": signed_init_data(42)},
+                               json={"query": "СПб Невский"})
+    assert response.status_code == 200
+    assert response.json()["items"][0]["address"].startswith("191025,")
+    assert calls == [("СПб Невский", "test-key-never-sent-to-browser")]
+
+
+def test_address_suggestions_provider_failure_keeps_manual_entry_available(monkeypatch):
+    import httpx
+    import app.miniapp as miniapp_api
+    configure(monkeypatch)
+    monkeypatch.setenv("DADATA_API_KEY", "test-secret")
+    async def fail_suggest(query, token):
+        raise httpx.ReadTimeout("provider details must not reach the user")
+    monkeypatch.setattr(miniapp_api, "_dadata_address_suggestions", fail_suggest)
+    with TestClient(app) as client:
+        response = client.post("/api/miniapp/address-suggestions",
+                               headers={"X-Telegram-Init-Data": signed_init_data(42)},
+                               json={"query": "СПб Невский"})
+    assert response.status_code == 503
+    assert "вручную" in response.json()["detail"]
+    assert "provider details" not in response.text
+
+
+def test_university_catalog_requires_auth_and_contains_spb_universities(monkeypatch):
+    configure(monkeypatch)
+    with TestClient(app) as client:
+        assert client.get("/api/miniapp/universities").status_code == 401
+        response = client.get("/api/miniapp/universities",
+                              headers={"X-Telegram-Init-Data": signed_init_data(42)})
+    assert response.status_code == 200
+    assert "Санкт-Петербургский государственный университет" in response.json()["items"]
 
 
 def test_image_is_reencoded_without_metadata():
@@ -162,8 +262,8 @@ def test_retention_purge_keeps_only_audit(monkeypatch):
         identity_fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                            "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                            "passport_division_code": "770-001", "registration_address": "Москва",
-                           "residential_address": "Москва", "student_id_number": "S-123",
-                           "student_institution": "Университет"}
+                           "residential_address": "Москва", "student_id_number": "12345678",
+                           "student_institution": "Санкт-Петербургский государственный университет"}
         assert client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer,
                            data={"payload": json.dumps(identity_fields),
                                  "policy_version": consent["version"], "text_hash": consent["text_hash"]},

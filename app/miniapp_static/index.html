@@ -98,7 +98,7 @@
           <button id="consent-next" class="button primary" type="button">Продолжить к анкете</button>
         </div>
         <div id="identity-feedback" class="identity-feedback" hidden></div>
-        <form id="identity-form" hidden autocomplete="off">
+        <form id="identity-form" hidden autocomplete="off" novalidate>
           <p class="supporting">Поля отправляются напрямую в PolyRental. Выбранные фото временно сохраняются только на этом устройстве до отправки анкеты (не более 24 часов) и удаляются после отправки.</p>
           <div class="form-grid">
             <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200" pattern="[А-Яа-яЁёA-Za-z .'\-]{2,200}"></label>
@@ -107,11 +107,11 @@
             <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" type="date" required></label>
             <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="7" inputmode="numeric" pattern="[0-9]{3}-[0-9]{3}" placeholder="000-000" title="Формат 000-000"></label>
             <label class="field wide"><span>Кем выдан</span><input name="passport_issuer" required maxlength="500"></label>
-            <label class="field wide"><span>Адрес регистрации</span><input name="registration_address" required maxlength="500"></label>
+            <label class="field wide"><span>Адрес регистрации</span><div class="address-search"><input id="registration_address" name="registration_address" required maxlength="500" role="combobox" aria-autocomplete="list" aria-controls="address-suggestions" aria-expanded="false"><div id="address-suggestions" class="address-suggestions" role="listbox" hidden></div></div><small>Для подсказок введённый текст адреса передаётся DaData. Если подсказки недоступны, адрес можно ввести вручную.</small></label>
             <label class="check-row wide"><input name="same_address" type="checkbox"><span>Фактический адрес проживания совпадает с адресом регистрации</span></label>
             <label class="field wide"><span>Фактический адрес проживания</span><input name="residential_address" required maxlength="500"></label>
-            <label class="field"><span>Номер студенческого</span><input name="student_id_number" required maxlength="100"></label>
-            <label class="field wide"><span>Учебное заведение</span><input name="student_institution" required maxlength="500"></label>
+            <label class="field"><span>Номер студенческого</span><input name="student_id_number" required maxlength="32" pattern="[0-9]{8}" inputmode="numeric" autocomplete="off" placeholder="12345678"></label>
+            <label class="field wide"><span>ВУЗ Санкт-Петербурга</span><input name="student_institution" required maxlength="500" list="university-options" autocomplete="off" placeholder="Начните вводить название"><datalist id="university-options"></datalist><small>Выберите вариант из списка. Вуз, которого нет в каталоге, пока выбрать нельзя.</small></label>
           </div>
           <h3>Фотографии документов</h3>
           <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>

@@ -9,7 +9,10 @@
   const draftKey = "polyrental-booking-draft-v1";
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
-  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], consent: null, adminMode: "orders" };
+  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
+  let addressSuggestTimer = null;
+  let addressSuggestController = null;
+  let addressSuggestSequence = 0;
   const identityPhotoDrafts = new Map();
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
@@ -56,6 +59,24 @@
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
   function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; $("global-error").scrollIntoView({ block: "nearest" }); }
+  function showIdentityFieldError(name, message) {
+    const input = document.querySelector(`#identity-form [name="${name}"]`);
+    const field = input?.closest(".field");
+    if (!input || !field) { showError(message); return; }
+    let error = field.querySelector(".identity-field-error");
+    if (!error) { error = document.createElement("small"); error.className = "field-error identity-field-error"; error.setAttribute("role", "alert"); field.append(error); }
+    error.textContent = message; input.setAttribute("aria-invalid", "true");
+    input.setAttribute("aria-describedby", error.id || (error.id = `identity-error-${name}`));
+    field.scrollIntoView({ behavior: "smooth", block: "center" }); input.focus({ preventScroll: true });
+  }
+  function clearIdentityFieldError(input) {
+    input.removeAttribute("aria-invalid"); input.removeAttribute("aria-describedby");
+    const error = input.closest(".field")?.querySelector(".identity-field-error"); if (error) error.remove();
+  }
+  function showIdentityError(error) {
+    if (error?.field) { showIdentityFieldError(error.field, error.message); return; }
+    showError(error?.message || "Не удалось сохранить анкету. Проверьте введённые данные и попробуйте ещё раз.");
+  }
   function fieldError(id, message) {
     const input = $(id); const focusTarget = $(`${id}-date`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
     focusTarget.setAttribute("aria-invalid", String(Boolean(message)));
@@ -161,7 +182,13 @@
       const detail = typeof body.detail === "string" ? body.detail
         : Array.isArray(body.detail) ? body.detail.map((item) => item.msg || item.message || "").filter(Boolean).join("; ")
         : "";
-      throw new Error(detail || "Не удалось выполнить запрос. Попробуйте ещё раз.");
+      const structured = body.detail && typeof body.detail === "object" && !Array.isArray(body.detail) ? body.detail : null;
+      const error = new Error(structured?.message || detail || "Не удалось выполнить запрос. Попробуйте ещё раз.");
+      const formFields = new Set(["full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution", "passport_main", "passport_registration", "student_front"]);
+      const invalidField = Array.isArray(body.detail) ? body.detail.map((item) => item.loc?.at(-1)).find((field) => formFields.has(field)) : null;
+      if (typeof structured?.field === "string") error.field = structured.field;
+      else if (invalidField) error.field = invalidField;
+      throw error;
     }
     return body;
   }
@@ -366,6 +393,55 @@
     } catch (error) { $("orders-content").textContent = "Не удалось загрузить заявки. Попробуйте открыть раздел ещё раз."; showError(error.message); }
   }
 
+  function renderUniversityOptions() {
+    const list = $("university-options"); list.replaceChildren();
+    for (const name of state.universities) { const option = document.createElement("option"); option.value = name; list.append(option); }
+  }
+
+  function closeAddressSuggestions() {
+    clearTimeout(addressSuggestTimer); addressSuggestSequence += 1;
+    if (addressSuggestController) addressSuggestController.abort();
+    $("address-suggestions").hidden = true; $("registration_address").setAttribute("aria-expanded", "false");
+  }
+
+  async function searchAddressSuggestions(query, sequence) {
+    if (addressSuggestController) addressSuggestController.abort();
+    addressSuggestController = new AbortController();
+    const list = $("address-suggestions"); list.replaceChildren();
+    try {
+      const result = await api("/api/miniapp/address-suggestions", {
+        method: "POST", signal: addressSuggestController.signal,
+        body: JSON.stringify({ query }),
+      });
+      if (sequence !== addressSuggestSequence || $("registration_address").value.trim() !== query) return;
+      for (const item of result.items || []) {
+        const option = document.createElement("button"); option.type = "button"; option.className = "address-suggestion"; option.setAttribute("role", "option"); option.textContent = item.value;
+        option.addEventListener("click", () => {
+          clearTimeout(addressSuggestTimer); addressSuggestSequence += 1;
+          if (addressSuggestController) addressSuggestController.abort();
+          $("registration_address").value = item.address || item.value;
+          clearIdentityFieldError($("registration_address")); closeAddressSuggestions();
+        });
+        list.append(option);
+      }
+      if (!list.childElementCount) { const empty = document.createElement("p"); empty.className = "address-suggestion-status"; empty.textContent = "Подходящий адрес не найден. Продолжите ввод вручную."; list.append(empty); }
+      list.hidden = false; $("registration_address").setAttribute("aria-expanded", "true");
+    } catch (error) {
+      if (error.name === "AbortError" || sequence !== addressSuggestSequence) return;
+      const status = document.createElement("p"); status.className = "address-suggestion-status"; status.textContent = "Подсказки временно недоступны. Адрес можно ввести вручную."; list.replaceChildren(status);
+      list.hidden = false; $("registration_address").setAttribute("aria-expanded", "true");
+    }
+  }
+
+  function scheduleAddressSuggestions(value) {
+    clearTimeout(addressSuggestTimer); addressSuggestSequence += 1;
+    if (addressSuggestController) addressSuggestController.abort();
+    const query = value.trim();
+    if (query.length < 3) { closeAddressSuggestions(); return; }
+    const sequence = addressSuggestSequence;
+    addressSuggestTimer = setTimeout(() => searchAddressSuggestions(query, sequence), 350);
+  }
+
   async function openIdentity(bookingId) {
     clearError(); state.identityBookingId = bookingId; state.view = "identity"; render();
     state.consent = null; state.identityRequiredPhotos = [];
@@ -378,8 +454,12 @@
     try {
       const current = await api(`/api/miniapp/bookings/${bookingId}/identity`);
       state.identityNeedsChanges = current.status === "needs_changes";
+      const universityResult = await api("/api/miniapp/universities");
+      state.universities = universityResult.items || []; renderUniversityOptions();
       await restoreIdentityPhotos();
       const fields = current.fields || {};
+      state.identityLegacyInstitution = state.identityNeedsChanges && !state.universities.includes(fields.student_institution)
+        ? (fields.student_institution || null) : null;
       const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
       if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
       for (const [name, value] of Object.entries(fields)) { const input = document.querySelector(`[name="${name}"]`); if (input) input.value = value || ""; }
@@ -412,15 +492,22 @@
     event.preventDefault(); clearError();
     const form = event.currentTarget; const button = $("identity-submit");
     const data = new FormData(form); const fields = {};
-    for (const name of ["full_name", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"]) fields[name] = String(data.get(name) || "").trim();
+    const textFields = ["full_name", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"];
+    for (const name of textFields) {
+      const value = String(data.get(name) || ""); fields[name] = name === "student_id_number" ? value : value.trim();
+    }
+    const labels = { full_name: "ФИО", birth_date: "дату рождения", passport_issued_at: "дату выдачи паспорта", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "вуз" };
+    for (const name of textFields) if (!fields[name]) { showIdentityFieldError(name, `Укажите ${labels[name]}.`); return; }
     const passportCombined = String(data.get("passport_combined") || "").replace(/\D/g, "");
-    if (!/^\d{10}$/.test(passportCombined)) return showError("Серия и номер паспорта: 4 цифры, пробел, 6 цифр.");
+    if (!/^\d{10}$/.test(passportCombined)) { showIdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера."); return; }
     fields.passport_series = passportCombined.slice(0, 4); fields.passport_number = passportCombined.slice(4);
     const dateToday = new Date().toISOString().slice(0, 10);
-    if (!/^[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}$/.test(fields.full_name) || fields.full_name.split(/\s+/).length < 2) return showError("Укажите ФИО минимум из двух слов.");
-    if (!/^\d{3}-\d{3}$/.test(fields.passport_division_code)) return showError("Код подразделения должен быть в формате 000-000.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.birth_date) || fields.birth_date > dateToday) return showError("Проверьте дату рождения.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) return showError("Проверьте дату выдачи паспорта.");
+    if (!/^[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}$/.test(fields.full_name) || fields.full_name.split(/\s+/).length < 2) { showIdentityFieldError("full_name", "Укажите ФИО минимум из двух слов."); return; }
+    if (!/^\d{3}-\d{3}$/.test(fields.passport_division_code)) { showIdentityFieldError("passport_division_code", "Введите код в формате 000-000."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.birth_date) || fields.birth_date > dateToday) { showIdentityFieldError("birth_date", "Проверьте дату рождения."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) { showIdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта."); return; }
+    if (!/^\d{8}$/.test(fields.student_id_number)) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр."); return; }
+    if (!state.universities.includes(fields.student_institution) && !(state.identityNeedsChanges && fields.student_institution === state.identityLegacyInstitution)) { showIdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга."); return; }
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields)); upload.set("policy_version", state.consent?.version || ""); upload.set("text_hash", state.consent?.text_hash || "");
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
     try {
@@ -429,16 +516,17 @@
         let entry = identityPhotoDrafts.get(key);
         if (!entry) { try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; } }
         const freshFile = selected?.size ? selected : null;
-        if (state.identityRequiredPhotos.includes(name) && !freshFile) throw new Error(`Загрузите новое фото: ${name === "passport_main" ? "паспорт — страница с фото" : name === "passport_registration" ? "страница регистрации" : "студенческий — лицевая сторона"}.`);
+        if (state.identityRequiredPhotos.includes(name) && !freshFile) { const photoError = new Error(`Загрузите новое фото: ${name === "passport_main" ? "паспорт — страница с фото" : name === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = name; throw photoError; }
         const file = freshFile || (entry && Date.now() - entry.savedAt <= photoDraftLifetime ? new File([entry.blob], entry.name, { type: entry.type }) : null);
         if (file?.size) upload.set(name, await jpegFile(file));
       }
-      if (!state.identityNeedsChanges && ["passport_main", "passport_registration", "student_front"].some((name) => !upload.get(name))) throw new Error("Добавьте три фотографии документов. Ранее выбранные фото восстановятся автоматически.");
+      const missingPhoto = !state.identityNeedsChanges && ["passport_main", "passport_registration", "student_front"].find((name) => !upload.get(name));
+      if (missingPhoto) { const photoError = new Error(`Добавьте фото: ${missingPhoto === "passport_main" ? "паспорт — страница с фото" : missingPhoto === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = missingPhoto; throw photoError; }
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
       await clearIdentityPhotoDrafts(state.identityBookingId);
       form.reset(); $("identity-form").hidden = true; $("identity-status").hidden = false;
       $("identity-status").textContent = "Данные отправлены. Менеджер сверит реквизиты с фотографиями.";
-    } catch (error) { showError(error.message); }
+    } catch (error) { showIdentityError(error); }
     finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
   }
 
@@ -785,10 +873,15 @@
     clearError(); $("consent-step").hidden = true; $("identity-form").hidden = false;
   });
   $("identity-form").addEventListener("submit", submitIdentity);
+  document.querySelectorAll('#identity-form input:not([type="file"]), #identity-form textarea').forEach((input) => input.addEventListener("input", () => clearIdentityFieldError(input)));
+  $("registration_address").addEventListener("input", (event) => scheduleAddressSuggestions(event.currentTarget.value));
+  $("registration_address").addEventListener("keydown", (event) => { if (event.key === "Escape") closeAddressSuggestions(); });
+  document.addEventListener("click", (event) => { if (!event.target.closest(".address-search")) closeAddressSuggestions(); });
   document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => input.addEventListener("change", async () => {
     const file = input.files?.[0] || null; await saveIdentityPhoto(input.name, file);
     const status = input.closest(".field")?.querySelector(".file-draft-status");
     if (status) status.textContent = file ? `Сохранено на этом устройстве: ${file.name}` : "";
+    clearIdentityFieldError(input);
   }));
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
   $("done-orders").addEventListener("click", showOrders);
