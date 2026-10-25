@@ -31,7 +31,7 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_te
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
 from .rental import (Conflict, assign_booking_assets, availability, create_booking,
-                     close_repair, delete_dependency, get_booking,
+                     close_repair, delete_booking, delete_dependency, get_booking,
                      lines_total, list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, save_article, save_dependency, save_equipment,
@@ -478,6 +478,18 @@ def admin_booking_view(booking):
 @router.get("/api/miniapp/admin/bookings")
 async def admin_bookings(user=Depends(require_admin)):
     return {"items": [admin_booking_view(booking) for booking in await asyncio.to_thread(list_bookings)]}
+
+
+@router.delete("/api/miniapp/admin/bookings/{booking_id}")
+async def admin_delete_booking(booking_id: int, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(delete_booking, booking_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    for token, claim in list(_DOCUMENT_DOWNLOAD_TOKENS.items()):
+        if claim[0] == booking_id:
+            _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
+    return {"status": "deleted", "booking_id": booking_id}
 
 
 @router.get("/api/miniapp/admin/catalog")

@@ -129,6 +129,9 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .admin-card { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 15px; }
 .admin-card h3 { margin: 0 0 8px; }
 .admin-card p { margin: 6px 0; color: var(--muted); }
+.booking-maintenance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.booking-maintenance summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.booking-maintenance .button { margin-top: 10px; }
 .workflow-hint { flex: 1 1 100%; margin: 4px 0 !important; color: var(--muted); font-size: 14px; }
 .identity-feedback { margin: 0 0 18px; padding: 14px 16px; border-left: 4px solid var(--danger); border-radius: 10px; background: color-mix(in srgb, var(--danger) 9%, var(--surface)); overflow-wrap: anywhere; }
 .file-draft-status { min-height: 1.2em; color: var(--accent); font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }

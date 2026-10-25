@@ -606,7 +606,24 @@
             finishReturn.disabled = order.assets.some((asset) => !inspectionFor(order, asset, "check_in"));
           });
         }
-        card.append(actions); content.append(card);
+        card.append(actions);
+        if (state.role?.admin) {
+          const maintenance = document.createElement("details"); maintenance.className = "booking-maintenance";
+          const summary = document.createElement("summary"); summary.textContent = "Дополнительные действия";
+          const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact";
+          remove.textContent = "Удалить тестовую заявку";
+          remove.addEventListener("click", async () => {
+            if (!await confirmPermanentBookingDelete(order.id)) return;
+            remove.disabled = true;
+            try {
+              await api(`/api/miniapp/admin/bookings/${order.id}`, { method: "DELETE" });
+              card.remove();
+              if (!content.querySelector(".admin-card")) content.textContent = "Заказов пока нет.";
+            } catch (error) { showError(error.message); remove.disabled = false; }
+          });
+          maintenance.append(summary, remove); card.append(maintenance);
+        }
+        content.append(card);
       }
     } catch (error) { content.textContent = "Не удалось загрузить раздел."; showError(error.message); }
   }
@@ -922,6 +939,16 @@
       return new Promise((resolve) => tg.showPopup({ title: "Отменить заявку?", message: `Заявка №${id} будет отменена, оборудование снова станет доступным.`, buttons: [{ id: "cancel-order", type: "destructive", text: "Отменить заявку" }, { id: "keep-order", type: "cancel", text: "Оставить" }] }, (answer) => resolve(answer === "cancel-order")));
     }
     return Promise.resolve(window.confirm(`Отменить заявку №${id}?`));
+  }
+
+  function confirmPermanentBookingDelete(id) {
+    const details = `Будут безвозвратно удалены заявка №${id}, анкета и фото клиента, согласия, проверки и связанные тикеты ремонта. Экземпляры, помеченные неисправными только этой заявкой, станут доступными, если по ним нет других открытых ремонтов. Останется только техническая запись об удалении без данных клиента.`;
+    const entered = window.prompt(`${details}\n\nЧтобы продолжить, введите номер заявки:`);
+    if (entered === null || entered.trim() !== String(id)) {
+      if (entered !== null) showError("Номер заявки не совпал. Удаление отменено.");
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(window.confirm(`Удалить заявку №${id} полностью? Это действие нельзя отменить.`));
   }
 
   $("main-button").addEventListener("click", next);

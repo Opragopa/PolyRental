@@ -3,7 +3,7 @@ import os
 import pytest
 from sqlalchemy import delete
 
-from app.db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingItem,
+from app.db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingItem,
                     BookingLine, CustomerIdentity, Equipment, IdentityDocument, Inspection,
                     Occupancy, PIIAudit, PrivacyConsent, RepairTicket, Session, init_db)
 
@@ -15,7 +15,7 @@ def clean_database():
     _PII_REQUESTS.clear()
     init_db()
     with Session.begin() as session:
-        for model in (PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
+        for model in (BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
                       RepairTicket, Inspection, BookingAsset, BookingLine, Audit,
                       Occupancy, BookingItem, Booking, ArticleDependency, Equipment, Article):
             session.execute(delete(model))

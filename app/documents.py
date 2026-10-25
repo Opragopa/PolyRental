@@ -99,7 +99,9 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         context.update({
             "date": booking.created_at.astimezone(local).strftime("%d.%m.%Y"),
             "time": booking.created_at.astimezone(local).strftime("%H:%M"),
-            "receipt_number": f"TS-{booking.id}",
+            # Booking IDs are monotonically allocated and never reused after deletion.
+            # The year makes the human-facing number easier to sort and recognize.
+            "receipt_number": f"SR-{booking.created_at.astimezone(local).year}-{booking.id:08d}",
             "issuer_name": os.getenv("OPERATOR_NAME", "сотрудником организации"),
             "identity_document": f"паспорт {identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
             "passport_number": f"{identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",

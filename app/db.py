@@ -213,6 +213,15 @@ class Audit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
+class BookingDeletionAudit(Base):
+    """Minimal non-PII record that an operator permanently deleted a booking."""
+    __tablename__ = "booking_deletion_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deleted_booking_id: Mapped[int] = mapped_column(Integer, index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
 engine = create_engine(os.getenv("DATABASE_URL", "postgresql+psycopg://polyrental:polyrental@localhost:5432/polyrental"), pool_pre_ping=True)
 Session = sessionmaker(engine, expire_on_commit=False)
 

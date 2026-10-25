@@ -10,8 +10,10 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingItem, BookingLine,
-                 CustomerIdentity, Equipment, Inspection, RepairTicket, Session)
+from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit,
+                 BookingItem, BookingLine,
+                 CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
+                 PrivacyConsent, RepairTicket, Session)
 
 
 class Conflict(Exception):
@@ -231,6 +233,40 @@ def _booking_query():
 def get_booking(booking_id):
     with Session() as session:
         return session.scalar(_booking_query().where(Booking.id == booking_id))
+
+
+def delete_booking(booking_id, actor_id):
+    """Permanently remove a booking and all booking-scoped data."""
+    with Session.begin() as session:
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        if booking is None:
+            raise ValueError("Заявка не найдена")
+
+        repair_tickets = session.scalars(select(RepairTicket).where(
+            RepairTicket.booking_id == booking_id).with_for_update()).all()
+        affected_equipment = {ticket.equipment_id for ticket in repair_tickets}
+        session.execute(delete(RepairTicket).where(RepairTicket.booking_id == booking_id))
+        for equipment_id in affected_equipment:
+            equipment = session.get(Equipment, equipment_id)
+            other_open_ticket = session.scalar(select(RepairTicket.id).where(
+                RepairTicket.equipment_id == equipment_id,
+                RepairTicket.status != "closed").limit(1))
+            if equipment and equipment.condition == "maintenance" and not other_open_ticket:
+                equipment.condition = "available"
+
+        identity_ids = select(CustomerIdentity.id).where(CustomerIdentity.booking_id == booking_id)
+        session.execute(delete(IdentityDocument).where(IdentityDocument.identity_id.in_(identity_ids)))
+        session.execute(delete(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
+        session.execute(delete(PrivacyConsent).where(PrivacyConsent.booking_id == booking_id))
+        session.execute(delete(PIIAudit).where(PIIAudit.booking_id == booking_id))
+        session.execute(delete(Audit).where(Audit.booking_id == booking_id))
+        session.execute(delete(Inspection).where(Inspection.booking_id == booking_id))
+        session.execute(delete(Occupancy).where(Occupancy.booking_id == booking_id))
+        session.execute(delete(BookingItem).where(BookingItem.booking_id == booking_id))
+        session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking_id))
+        session.execute(delete(BookingLine).where(BookingLine.booking_id == booking_id))
+        session.execute(delete(Booking).where(Booking.id == booking_id))
+        session.add(BookingDeletionAudit(deleted_booking_id=booking_id, actor_id=actor_id))
 
 
 def get_booking_by_request(customer_id, request_id):
