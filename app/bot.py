@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,7 +24,13 @@ MOSCOW = ZoneInfo("Europe/Moscow")
 
 def make_bot(token):
     proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
-    return Bot(token, session=AiohttpSession(proxy=proxy) if proxy else None)
+    options = {"proxy": proxy} if proxy else {}
+    if os.getenv("TELEGRAM_TEST_ENVIRONMENT") == "1":
+        options["api"] = TelegramAPIServer(
+            base="https://api.telegram.org/bot{token}/test/{method}",
+            file="https://api.telegram.org/file/bot{token}/test/{path}",
+        )
+    return Bot(token, session=AiohttpSession(**options) if options else None)
 
 
 def customer_label(booking):
@@ -66,7 +73,10 @@ def format_items(items):
 
 def miniapp_url():
     url = os.getenv("PUBLIC_URL", "").rstrip("/")
-    return f"{url}/miniapp" if url.startswith("https://") else None
+    allowed = url.startswith("https://") or (
+        os.getenv("TELEGRAM_TEST_ENVIRONMENT") == "1" and url.startswith("http://")
+    )
+    return f"{url}/miniapp" if allowed else None
 
 
 def main_keyboard():

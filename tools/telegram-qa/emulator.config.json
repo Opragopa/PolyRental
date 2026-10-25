@@ -1,0 +1,20 @@
+{
+  "target": "http://localhost:15175/miniapp",
+  "botToken": "123:local-qa-only",
+  "port": 1234,
+  "profiles": {
+    "channel_inline": {
+      "user": { "id": 42, "first_name": "Alice", "last_name": "Adams" },
+      "chat": { "id": 42, "type": "private" },
+      "launchSource": "direct_link",
+      "chatType": "channel",
+      "chatInstance": "-1001234567890",
+      "startParam": "channel_id=QA_CHANNEL"
+    },
+    "attachment_menu_channel": {
+      "user": { "id": 43, "first_name": "Bob" },
+      "chat": { "id": -1009876543210, "type": "channel", "title": "QA Channel" },
+      "launchSource": "attachment_menu"
+    }
+  }
+}

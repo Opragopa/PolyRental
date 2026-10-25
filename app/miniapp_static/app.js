@@ -75,6 +75,17 @@
   }
   function clearDraft() { try { localStorage.removeItem(draftKey); } catch (_) { /* no persistent draft */ } }
 
+  function newRequestId() {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    // Telegram's test server permits HTTP on LAN addresses, where randomUUID
+    // is unavailable. getRandomValues also works outside secure contexts.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(path, {
       ...options,
@@ -119,7 +130,7 @@
       if (showAction) tg.MainButton.show(); else tg.MainButton.hide();
       if (state.busy) tg.MainButton.disable(); else tg.MainButton.enable();
       if (state.step > 0 && !done && state.view === "flow") tg.BackButton?.show(); else tg.BackButton?.hide();
-      if (state.busy) tg.MainButton.showProgress(); else tg.MainButton.hideProgress();
+      if (state.busy) tg.MainButton.showProgress?.(); else tg.MainButton.hideProgress?.();
     }
     if (tg && (authorized || keyboardMode)) {
       if (done) tg.disableClosingConfirmation?.(); else tg.enableClosingConfirmation?.();
@@ -228,7 +239,7 @@
   }
   async function submit() {
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
-    if (!state.requestId) state.requestId = crypto.randomUUID();
+    if (!state.requestId) state.requestId = newRequestId();
     const payload = { request_id: state.requestId, start: toIso($("start").value), end: toIso($("end").value), lines: [...state.quantities].map(([article_id, quantity]) => ({ article_id, quantity })), name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim(), expected_total: (totalCents() / 100).toFixed(2) };
     if (keyboardMode) {
       state.busy = true; render();

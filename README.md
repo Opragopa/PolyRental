@@ -44,3 +44,7 @@ Telegram-бот и ролевая Mini App для аренды оборудов�
 Зашифрованная резервная копия без промежуточного plaintext-файла: задайте отдельный `BACKUP_MASTER_KEY` и выполните `python scripts/backup_encrypted.py D:\PolyRentalBackups`. Скрипт шифрует поток `pg_dump` через AES-256-GCM и удаляет зашифрованные копии старше 30 дней. Ключ храните отдельно от копий и рабочей базы.
 
 Тесты: `docker compose --profile test run --rm --build test`. Compose создаёт для них отдельную БД `polyrental_test`.
+
+Адаптированная [стратегия тестирования Mini App](docs/testing-strategy.md): локальный preview, API и роли, эмуляция Telegram, реальные клиенты и проверка удобства пользователями.
+
+Практическая [отладка Telegram Mini App](docs/telegram-debug-report.md) и [запуск локальных инструментов](tools/telegram-qa/README.md): Vite-панель, проверка подписей, tg-mini-app-emulator и DevKit. Для отдельного тестового сервера Telegram предусмотрен `TELEGRAM_TEST_ENVIRONMENT=1`; в обычном окружении оставляйте `0`.

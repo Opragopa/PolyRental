@@ -1,0 +1,19 @@
+{
+  "name": "polyrental-telegram-qa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "emulator": "node run-emulator.mjs",
+    "devkit": "tma-devkit dev --port 15188 --app http://localhost:15174/miniapp",
+    "check:init-data": "node check-init-data.mjs",
+    "check:emulator": "node check-emulator.mjs"
+  },
+  "devDependencies": {
+    "telegram-mock-init-data": "0.1.0",
+    "tg-mini-app-emulator": "0.1.1",
+    "tma-devkit": "0.1.1",
+    "vite": "8.3.5",
+    "vite-plugin-telegram-mini-app": "0.3.1"
+  }
+}
