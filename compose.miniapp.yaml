@@ -2,6 +2,9 @@
 services:
   web:
     profiles: [admin]
+  bot:
+    environment:
+      PUBLIC_URL: https://polyrental.cloudopragopa.online
   db_test:
     profiles: [test]
   test:
@@ -12,6 +15,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:${POSTGRES_PASSWORD:-polyrental}@db:5432/polyrental
+      PUBLIC_URL: https://polyrental.cloudopragopa.online
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
