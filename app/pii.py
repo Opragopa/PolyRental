@@ -192,6 +192,7 @@ def identity_status(booking_id, customer_id=None):
         if identity and customer_id is not None:
             payload, _ = _decrypt_payload(identity)
             result["fields"] = payload
+            result["documents"] = sorted(document.kind for document in identity.documents)
         return result
 
 

@@ -355,8 +355,8 @@ async def customer_identity_status(booking_id: int, user=Depends(require_custome
 async def customer_identity_submit(
     booking_id: int,
     payload: str = Form(),
-    policy_version: str = Form(),
-    text_hash: str = Form(),
+    policy_version: str = Form(default=""),
+    text_hash: str = Form(default=""),
     passport_main: UploadFile | None = File(None),
     passport_registration: UploadFile | None = File(None),
     student_front: UploadFile | None = File(None),

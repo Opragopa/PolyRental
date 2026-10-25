@@ -127,7 +127,7 @@
     try { await photoDraftTransaction("readwrite", (store) => store.put(entry, key)); }
     catch (_) { /* current form still keeps the selected file */ }
   }
-  async function restoreIdentityPhotos() {
+  async function restoreIdentityPhotos(savedDocuments = []) {
     const inputs = [...document.querySelectorAll('#identity-form input[type="file"]')];
     for (const input of inputs) {
       const key = identityPhotoKey(input.name); let entry = identityPhotoDrafts.get(key);
@@ -137,7 +137,9 @@
       if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) identityPhotoDrafts.set(key, entry);
       else { identityPhotoDrafts.delete(key); entry = null; try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} }
       const status = input.closest(".field")?.querySelector(".file-draft-status");
-      if (status) status.textContent = entry ? `Сохранено на этом устройстве: ${entry.name}` : "";
+      if (status) status.textContent = entry ? `Черновик сохранён на этом устройстве: ${entry.name}`
+        : savedDocuments.includes(input.name) ? "Фото уже сохранено в заявке — повторно загружать не нужно."
+        : "";
     }
   }
   async function clearIdentityPhotoDrafts(bookingId) {
@@ -456,7 +458,7 @@
       state.identityNeedsChanges = current.status === "needs_changes";
       const universityResult = await api("/api/miniapp/universities");
       state.universities = universityResult.items || []; renderUniversityOptions();
-      await restoreIdentityPhotos();
+      await restoreIdentityPhotos(current.documents || []);
       const fields = current.fields || {};
       state.identityLegacyInstitution = state.identityNeedsChanges && !state.universities.includes(fields.student_institution)
         ? (fields.student_institution || null) : null;
@@ -466,6 +468,11 @@
       const feedback = $("identity-feedback");
       if (current.status === "needs_changes") {
         state.identityRequiredPhotos = (current.review_fields || []).filter((field) => ["passport_main", "passport_registration", "student_front"].includes(field));
+        for (const name of state.identityRequiredPhotos) {
+          const input = document.querySelector(`#identity-form [name="${name}"]`);
+          const status = input?.closest(".field")?.querySelector(".file-draft-status");
+          if (status) status.textContent = "Оператор запросил новое фото — загрузите замену.";
+        }
         const labels = { full_name: "ФИО", birth_date: "дата рождения", passport_combined: "серия и номер паспорта", passport_issued_at: "дата выдачи", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "учебное заведение", passport_main: "фото паспорта", passport_registration: "страница регистрации", student_front: "лицевая сторона студенческого" };
         feedback.innerHTML = `<strong>Нужно исправить:</strong> ${(current.review_fields || []).map((field) => escapeHtml(labels[field] || field)).join(", ") || "проверьте данные по комментарию оператора"}.<br>${escapeHtml(current.review_comment || "")}`;
         feedback.hidden = false; $("consent-step").hidden = true; $("identity-form").hidden = false;
@@ -508,7 +515,8 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) { showIdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта."); return; }
     if (!/^\d{8}$/.test(fields.student_id_number)) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр."); return; }
     if (!state.universities.includes(fields.student_institution) && !(state.identityNeedsChanges && fields.student_institution === state.identityLegacyInstitution)) { showIdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга."); return; }
-    const upload = new FormData(); upload.set("payload", JSON.stringify(fields)); upload.set("policy_version", state.consent?.version || ""); upload.set("text_hash", state.consent?.text_hash || "");
+    const upload = new FormData(); upload.set("payload", JSON.stringify(fields));
+    if (state.consent) { upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash); }
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
     try {
       for (const name of ["passport_main", "passport_registration", "student_front"]) {

@@ -182,6 +182,36 @@ def test_identity_submit_returns_bad_photo_field(monkeypatch):
     assert response.json()["detail"]["field"] == "passport_main", response.text
 
 
+def test_name_correction_omits_consent_fields_and_keeps_uploaded_photos(monkeypatch):
+    from app.pii import review_identity
+    configure(monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data(42)}
+    with TestClient(app) as client:
+        booking_id = create_confirmed(client, headers)
+        consent = client.get("/api/miniapp/privacy-consent", headers=headers).json()
+        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+                  "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
+                  "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
+                  "residential_address": "Санкт-Петербург", "student_id_number": "12345678",
+                  "student_institution": "Санкт-Петербургский государственный университет"}
+        files = {kind: (f"{kind}.png", image_bytes(), "image/png") for kind in
+                 ("passport_main", "passport_registration", "student_front")}
+        first = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers,
+                            data={"payload": json.dumps(fields), "policy_version": consent["version"],
+                                  "text_hash": consent["text_hash"]}, files=files)
+        assert first.status_code == 200
+        review_identity(booking_id, 200, False, "Исправьте ФИО", ["full_name"])
+        before = client.get(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers).json()
+        assert set(before["documents"]) == set(files)
+        corrected = {**fields, "full_name": "Анна Петрова"}
+        second = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers,
+                             data={"payload": json.dumps(corrected)})
+        assert second.status_code == 200, second.text
+        after = client.get(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers).json()
+    assert after["fields"]["full_name"] == "Анна Петрова"
+    assert set(after["documents"]) == set(files)
+
+
 def test_address_suggestions_requires_auth_and_falls_back_without_token(monkeypatch):
     configure(monkeypatch)
     monkeypatch.delenv("DADATA_API_KEY", raising=False)
