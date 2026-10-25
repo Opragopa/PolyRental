@@ -545,7 +545,7 @@
 
   function actionButton(label, action, bookingId, className = "secondary", refresh = true) {
     const button = document.createElement("button"); button.type = "button"; button.className = `button ${className}`; button.textContent = label;
-    button.addEventListener("click", async () => { button.disabled = true; try { await action(); if (refresh) await showAdmin(state.adminMode); } catch (error) { showError(error.message); } finally { button.disabled = false; } });
+    button.addEventListener("click", async () => { const scrollTop = window.scrollY; button.disabled = true; try { await action(); if (refresh) { await showAdmin(state.adminMode); window.scrollTo(0, scrollTop); } } catch (error) { showError(error.message); } finally { button.disabled = false; } });
     return button;
   }
 
@@ -573,8 +573,11 @@
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
-          for (const asset of order.assets) appendInspectionActions(actions, order, asset, "pre_issue");
-          actions.append(actionButton("Заказ готов", transitionAction("ready"), order.id, "primary"));
+          const ready = actionButton("Заказ готов", transitionAction("ready"), order.id, "primary");
+          ready.disabled = order.assets.some((asset) => inspectionFor(order, asset, "pre_issue")?.result !== "pass");
+          appendInspectionGroup(actions, order, "pre_issue", () => {
+            ready.disabled = order.assets.some((asset) => inspectionFor(order, asset, "pre_issue")?.result !== "pass");
+          });
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id));
@@ -597,8 +600,11 @@
         if (["pending", "confirmed", "preparing", "ready"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.id)) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
         if (order.status === "issued") actions.append(actionButton("Начать возврат", transitionAction("return_inspection"), order.id, "primary"));
         if (order.status === "return_inspection") {
-          for (const asset of order.assets) appendInspectionActions(actions, order, asset, "check_in");
-          actions.append(actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary"));
+          const finishReturn = actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary");
+          finishReturn.disabled = order.assets.some((asset) => !inspectionFor(order, asset, "check_in"));
+          appendInspectionGroup(actions, order, "check_in", () => {
+            finishReturn.disabled = order.assets.some((asset) => !inspectionFor(order, asset, "check_in"));
+          });
         }
         card.append(actions); content.append(card);
       }
@@ -609,23 +615,63 @@
     return (order.inspections || []).find((item) => item.equipment_id === asset.id && item.stage === stage);
   }
 
-  function appendInspectionActions(actions, order, asset, stage) {
-    const saved = inspectionFor(order, asset, stage);
-    const label = stage === "pre_issue" ? "Выдача" : "Возврат";
-    const row = document.createElement("div"); row.className = "inspection-row";
-    const state = document.createElement("span"); state.className = `inspection-state${saved ? " checked" : ""}`;
-    state.textContent = `${label}: ${saved ? (saved.result === "pass" ? "проверено" : "неисправность") : "не проверено"}`;
-    row.append(state);
-    const controls = document.createElement("div"); controls.className = "inspection-controls";
-    const ok = document.createElement("button"); ok.type = "button"; ok.className = "button secondary"; ok.textContent = saved?.result === "pass" ? "ОК ✓" : "ОК"; ok.disabled = saved?.result === "pass";
-    ok.addEventListener("click", async () => {
-      ok.disabled = true;
-      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "pass", checklist: {}, notes: "", defect: "", estimated_cost: 0, charge_customer: false }) }); await showAdmin("orders"); }
-      catch (error) { showError(error.message); ok.disabled = false; }
+  function appendInspectionGroup(actions, order, stage, onInspectionChange = () => {}) {
+    if (!order.assets?.length) return;
+    const group = document.createElement("section"); group.className = "inspection-group";
+    const title = document.createElement("h4"); title.className = "inspection-group-title";
+    title.textContent = stage === "pre_issue" ? "Проверка перед выдачей" : "Проверка при возврате";
+    const progress = document.createElement("p"); progress.className = "inspection-progress";
+    const pending = () => order.assets.filter((asset) => !inspectionFor(order, asset, stage));
+    const updateProgress = () => {
+      const checked = order.assets.length - pending().length;
+      progress.textContent = `Проверено ${checked} из ${order.assets.length}`;
+    };
+    group.append(title, progress);
+    updateProgress();
+    for (const asset of order.assets) {
+      const saved = inspectionFor(order, asset, stage);
+      const row = document.createElement("div"); row.className = "inspection-row"; row.dataset.equipmentId = String(asset.id);
+      const details = document.createElement("div"); details.className = "inspection-unit";
+      const name = document.createElement("strong"); name.className = "inspection-unit-name";
+      name.textContent = `${asset.name} · № ${asset.serial}`;
+      const status = document.createElement("span"); status.className = `inspection-state${saved ? " checked" : ""}`;
+      status.textContent = saved ? (saved.result === "pass" ? "Исправно" : "Зафиксирована неисправность") : "Ожидает проверки";
+      details.append(name, status);
+      row.append(details);
+      if (saved?.result !== "fail") {
+        const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact";
+        defect.textContent = "Неисправность";
+        defect.addEventListener("click", () => openInspection(order, asset, stage, saved));
+        row.append(defect);
+      }
+      group.append(row);
+    }
+    const markAll = document.createElement("button"); markAll.type = "button"; markAll.className = "button secondary inspection-all-pass";
+    const updateButton = () => {
+      const left = pending().length;
+      markAll.hidden = left === 0;
+      markAll.textContent = left === order.assets.length ? "Все исправны" : `Остальные исправны (${left})`;
+    };
+    updateButton();
+    markAll.addEventListener("click", async () => {
+      const toMark = pending();
+      if (!toMark.length) return;
+      markAll.disabled = true;
+      try {
+        for (const asset of toMark) {
+          await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "pass", checklist: {}, notes: "", defect: "", estimated_cost: 0, charge_customer: false }) });
+          order.inspections ||= [];
+          order.inspections.push({ equipment_id: asset.id, stage, result: "pass" });
+          const row = group.querySelector(`[data-equipment-id="${asset.id}"]`);
+          const status = row?.querySelector(".inspection-state");
+          if (status) { status.textContent = "Исправно"; status.classList.add("checked"); }
+        }
+        updateProgress(); updateButton(); onInspectionChange();
+      } catch (error) {
+        updateProgress(); updateButton(); onInspectionChange(); showError(error.message);
+      } finally { markAll.disabled = false; }
     });
-    const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact"; defect.textContent = "Неисправность";
-    defect.addEventListener("click", () => openInspection(order, asset, stage, saved));
-    controls.append(ok, defect); row.append(controls); actions.append(row);
+    group.append(markAll); actions.append(group);
   }
 
   async function reviewIdentity(bookingId) {
@@ -842,7 +888,8 @@
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
       if (!String(data.get("defect") || "").trim()) return showError("Опишите неисправность.");
       const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "fail", checklist: {}, notes: data.get("notes") || "", defect: data.get("defect") || "", estimated_cost: data.get("estimated_cost") || 0, charge_customer: data.get("charge_customer") === "on" }) }); await showAdmin("orders"); }
+      const scrollTop = window.scrollY;
+      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "fail", checklist: {}, notes: data.get("notes") || "", defect: data.get("defect") || "", estimated_cost: data.get("estimated_cost") || 0, charge_customer: data.get("charge_customer") === "on" }) }); await showAdmin("orders"); window.scrollTo(0, scrollTop); }
       catch (error) { showError(error.message); submit.disabled = false; }
     });
   }

@@ -152,12 +152,16 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .dependency-list { margin-top: 10px; }
 .inspection-editor { border: 2px solid var(--accent); background: var(--soft); }
 .inspection-editor .check-row { margin: 4px 0; font-weight: 600; }
-.inspection-state { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--muted); font-size: 13px; }
+.inspection-state { display: inline-flex; align-items: center; gap: 8px; margin: 3px 0 0; color: var(--muted); font-size: 13px; }
 .inspection-state.checked { color: var(--success, #16835b); font-weight: 700; }
-.inspection-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 340px; overflow-x: auto; padding: 8px 0; border-top: 1px solid var(--line); }
-.inspection-state { flex: 0 0 auto; min-width: 104px; }
-.inspection-controls { display: flex; flex: 0 0 auto; gap: 8px; white-space: nowrap; }
-.inspection-controls .button { min-width: 110px; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+.inspection-group { display: grid; flex: 1 1 100%; gap: 0; width: 100%; min-width: 0; margin-top: 10px; }
+.inspection-group-title { margin: 8px 0 0; font-size: 16px; }
+.inspection-progress { margin: 3px 0 6px; color: var(--muted); font-size: 13px; }
+.inspection-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-width: 0; padding: 10px 0; border-top: 1px solid var(--line); }
+.inspection-unit { display: grid; gap: 1px; min-width: 0; }
+.inspection-unit-name { overflow-wrap: anywhere; }
+.inspection-row > .button { flex: 0 0 auto; min-height: 40px; padding: 8px 12px; }
+.inspection-all-pass { width: 100%; margin-top: 10px; }
 .assignment-editor { border: 2px solid var(--accent); background: var(--soft); }
 .assignment-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); min-width: 0; gap: 10px; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
 .assignment-group legend { padding: 0 6px; font-weight: 750; }
@@ -196,9 +200,8 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
   .admin-tabs > .button { flex: 1 1 120px; min-width: 0; }
   .document-group > .button { flex: 1 1 150px; min-width: 0; }
   .review-field-list { grid-template-columns: 1fr; }
-  .inspection-row { min-width: 0; flex-wrap: wrap; overflow-x: visible; }
-  .inspection-controls { flex: 1 1 100%; flex-wrap: wrap; white-space: normal; }
-  .inspection-controls .button { min-width: 0; flex: 1 1 100px; white-space: normal; overflow-wrap: anywhere; }
+  .inspection-row { align-items: flex-start; }
+  .inspection-row > .button { min-height: 38px; }
   .tabs { gap: 12px; flex-wrap: wrap; }
   .equipment-row, .dependency-row { flex-wrap: wrap; overflow-wrap: anywhere; }
   .admin-card p, .asset-list, .review-row span { overflow-wrap: anywhere; }
