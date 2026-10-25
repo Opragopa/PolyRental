@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -18,7 +18,7 @@ class Conflict(Exception):
     pass
 
 
-ACTIVE_STATUSES = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection", "returned"}
+ACTIVE_STATUSES = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
 
 
 def now():
@@ -37,6 +37,7 @@ def expire_holds(session):
         Booking.status == "pending", Booking.hold_expires_at <= now()).with_for_update()).all()
     for booking in expired:
         booking.status = "expired"
+        booking.identity_status = "not_required"
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
         if identity:
             identity.delete_after = now() + timedelta(hours=24)
@@ -58,12 +59,21 @@ def lines_total(start, end, lines):
 
 def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None):
     article = session.get(Article, article_id)
-    query = select(func.coalesce(func.sum(BookingLine.quantity), 0)).join(
-        Booking, Booking.id == BookingLine.booking_id).where(
-        BookingLine.article_id == article_id,
+    scheduled = and_(
         Booking.status.in_(ACTIVE_STATUSES),
         Booking.starts_at < end + timedelta(hours=article.buffer_hours),
         Booking.ends_at + timedelta(hours=article.buffer_hours) > start,
+    )
+    buffer_interval = text(f"interval '{int(article.buffer_hours)} hours'")
+    actual_return = and_(
+        Booking.status == "returned",
+        Booking.returned_at.is_not(None),
+        Booking.returned_at + buffer_interval > start,
+    )
+    query = select(func.coalesce(func.sum(BookingLine.quantity), 0)).join(
+        Booking, Booking.id == BookingLine.booking_id).where(
+        BookingLine.article_id == article_id,
+        or_(scheduled, actual_return),
     )
     if exclude_booking_id:
         query = query.where(Booking.id != exclude_booking_id)
@@ -91,13 +101,8 @@ def availability(start, end):
                 "rate": str(article.hourly_rate), "category": article.category,
                 "buffer_hours": article.buffer_hours, "capacity": capacity,
                 "available_quantity": available_count, "available": available_count > 0,
-                "billable_dependencies": [{"article_id": dependency.child_article_id,
-                                            "quantity": dependency.quantity,
-                                            "rate": str(dependency.child.hourly_rate)}
-                                           for dependency in session.scalars(select(ArticleDependency).where(
-                                               ArticleDependency.parent_article_id == article.id,
-                                               ArticleDependency.billable.is_(True)).options(
-                                                   selectinload(ArticleDependency.child))).all()],
+                "dependencies": [],
+                "billable_dependencies": [],
             })
         return result
 
@@ -120,32 +125,11 @@ def _normalize_lines(session, requested):
         billable_quantities[article_id] += quantity
     if not quantities or len(quantities) > 30:
         raise ValueError("Выберите оборудование")
-    processed = set()
-    rates = {}
-    while True:
-        dependencies = session.scalars(select(ArticleDependency).where(
-            ArticleDependency.parent_article_id.in_(list(quantities)))).all()
-        added_any = False
-        for dependency in dependencies:
-            edge = (dependency.parent_article_id, dependency.child_article_id)
-            if edge in processed:
-                continue
-            processed.add(edge)
-            added = quantities[dependency.parent_article_id] * dependency.quantity
-            quantities[dependency.child_article_id] += added
-            auto_added.add(dependency.child_article_id)
-            if dependency.billable:
-                billable_quantities[dependency.child_article_id] += added
-            elif dependency.child_article_id not in billable_quantities:
-                rates[dependency.child_article_id] = Decimal("0")
-            added_any = True
-        if not added_any:
-            break
     articles = {article.id: article for article in session.scalars(
         select(Article).where(Article.id.in_(list(quantities)), Article.is_active.is_(True))).all()}
     if len(articles) != len(quantities):
         raise Conflict("Один из артикулов больше недоступен")
-    return [(articles[article_id], quantity, rates.get(article_id, articles[article_id].hourly_rate),
+    return [(articles[article_id], quantity, articles[article_id].hourly_rate,
              article_id in auto_added, billable_quantities[article_id])
             for article_id, quantity in quantities.items()]
 
@@ -203,6 +187,7 @@ def _booking_query():
         selectinload(Booking.lines).selectinload(BookingLine.article),
         selectinload(Booking.assets).selectinload(BookingAsset.equipment).selectinload(Equipment.article),
         selectinload(Booking.items).selectinload(BookingItem.equipment),
+        selectinload(Booking.inspections),
     )
 
 
@@ -232,13 +217,22 @@ def list_customer_bookings(customer_id):
 
 def _asset_conflicts(session, booking, equipment_id):
     article = session.get(Equipment, equipment_id).article
+    scheduled = and_(
+        Booking.status.in_(ACTIVE_STATUSES),
+        Booking.starts_at < booking.ends_at + timedelta(hours=article.buffer_hours),
+        Booking.ends_at + timedelta(hours=article.buffer_hours) > booking.starts_at,
+    )
+    buffer_interval = text(f"interval '{int(article.buffer_hours)} hours'")
+    actual_return = and_(
+        Booking.status == "returned",
+        Booking.returned_at.is_not(None),
+        Booking.returned_at + buffer_interval > booking.starts_at,
+    )
     return session.scalar(select(func.count()).select_from(BookingAsset).join(
         Booking, Booking.id == BookingAsset.booking_id).where(
         BookingAsset.equipment_id == equipment_id,
         Booking.id != booking.id,
-        Booking.status.in_(ACTIVE_STATUSES),
-        Booking.starts_at < booking.ends_at + timedelta(hours=article.buffer_hours),
-        Booking.ends_at + timedelta(hours=article.buffer_hours) > booking.starts_at,
+        or_(scheduled, actual_return),
     )) > 0
 
 
@@ -258,6 +252,8 @@ def assign_booking_assets(booking_id, actor_id, assignments=None):
             Booking.id == booking_id).with_for_update())
         if not booking or booking.status not in {"confirmed", "preparing"}:
             raise Conflict("Комплектация доступна только для подтверждённого заказа")
+        if booking.identity_status != "verified":
+            raise Conflict("Сначала клиент должен заполнить документы и пройти проверку у оператора")
         session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking.id))
         for line in booking.lines:
             selected = assignments.get(str(line.id), assignments.get(line.id, [])) if assignments else []
@@ -299,26 +295,16 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
         if not assigned:
             raise ValueError("Экземпляр не назначен заказу")
         asset = session.get(Equipment, equipment_id)
-        profile = asset.article.inspection_profile if asset and asset.article else "generic"
-        required_checks = {
-            "generic": {"visual", "functional"},
-            "camera": {"sensor", "connectors", "recording"},
-            "optics": {"glass", "back_focus", "mechanics"},
-            "light": {"power", "color", "controls"},
-            "battery": {"visual", "health", "charge"},
-        }.get(profile, {"visual", "functional"})
-        if stage == "pre_issue" and (not required_checks.issubset(checklist) or
-                                      any(checklist[key] is not True for key in required_checks)):
-            raise ValueError(f"Заполните профиль проверки: {', '.join(sorted(required_checks))}")
         record = session.scalar(select(Inspection).where(
             Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
             Inspection.stage == stage))
         if record is None:
             record = Inspection(booking_id=booking_id, equipment_id=equipment_id, stage=stage,
                                 actor_id=actor_id)
-        record.result, record.checklist, record.notes, record.actor_id = result, checklist, notes.strip(), actor_id
+        record.result, record.checklist, record.notes, record.defect = result, checklist or {}, notes.strip(), (defect or "").strip()[:4000]
+        record.estimated_cost, record.charge_customer, record.actor_id = Decimal(str(estimated_cost)), bool(charge_customer), actor_id
         session.add(record)
-        if stage == "check_in" and result == "fail":
+        if result == "fail":
             asset.condition = "maintenance"
             ticket = session.scalar(select(RepairTicket).where(
                 RepairTicket.booking_id == booking_id, RepairTicket.equipment_id == equipment_id,
@@ -328,6 +314,10 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
                                          defect=(defect or notes or "Требуется диагностика")[:4000],
                                          estimated_cost=Decimal(str(estimated_cost)),
                                          charge_customer=bool(charge_customer)))
+            else:
+                ticket.defect = (defect or notes or ticket.defect or "Требуется диагностика")[:4000]
+                ticket.estimated_cost = Decimal(str(estimated_cost))
+                ticket.charge_customer = bool(charge_customer)
 
 
 def mark_act_signed(booking_id, actor_id):
@@ -389,6 +379,7 @@ def transition(booking_id, action, actor_id, customer_id=None):
             if identity:
                 identity.delete_after = now() + timedelta(days=90)
         elif action == "cancelled":
+            booking.identity_status = "not_required"
             identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
             if identity:
                 identity.delete_after = now() + timedelta(hours=24)

@@ -10,13 +10,14 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
+import pytest
 
 from app.bot import main_keyboard, miniapp_url
 from app.db import CustomerIdentity, IdentityDocument, PIIAudit, Session
 from app.documents import render_document
 from app.miniapp import verify_init_data
 from app.miniapp_server import app
-from app.pii import purge_expired_identities, reveal_identity, sanitize_image
+from app.pii import purge_expired_identities, reveal_identity, sanitize_image, validate_identity_payload
 from app.service import availability, now, save_equipment, transition
 from app.rental import assign_booking_assets
 
@@ -89,9 +90,9 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Москва",
                   "residential_address": "Москва", "student_id_number": "S-123",
-                  "student_institution": "Университет", "student_valid_until": "2027-06-30"}
+                  "student_institution": "Университет"}
         files = {kind: (f"{kind}.png", image_bytes(), "image/png") for kind in
-                 ("passport_main", "passport_registration", "student_front", "student_back")}
+                     ("passport_main", "passport_registration", "student_front")}
         response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer,
                                data={"payload": json.dumps(fields), "policy_version": consent["version"],
                                      "text_hash": consent["text_hash"]}, files=files)
@@ -114,14 +115,28 @@ def test_bad_mime_rejected(monkeypatch):
         consent = client.get("/api/miniapp/privacy-consent", headers=customer).json()
         names = ("full_name", "birth_date", "passport_series", "passport_number", "passport_issued_at",
                  "passport_issuer", "passport_division_code", "registration_address", "residential_address",
-                 "student_id_number", "student_institution", "student_valid_until")
+                 "student_id_number", "student_institution")
         files = {kind: (f"{kind}.txt", b"not an image", "text/plain") for kind in
-                 ("passport_main", "passport_registration", "student_front", "student_back")}
+                 ("passport_main", "passport_registration", "student_front")}
         response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer,
                                data={"payload": json.dumps({key: "x" for key in names}),
                                      "policy_version": consent["version"], "text_hash": consent["text_hash"]},
                                files=files)
         assert response.status_code == 422
+
+
+def test_identity_sensitive_fields_are_validated():
+    valid = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+             "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
+             "passport_division_code": "770-001", "registration_address": "Москва",
+             "residential_address": "Москва", "student_id_number": "S-123",
+             "student_institution": "Университет"}
+    assert validate_identity_payload(valid)["passport_series"] == "4510"
+    for key, value in (("passport_series", "45"), ("passport_number", "123"),
+                       ("passport_division_code", "770001"), ("birth_date", "2099-01-01")):
+        invalid = {**valid, key: value}
+        with pytest.raises(ValueError):
+            validate_identity_payload(invalid)
 
 
 def test_image_is_reencoded_without_metadata():
@@ -142,13 +157,15 @@ def test_retention_purge_keeps_only_audit(monkeypatch):
     with TestClient(app) as client:
         booking_id = create_confirmed(client, customer)
         consent = client.get("/api/miniapp/privacy-consent", headers=customer).json()
-        names = ("full_name", "birth_date", "passport_series", "passport_number", "passport_issued_at",
-                 "passport_issuer", "passport_division_code", "registration_address", "residential_address",
-                 "student_id_number", "student_institution", "student_valid_until")
         files = {kind: (f"{kind}.png", image_bytes(), "image/png") for kind in
-                 ("passport_main", "passport_registration", "student_front", "student_back")}
+                 ("passport_main", "passport_registration", "student_front")}
+        identity_fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+                           "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
+                           "passport_division_code": "770-001", "registration_address": "Москва",
+                           "residential_address": "Москва", "student_id_number": "S-123",
+                           "student_institution": "Университет"}
         assert client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer,
-                           data={"payload": json.dumps({key: "x" for key in names}),
+                           data={"payload": json.dumps(identity_fields),
                                  "policy_version": consent["version"], "text_hash": consent["text_hash"]},
                            files=files).status_code == 200
     with Session.begin() as session:

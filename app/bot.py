@@ -24,6 +24,14 @@ def make_bot(token):
     return Bot(token, session=AiohttpSession(proxy=proxy) if proxy else None)
 
 
+def customer_label(booking):
+    name = (booking.customer_name or "").strip()
+    contact = (booking.customer_contact or "").strip()
+    if contact.startswith("@") and contact.lower() not in name.lower():
+        return f"{name} ({contact})" if name else contact
+    return name or contact or f"Telegram ID {booking.customer_id}"
+
+
 class Rent(StatesGroup):
     start = State()
     end = State()
@@ -79,10 +87,12 @@ def equipment_keyboard(items, selected):
 
 
 async def notify_managers(bot, booking_id):
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    label = customer_label(booking) if booking else "клиент"
     for admin_id in os.getenv("ADMIN_IDS", "").split(","):
         if admin_id.strip().isdigit():
             try:
-                await bot.send_message(int(admin_id), f"Новая заявка №{booking_id}. /confirm {booking_id} или /cancel {booking_id}")
+                await bot.send_message(int(admin_id), f"Новая заявка №{booking_id} от {label}. /confirm {booking_id} или /cancel {booking_id}")
             except Exception:
                 pass
 

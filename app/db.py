@@ -75,6 +75,7 @@ class Booking(Base):
     items: Mapped[list["BookingItem"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     lines: Mapped[list["BookingLine"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     assets: Mapped[list["BookingAsset"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    inspections: Mapped[list["Inspection"]] = relationship(cascade="all, delete-orphan")
 
 
 class BookingItem(Base):
@@ -132,6 +133,9 @@ class Inspection(Base):
     result: Mapped[str] = mapped_column(String(20))
     checklist: Mapped[dict] = mapped_column(JSONB, default=dict)
     notes: Mapped[str] = mapped_column(Text, default="")
+    defect: Mapped[str] = mapped_column(Text, default="")
+    estimated_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    charge_customer: Mapped[bool] = mapped_column(Boolean, default=False)
     actor_id: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     __table_args__ = (UniqueConstraint("booking_id", "equipment_id", "stage", name="inspection_asset_stage_unique"),)
@@ -162,6 +166,7 @@ class CustomerIdentity(Base):
     payload_nonce: Mapped[bytes] = mapped_column(LargeBinary)
     status: Mapped[str] = mapped_column(String(30), default="submitted")
     review_comment: Mapped[str] = mapped_column(String(500), default="")
+    review_fields: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()"))
     delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
@@ -277,6 +282,10 @@ def init_db():
             for name, ddl in additions.items():
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE bookings ADD COLUMN {name} {ddl}"))
+        if "customer_identities" in tables:
+            columns = _columns(connection, "customer_identities")
+            if "review_fields" not in columns:
+                connection.execute(text("ALTER TABLE customer_identities ADD COLUMN review_fields TEXT NOT NULL DEFAULT '[]'"))
         if "booking_lines" in tables:
             columns = _columns(connection, "booking_lines")
             if "billable_quantity" not in columns:

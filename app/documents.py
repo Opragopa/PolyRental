@@ -79,8 +79,7 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
             f"{identity['passport_issued_at']} {identity['passport_issuer']}, код "
             f"{identity['passport_division_code']}; регистрация: {identity['registration_address']}; "
             f"проживание: {identity['residential_address']}; студенческий билет "
-            f"{identity['student_id_number']}, {identity['student_institution']}, "
-            f"действителен до {identity['student_valid_until']}"
+            f"{identity['student_id_number']}, {identity['student_institution']}"
         )
     context = {
         "booking_id": booking.id,

@@ -189,7 +189,9 @@ def calendar_feed(token: str):
             continue
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
-        event.add("summary", "Аренда: " + ", ".join(item.equipment.name for item in booking.items))
+        equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
+        event.add("summary", f"Аренда №{booking.id}: {equipment or 'оборудование'}")
+        event.add("description", f"PolyRental · статус: {booking.status}")
         event.add("dtstart", booking.starts_at)
         event.add("dtend", booking.ends_at)
         cal.add_component(event)

@@ -30,16 +30,34 @@
     }, 0);
     return Math.round(hourly * minutes() / 60);
   }
-  function toIso(value) { return value ? `${value}:00+03:00` : ""; }
+  function toIso(value) {
+    const text = String(value || "").trim();
+    let match = text.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
+    if (match) return `${match[3]}-${match[2]}-${match[1]}T${match[4]}:${match[5]}:00+03:00`;
+    match = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    return match ? `${text}:00+03:00` : "";
+  }
+  function pickerText(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    return match ? `${match[3]}.${match[2]}.${match[1]} ${match[4]}:${match[5]}` : "";
+  }
+  function syncDateTime(id) {
+    const date = $(`${id}-date`).value; const time = $(`${id}-time`).value;
+    $(id).value = date && time ? `${date}T${time}` : "";
+  }
+  function syncDateFields(id) {
+    const match = String($(id).value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+    if (match) { $(`${id}-date`).value = match[1]; $(`${id}-time`).value = match[2]; }
+  }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
   function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; $("global-error").scrollIntoView({ block: "nearest" }); }
   function fieldError(id, message) {
-    const input = $(id); const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
-    input.setAttribute("aria-invalid", String(Boolean(message)));
+    const input = $(id); const focusTarget = $(`${id}-date`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
+    focusTarget.setAttribute("aria-invalid", String(Boolean(message)));
     error.textContent = message || ""; error.hidden = !message;
-    if (message) input.focus();
+    if (message) focusTarget.focus();
   }
   function saveDraft() {
     try { localStorage.setItem(draftKey, JSON.stringify({ start: $("start").value, end: $("end").value, quantities: [...state.quantities] })); } catch (_) { /* storage can be disabled */ }
@@ -111,7 +129,10 @@
     clearError(); fieldError("start", ""); fieldError("end", "");
     if (!$("start").value) { fieldError("start", "Выберите дату и время выдачи."); return false; }
     if (!$("end").value) { fieldError("end", "Выберите дату и время возврата."); return false; }
-    if (Number.isNaN(new Date(toIso($("start").value)).getTime()) || new Date(toIso($("start").value)) < new Date(Date.now() - 60000)) { fieldError("start", "Начало аренды должно быть в будущем."); return false; }
+    const startIso = toIso($("start").value); const endIso = toIso($("end").value);
+    if (!startIso) { fieldError("start", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
+    if (!endIso) { fieldError("end", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
+    if (new Date(startIso) < new Date(Date.now() - 60000)) { fieldError("start", "Начало аренды должно быть в будущем."); return false; }
     if (minutes() <= 0) { fieldError("end", "Возврат должен быть позже выдачи."); return false; }
     return true;
   }
@@ -242,7 +263,7 @@
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
         card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p><p><strong>${escapeHtml(order.total)} ₽</strong>${order.status === "pending" ? ` · удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК` : ""}</p>`;
-        if (["required", "needs_changes"].includes(order.identity_status)) {
+        if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
           identity.textContent = order.identity_status === "needs_changes" ? "Исправить данные" : "Заполнить документы";
           identity.addEventListener("click", () => openIdentity(order.id)); card.append(identity);
@@ -266,21 +287,53 @@
 
   async function openIdentity(bookingId) {
     clearError(); state.identityBookingId = bookingId; state.view = "identity"; render();
-    $("identity-status").hidden = true; $("identity-form").hidden = true; $("consent-step").hidden = false;
+    $("identity-status").hidden = true; $("identity-form").hidden = true; $("identity-feedback").hidden = true; $("consent-step").hidden = false;
     $("consent-check").checked = false; $("consent-text").textContent = "Загружаем текст согласия…";
     try {
+      const current = await api(`/api/miniapp/bookings/${bookingId}/identity`);
+      const fields = current.fields || {};
+      const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
+      if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
+      for (const [name, value] of Object.entries(fields)) { const input = document.querySelector(`[name="${name}"]`); if (input) input.value = value || ""; }
+      const feedback = $("identity-feedback");
+      if (current.status === "needs_changes") {
+        const labels = { full_name: "ФИО", birth_date: "дата рождения", passport_combined: "серия и номер паспорта", passport_issued_at: "дата выдачи", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "учебное заведение", passport_main: "фото паспорта", passport_registration: "страница регистрации", student_front: "лицевая сторона студенческого" };
+        feedback.innerHTML = `<strong>Нужно исправить:</strong> ${(current.review_fields || []).map((field) => labels[field] || field).join(", ") || "проверьте данные по комментарию оператора"}.<br>${escapeHtml(current.review_comment || "")}`;
+        feedback.hidden = false; $("consent-step").hidden = true; $("identity-form").hidden = false;
+        for (const field of current.review_fields || []) { const input = document.querySelector(`[name="${field}"]`); input?.closest(".field")?.classList.add("needs-fix"); }
+        document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = (current.review_fields || []).includes(input.name); });
+        return;
+      }
       state.consent = await api("/api/miniapp/privacy-consent");
       $("consent-text").textContent = state.consent.text;
     } catch (error) { $("consent-text").textContent = "Форма временно недоступна."; showError(error.message); }
+  }
+
+  async function jpegFile(file) {
+    if (!file || file.type === "image/jpeg") return file;
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas"); canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0); bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", .9));
+    if (!blob) throw new Error("Не удалось преобразовать изображение в JPEG");
+    return new File([blob], `${(file.name || "document").replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" });
   }
 
   async function submitIdentity(event) {
     event.preventDefault(); clearError();
     const form = event.currentTarget; const button = $("identity-submit");
     const data = new FormData(form); const fields = {};
-    for (const name of ["full_name", "birth_date", "passport_series", "passport_number", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution", "student_valid_until"]) fields[name] = String(data.get(name) || "").trim();
-    const upload = new FormData(); upload.set("payload", JSON.stringify(fields)); upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash);
-    for (const name of ["passport_main", "passport_registration", "student_front", "student_back"]) upload.set(name, data.get(name));
+    for (const name of ["full_name", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"]) fields[name] = String(data.get(name) || "").trim();
+    const passportCombined = String(data.get("passport_combined") || "").replace(/\D/g, "");
+    if (!/^\d{10}$/.test(passportCombined)) return showError("Серия и номер паспорта: 4 цифры, пробел, 6 цифр.");
+    fields.passport_series = passportCombined.slice(0, 4); fields.passport_number = passportCombined.slice(4);
+    const dateToday = new Date().toISOString().slice(0, 10);
+    if (!/^[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}$/.test(fields.full_name) || fields.full_name.split(/\s+/).length < 2) return showError("Укажите ФИО минимум из двух слов.");
+    if (!/^\d{3}-\d{3}$/.test(fields.passport_division_code)) return showError("Код подразделения должен быть в формате 000-000.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.birth_date) || fields.birth_date > dateToday) return showError("Проверьте дату рождения.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) return showError("Проверьте дату выдачи паспорта.");
+    const upload = new FormData(); upload.set("payload", JSON.stringify(fields)); upload.set("policy_version", state.consent?.version || ""); upload.set("text_hash", state.consent?.text_hash || "");
+    for (const name of ["passport_main", "passport_registration", "student_front"]) { const file = data.get(name); if (file?.size) upload.set(name, await jpegFile(file)); }
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
     try {
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
@@ -311,20 +364,25 @@
         const actions = document.createElement("div"); actions.className = "action-row";
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         if (order.status === "pending") actions.append(actionButton("Подтвердить", transitionAction("confirmed"), order.id, "primary"));
-        if (order.status === "confirmed") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary"));
+        if (order.status === "confirmed") {
+          if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary"));
+          else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = "Комплектацию можно начать после заполнения документов клиентом и проверки оператором."; actions.append(note); }
+        }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost"));
-          for (const asset of order.assets) {
-            const inspect = document.createElement("button"); inspect.type = "button"; inspect.className = "button secondary"; inspect.textContent = `Проверить: ${asset.serial}`;
-            inspect.addEventListener("click", () => openInspection(order, asset, "pre_issue")); actions.append(inspect);
-          }
+          for (const asset of order.assets) appendInspectionActions(actions, order, asset, "pre_issue");
           actions.append(actionButton("Заказ готов", transitionAction("ready"), order.id, "primary"));
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id));
-          for (const kind of ["passport_main", "passport_registration", "student_front", "student_back"]) {
-            actions.append(actionButton(`Скачать ${kind}`, () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/identity/documents/${kind}`, `${kind}-${order.id}.jpg`), order.id, "ghost"));
-          }
+          const documents = document.createElement("div"); documents.className = "document-actions";
+          documents.innerHTML = `<strong class="document-group-title">Документы</strong><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
+          const passport = document.createElement("div"); passport.className = "document-group";
+          passport.append(actionButton("Паспорт — страница с фото", () => openDocumentViewer(order.id, "passport_main"), order.id, "ghost document-button"));
+          passport.append(actionButton("Паспорт — регистрация", () => openDocumentViewer(order.id, "passport_registration"), order.id, "ghost document-button"));
+          const student = document.createElement("div"); student.className = "document-group";
+          student.append(actionButton("Студенческий — лицевая сторона", () => openDocumentViewer(order.id, "student_front"), order.id, "ghost document-button"));
+          documents.append(passport, student); actions.append(documents);
         }
         if (order.status === "ready" && state.role?.pii_admin) {
           actions.append(actionButton("Скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id));
@@ -334,10 +392,7 @@
         }
         if (order.status === "issued") actions.append(actionButton("Начать возврат", transitionAction("return_inspection"), order.id, "primary"));
         if (order.status === "return_inspection") {
-          for (const asset of order.assets) {
-            const inspect = document.createElement("button"); inspect.type = "button"; inspect.className = "button secondary"; inspect.textContent = `Проверить возврат: ${asset.serial}`;
-            inspect.addEventListener("click", () => openInspection(order, asset, "check_in")); actions.append(inspect);
-          }
+          for (const asset of order.assets) appendInspectionActions(actions, order, asset, "check_in");
           actions.append(actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary"));
         }
         card.append(actions); content.append(card);
@@ -345,13 +400,38 @@
     } catch (error) { content.textContent = "Не удалось загрузить раздел."; showError(error.message); }
   }
 
+  function inspectionFor(order, asset, stage) {
+    return (order.inspections || []).find((item) => item.equipment_id === asset.id && item.stage === stage);
+  }
+
+  function appendInspectionActions(actions, order, asset, stage) {
+    const saved = inspectionFor(order, asset, stage);
+    const label = stage === "pre_issue" ? "Выдача" : "Возврат";
+    const row = document.createElement("div"); row.className = "inspection-row";
+    const state = document.createElement("span"); state.className = `inspection-state${saved ? " checked" : ""}`;
+    state.textContent = `${label}: ${saved ? (saved.result === "pass" ? "проверено" : "неисправность") : "не проверено"}`;
+    row.append(state);
+    const controls = document.createElement("div"); controls.className = "inspection-controls";
+    const ok = document.createElement("button"); ok.type = "button"; ok.className = "button secondary"; ok.textContent = saved?.result === "pass" ? "ОК ✓" : "ОК"; ok.disabled = saved?.result === "pass";
+    ok.addEventListener("click", async () => {
+      ok.disabled = true;
+      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "pass", checklist: {}, notes: "", defect: "", estimated_cost: 0, charge_customer: false }) }); await showAdmin("orders"); }
+      catch (error) { showError(error.message); ok.disabled = false; }
+    });
+    const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact"; defect.textContent = "Неисправность";
+    defect.addEventListener("click", () => openInspection(order, asset, stage, saved));
+    controls.append(ok, defect); row.append(controls); actions.append(row);
+  }
+
   async function reviewIdentity(bookingId) {
     const masked = await api(`/api/miniapp/admin/bookings/${bookingId}/identity`);
     if (!window.confirm(`Анкета: ${masked.full_name}\nПаспорт: ${masked.passport}\nСтуденческий: ${masked.student_id}\n\nРаскрыть полные реквизиты? Действие будет записано в журнал.`)) return;
     const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
-    const approved = window.confirm(`ФИО: ${full.full_name}\nДата рождения: ${full.birth_date}\nПаспорт: ${full.passport_series} ${full.passport_number}\nВыдан: ${full.passport_issued_at}, ${full.passport_issuer}\nКод: ${full.passport_division_code}\nРегистрация: ${full.registration_address}\nПроживание: ${full.residential_address}\nСтуденческий: ${full.student_id_number}, ${full.student_institution}, до ${full.student_valid_until}\n\nПодтвердить после сверки фотографий?`);
-    const comment = approved ? "" : (window.prompt("Укажите безопасный комментарий без реквизитов:", "Нужно заменить нечёткую фотографию") || "Нужны исправления");
-    return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved, comment }) });
+    const approved = window.confirm(`ФИО: ${full.full_name}\nДата рождения: ${full.birth_date}\nПаспорт: ${full.passport_series} ${full.passport_number}\nВыдан: ${full.passport_issued_at}, ${full.passport_issuer}\nКод: ${full.passport_division_code}\nРегистрация: ${full.registration_address}\nПроживание: ${full.residential_address}\nСтуденческий: ${full.student_id_number}, ${full.student_institution}\n\nПодтвердить после сверки фотографий?`);
+    if (approved) return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
+    const fields = window.prompt("Что нужно исправить? Введите коды через запятую:\nfull_name, passport_main, passport_registration, student_front, passport_combined, passport_issued_at, passport_division_code, registration_address, residential_address, student_id_number", "passport_main");
+    const comment = window.prompt("Комментарий для клиента без реквизитов:", "Замените нечёткое фото документа") || "Нужны исправления";
+    return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: false, comment, fields: String(fields || "").split(",").map((field) => field.trim()).filter(Boolean) }) });
   }
 
   async function downloadSecure(path, filename) {
@@ -359,6 +439,27 @@
     if (!response.ok) { let detail = "Не удалось скачать документ"; try { detail = (await response.json()).detail || detail; } catch (_) {} throw new Error(detail); }
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
   }
+
+  let documentViewerUrl = "";
+  let documentViewerItems = [];
+  let documentViewerIndex = 0;
+  let documentViewerBookingId = null;
+  async function openDocumentViewer(bookingId, kind) {
+    documentViewerBookingId = bookingId;
+    documentViewerItems = ["passport_main", "passport_registration", "student_front"];
+    documentViewerIndex = Math.max(0, documentViewerItems.indexOf(kind));
+    const viewer = $("document-viewer"); viewer.hidden = false;
+    await loadDocumentViewerImage(bookingId);
+  }
+  async function loadDocumentViewerImage(bookingId) {
+    const kind = documentViewerItems[documentViewerIndex];
+    const labels = { passport_main: "Паспорт — страница с фото", passport_registration: "Паспорт — регистрация", student_front: "Студенческий — лицевая сторона" };
+    const response = await fetch(`/api/miniapp/admin/bookings/${bookingId}/identity/documents/${kind}`, { headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store" });
+    if (!response.ok) { $("document-viewer").hidden = true; throw new Error("Не удалось открыть фотографию"); }
+    if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl);
+    documentViewerUrl = URL.createObjectURL(await response.blob()); $("document-viewer-image").src = documentViewerUrl; $("document-viewer-title").textContent = labels[kind] || "Документ";
+  }
+  function closeDocumentViewer() { $("document-viewer").hidden = true; $("document-viewer-image").removeAttribute("src"); if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl); documentViewerUrl = ""; }
 
   function renderAdminCatalog(result, editor = null) {
     const content = $("admin-content"); content.replaceChildren();
@@ -438,37 +539,63 @@
   }
 
   async function manualAssign(order) {
-    const catalog = await api("/api/miniapp/admin/catalog"); const assignments = {};
+    const catalog = await api("/api/miniapp/admin/catalog");
+    const editor = document.createElement("article"); editor.className = "admin-card assignment-editor";
+    editor.innerHTML = `<div class="order-head"><div><h3>Замена экземпляров</h3><p>Выберите конкретную технику для каждой позиции заказа.</p></div><button type="button" class="button ghost compact assignment-close">Закрыть</button></div><form class="assignment-form"></form>`;
+    const form = editor.querySelector("form");
     for (const line of order.lines) {
       const article = catalog.articles.find((item) => item.id === line.article_id);
-      const choices = (article?.equipment || []).map((item) => `${item.id}: ${item.serial} (${item.location || "без ячейки"}, ${item.condition})`).join("\n");
-      const raw = window.prompt(`${line.name}: укажите ${line.quantity} ID через запятую\n${choices}`);
-      if (raw === null) throw new Error("Замена отменена");
-      assignments[String(line.id)] = raw.split(",").map((value) => Number(value.trim())).filter(Boolean);
+      const current = order.assets.filter((asset) => asset.article_id === line.article_id).map((asset) => asset.id);
+      const group = document.createElement("fieldset"); group.className = "assignment-group";
+      group.innerHTML = `<legend>${escapeHtml(line.name)} × ${line.quantity}</legend>`;
+      for (let index = 0; index < line.quantity; index += 1) {
+        const slot = document.createElement("label"); slot.className = "assignment-slot";
+        slot.innerHTML = `<span>Экземпляр ${index + 1}</span>`;
+        const select = document.createElement("select"); select.name = `line-${line.id}`; select.required = true;
+        select.innerHTML = `<option value="">Экземпляр ${index + 1}</option>`;
+        for (const item of article?.equipment || []) {
+          if (item.condition !== "available" && !current.includes(item.id)) continue;
+          const option = document.createElement("option"); option.value = item.id; option.textContent = `№ ${item.serial} · ${item.location || "без ячейки"} · ${item.condition === "available" ? "доступен" : item.condition}`; option.selected = current[index] === item.id; select.append(option);
+        }
+        slot.append(select); group.append(slot);
+      }
+      form.append(group);
     }
-    return api(`/api/miniapp/admin/bookings/${order.id}/assignments`, { method: "PUT", body: JSON.stringify({ assignments }) });
+    const buttons = document.createElement("div"); buttons.className = "action-row"; buttons.innerHTML = `<button class="button primary" type="submit">Сохранить замену</button>`; form.append(buttons);
+    $("admin-content").prepend(editor); editor.scrollIntoView({ behavior: "smooth", block: "start" });
+    editor.querySelector(".assignment-close").addEventListener("click", () => editor.remove());
+    const refreshAssignmentOptions = () => {
+      const selects = [...form.querySelectorAll("select")];
+      const selected = new Set(selects.map((select) => select.value).filter(Boolean));
+      for (const select of selects) {
+        for (const option of select.options) {
+          option.disabled = Boolean(option.value && selected.has(option.value) && option.value !== select.value);
+        }
+      }
+    };
+    form.querySelectorAll("select").forEach((select) => select.addEventListener("change", refreshAssignmentOptions));
+    refreshAssignmentOptions();
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); const assignments = {};
+      for (const line of order.lines) assignments[String(line.id)] = [...form.querySelectorAll(`[name="line-${line.id}"]`)].map((select) => Number(select.value));
+      const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+      try { await api(`/api/miniapp/admin/bookings/${order.id}/assignments`, { method: "PUT", body: JSON.stringify({ assignments }) }); await showAdmin("orders"); }
+      catch (error) { showError(error.message); submit.disabled = false; }
+    });
   }
 
-  function inspectionChecklist(profile) {
-    const fields = { generic: ["visual", "functional"], camera: ["sensor", "connectors", "recording"], optics: ["glass", "back_focus", "mechanics"], light: ["power", "color", "controls"], battery: ["visual", "health", "charge"] }[profile] || ["visual", "functional"];
-    return Object.fromEntries(fields.map((field) => [field, true]));
-  }
-
-  function openInspection(order, asset, stage) {
+  function openInspection(order, asset, stage, saved = null) {
     const content = $("admin-content");
     const card = document.createElement("article"); card.className = "admin-card inspection-editor";
-    const fields = { generic: ["visual", "functional"], camera: ["sensor", "connectors", "recording"], optics: ["glass", "back_focus", "mechanics"], light: ["power", "color", "controls"], battery: ["visual", "health", "charge"] }[asset.inspection_profile] || ["visual", "functional"];
-    const labels = { visual: "Внешний осмотр", functional: "Функциональная проверка", sensor: "Сенсор и битые пиксели", connectors: "Разъёмы и сигнал", recording: "Запись и носитель", glass: "Чистота линз", back_focus: "Бэк-фокус", mechanics: "Механика", power: "Питание", color: "Цветовая температура", controls: "Органы управления", health: "Здоровье аккумулятора", charge: "Заряд аккумулятора" };
-    card.innerHTML = `<div class="order-head"><div><h3>${stage === "pre_issue" ? "Предвыдачная проверка" : "Проверка возврата"}</h3><p>${escapeHtml(asset.name)} · серийный № ${escapeHtml(asset.serial)}</p></div><button type="button" class="button ghost compact inspection-close">Закрыть</button></div><form class="inspection-form"><div class="form-grid"><label class="field"><span>Результат</span><select name="result"><option value="pass">Исправен</option><option value="fail">В ремонт</option></select></label><label class="field wide"><span>Заметки без персональных данных</span><textarea name="notes" maxlength="2000" placeholder="Что проверено и что обнаружено"></textarea></label>${fields.map((field) => `<label class="check-row"><input type="checkbox" name="check_${field}"><span>${labels[field] || field}</span></label>`).join("")}<label class="field"><span>Оценка ущерба, ₽</span><input name="estimated_cost" type="number" min="0" step="0.01" value="0"></label><label class="check-row"><input name="charge_customer" type="checkbox"><span>Выставить счёт за порчу</span></label><label class="field wide"><span>Дефект для ремонтного тикета</span><textarea name="defect" maxlength="4000" placeholder="Заполняется при результате «В ремонт»"></textarea></label></div><div class="action-row"><button class="button primary" type="submit">Сохранить результат</button></div></form>`;
+    card.innerHTML = `<div class="order-head"><div><h3>${stage === "pre_issue" ? "Неисправность перед выдачей" : "Неисправность при возврате"}</h3><p>${escapeHtml(asset.name)} · серийный № ${escapeHtml(asset.serial)}</p></div><button type="button" class="button ghost compact inspection-close">Закрыть</button></div><form class="inspection-form"><div class="form-grid"><label class="field wide"><span>Что произошло</span><textarea name="defect" maxlength="4000" required placeholder="Опишите неисправность"></textarea></label><label class="field wide"><span>Комментарий</span><textarea name="notes" maxlength="2000" placeholder="Дополнительная информация"></textarea></label><label class="field"><span>Оценка ущерба, ₽</span><input name="estimated_cost" type="number" min="0" step="0.01" value="0"></label><label class="check-row"><input name="charge_customer" type="checkbox"><span>Выставить счёт за порчу</span></label></div><div class="action-row"><button class="button primary" type="submit">Сохранить неисправность</button></div></form>`;
+    card.querySelector('[name="defect"]').value = saved?.defect || ""; card.querySelector('[name="notes"]').value = saved?.notes || ""; card.querySelector('[name="estimated_cost"]').value = saved?.estimated_cost || "0"; card.querySelector('[name="charge_customer"]').checked = Boolean(saved?.charge_customer);
     content.prepend(card); card.scrollIntoView({ behavior: "smooth", block: "start" });
     card.querySelector(".inspection-close").addEventListener("click", () => card.remove());
     card.querySelector("form").addEventListener("submit", async (event) => {
-      event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const result = data.get("result");
-      const checklist = Object.fromEntries(fields.map((field) => [field, data.get(`check_${field}`) === "on"]));
-      if (result === "pass" && !fields.every((field) => checklist[field])) return showError("Отметьте каждый пункт проверки перед сохранением.");
-      if (result === "fail" && !String(data.get("defect") || "").trim()) return showError("Опишите дефект для ремонтного тикета.");
+      event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
+      if (!String(data.get("defect") || "").trim()) return showError("Опишите неисправность.");
       const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result, checklist, notes: data.get("notes") || "", defect: data.get("defect") || "", estimated_cost: data.get("estimated_cost") || 0, charge_customer: data.get("charge_customer") === "on" }) }); await showAdmin("orders"); }
+      try { await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "fail", checklist: {}, notes: data.get("notes") || "", defect: data.get("defect") || "", estimated_cost: data.get("estimated_cost") || 0, charge_customer: data.get("charge_customer") === "on" }) }); await showAdmin("orders"); }
       catch (error) { showError(error.message); submit.disabled = false; }
     });
   }
@@ -501,6 +628,9 @@
   $("tab-orders").addEventListener("click", showOrders);
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
   $("identity-close").addEventListener("click", showOrders);
+  $("document-viewer-close").addEventListener("click", closeDocumentViewer);
+  $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
+  $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("consent-next").addEventListener("click", () => {
     if (!state.consent) return showError("Текст согласия не загружен.");
     if (!$("consent-check").checked) return showError("Чтобы продолжить, подтвердите согласие.");
@@ -510,10 +640,22 @@
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
-  for (const id of ["start", "end"]) $(id).addEventListener("change", () => { state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
+  for (const id of ["start", "end"]) {
+    for (const part of ["date", "time"]) $(`${id}-${part}`).addEventListener("input", () => { syncDateTime(id); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
+  }
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; fieldError(id, ""); });
+  const passportCombinedInput = document.querySelector('[name="passport_combined"]');
+  passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });
+  const divisionInput = document.querySelector('[name="passport_division_code"]');
+  divisionInput?.addEventListener("input", () => { const digits = divisionInput.value.replace(/\D/g, "").slice(0, 6); divisionInput.value = digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits; });
+  const sameAddressInput = document.querySelector('[name="same_address"]');
+  const registrationInput = document.querySelector('[name="registration_address"]');
+  const residentialInput = document.querySelector('[name="residential_address"]');
+  sameAddressInput?.addEventListener("change", () => { residentialInput.readOnly = sameAddressInput.checked; if (sameAddressInput.checked) residentialInput.value = registrationInput.value; });
+  registrationInput?.addEventListener("input", () => { if (sameAddressInput?.checked) residentialInput.value = registrationInput.value; });
 
   const hasDraft = restoreDraft();
+  syncDateFields("start"); syncDateFields("end");
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);

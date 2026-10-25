@@ -8,7 +8,8 @@ import hashlib
 import io
 import json
 import os
-from datetime import timedelta
+import re
+from datetime import date, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from PIL import Image, UnidentifiedImageError
@@ -19,10 +20,47 @@ from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyC
 from .rental import Conflict, now
 
 
-DOCUMENT_KINDS = {"passport_main", "passport_registration", "student_front", "student_back"}
+DOCUMENT_KINDS = {"passport_main", "passport_registration", "student_front"}
 MAX_FILE_SIZE = 8 * 1024 * 1024
 MAX_TOTAL_SIZE = 32 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 30_000_000
+
+
+def validate_identity_payload(payload):
+    """Validate user-entered identity fields without logging their values."""
+    required = {
+        "full_name", "birth_date", "passport_series", "passport_number",
+        "passport_issued_at", "passport_issuer", "passport_division_code",
+        "registration_address", "residential_address", "student_id_number",
+        "student_institution",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ValueError("Заполните все поля анкеты")
+    if any(not isinstance(value, str) or not value.strip() or len(value.strip()) > 500
+           for value in payload.values()):
+        raise ValueError("Все поля анкеты должны быть заполнены корректно")
+    if not re.fullmatch(r"[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}", payload["full_name"].strip()) or len(payload["full_name"].split()) < 2:
+        raise ValueError("Укажите ФИО буквами, минимум два слова")
+    if not re.fullmatch(r"\d{4}", payload["passport_series"]):
+        raise ValueError("Серия паспорта должна содержать 4 цифры")
+    if not re.fullmatch(r"\d{6}", payload["passport_number"]):
+        raise ValueError("Номер паспорта должен содержать 6 цифр")
+    if not re.fullmatch(r"\d{3}-\d{3}", payload["passport_division_code"]):
+        raise ValueError("Код подразделения должен быть в формате 000-000")
+    try:
+        birth_date = date.fromisoformat(payload["birth_date"])
+        passport_issued_at = date.fromisoformat(payload["passport_issued_at"])
+    except ValueError as exc:
+        raise ValueError("Даты должны быть указаны в формате ГГГГ-ММ-ДД") from exc
+    today = date.today()
+    if birth_date < date(1900, 1, 1) or birth_date > today:
+        raise ValueError("Дата рождения указана некорректно")
+    if passport_issued_at < birth_date or passport_issued_at > today:
+        raise ValueError("Дата выдачи паспорта указана некорректно")
+    for field in ("passport_issuer", "registration_address", "residential_address", "student_id_number", "student_institution"):
+        if any(ord(char) < 32 for char in payload[field]):
+            raise ValueError("Поля анкеты не должны содержать управляющие символы")
+    return {key: value.strip() for key, value in payload.items()}
 
 
 def pii_admin_ids():
@@ -47,9 +85,9 @@ def consent_text():
         "и возврата, проверки комплектности, рассмотрения требований о возмещении утраты или повреждения "
         "оборудования и связи со мной по этим вопросам.\n\n"
         "Перечень данных: фамилия, имя, отчество, дата рождения; серия, номер, дата выдачи, орган выдачи и "
-        "код подразделения паспорта; адрес регистрации и фактического проживания; номер студенческого билета, "
-        "учебное заведение и срок действия; Telegram ID, телефон или иной предоставленный контакт; фотографии "
-        "разворота паспорта с фотографией, страницы регистрации и обеих сторон студенческого билета.\n\n"
+        "код подразделения паспорта; адрес регистрации и фактического проживания; номер студенческого билета и "
+        "учебное заведение; Telegram ID, телефон или иной предоставленный контакт; фотографии "
+        "разворота паспорта с фотографией, страницы регистрации и лицевой стороны студенческого билета.\n\n"
         "Оператор выполняет сбор, запись, систематизацию, хранение, уточнение, извлечение, использование, "
         "предоставление допущенным сотрудникам, блокирование и уничтожение данных. Фотографии проверяются "
         "сотрудником без OCR; перед сохранением изображения декодируются, пересохраняются без EXIF и шифруются. "
@@ -124,20 +162,37 @@ def identity_status(booking_id, customer_id=None):
         booking = session.get(Booking, booking_id)
         if not booking or (customer_id is not None and booking.customer_id != customer_id):
             raise ValueError("Заявка не найдена")
-        return {"booking_id": booking.id, "status": booking.identity_status,
-                "review_comment": session.scalar(select(CustomerIdentity.review_comment).where(
-                    CustomerIdentity.booking_id == booking.id)) or ""}
+        identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
+        result = {"booking_id": booking.id, "status": booking.identity_status,
+                  "review_comment": identity.review_comment if identity else "",
+                  "review_fields": json.loads(identity.review_fields or "[]") if identity else []}
+        if identity and customer_id is not None:
+            payload, _ = _decrypt_payload(identity)
+            result["fields"] = payload
+        return result
 
 
-def submit_identity(booking_id, customer_id, payload, documents, policy_version, text_hash):
-    if set(documents) != DOCUMENT_KINDS:
-        raise ValueError("Нужны все четыре изображения документов")
+def submit_identity(booking_id, customer_id, payload, documents, policy_version="", text_hash=""):
+    if not isinstance(payload, dict):
+        raise ValueError("Неверный формат анкеты")
+    with Session() as lookup:
+        existing = lookup.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
+        existing_payload = _decrypt_payload(existing)[0] if existing and existing.status == "needs_changes" else {}
+        existing_kinds = {document.kind for document in existing.documents} if existing and existing.status == "needs_changes" else set()
+    merged_payload = {**existing_payload, **payload}
+    payload = validate_identity_payload(merged_payload)
+    if existing_payload:
+        if not documents and not existing_kinds:
+            raise ValueError("Загрузите исправленное изображение документа")
+    elif set(documents) != DOCUMENT_KINDS:
+        raise ValueError("Нужны три изображения документов")
     if sum(len(data[0]) for data in documents.values()) > MAX_TOTAL_SIZE:
         raise ValueError("Общий размер комплекта документов превышает 32 МБ")
-    expected_text = consent_text()
-    expected_hash = hashlib.sha256(expected_text.encode()).hexdigest()
-    if policy_version != os.environ["PRIVACY_POLICY_VERSION"] or text_hash != expected_hash:
-        raise Conflict("Текст согласия изменился. Откройте форму заново")
+    if not existing_payload:
+        expected_text = consent_text()
+        expected_hash = hashlib.sha256(expected_text.encode()).hexdigest()
+        if policy_version != os.environ["PRIVACY_POLICY_VERSION"] or text_hash != expected_hash:
+            raise Conflict("Текст согласия изменился. Откройте форму заново")
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if not booking or booking.customer_id != customer_id or booking.status not in {
@@ -147,6 +202,15 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version,
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
         if identity and identity.status == "verified":
             raise Conflict("Проверенные документы нельзя заменить без запроса менеджера")
+        old_documents = {}
+        if identity and identity.status == "needs_changes":
+            _, old_dek = _decrypt_payload(identity)
+            for document in identity.documents:
+                old_documents[document.kind] = (AESGCM(old_dek).decrypt(document.nonce, document.encrypted_data,
+                    f"{booking.id}:{document.kind}".encode()), document.media_type)
+        documents = {**old_documents, **documents}
+        if set(documents) != DOCUMENT_KINDS:
+            raise ValueError("Нужны три изображения документов")
         dek = AESGCM.generate_key(bit_length=256)
         encrypted_payload, payload_nonce = _encrypt_payload(payload, dek)
         key_nonce = os.urandom(12)
@@ -161,7 +225,7 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version,
             session.execute(delete(IdentityDocument).where(IdentityDocument.identity_id == identity.id))
             identity.encrypted_key, identity.key_nonce = wrapped, key_nonce
             identity.encrypted_payload, identity.payload_nonce = encrypted_payload, payload_nonce
-        identity.status, identity.review_comment, identity.delete_after = "submitted", "", None
+        identity.status, identity.review_comment, identity.review_fields, identity.delete_after = "submitted", "", "[]", None
         for kind, (data, media_type) in documents.items():
             nonce = os.urandom(12)
             encrypted = AESGCM(dek).encrypt(nonce, data, f"{booking.id}:{kind}".encode())
@@ -189,6 +253,7 @@ def masked_identity(booking_id, actor_id):
             "passport": _mask(payload.get("passport_number"), 2),
             "student_id": _mask(payload.get("student_id_number"), 2),
             "review_comment": identity.review_comment,
+            "review_fields": json.loads(identity.review_fields or "[]"),
             "documents": [document.kind for document in identity.documents],
         }
 
@@ -200,7 +265,8 @@ def reveal_identity(booking_id, actor_id):
             raise ValueError("Анкета не найдена")
         payload, _ = _decrypt_payload(identity)
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id, action="revealed"))
-        return {**payload, "status": identity.status, "review_comment": identity.review_comment}
+        return {**payload, "status": identity.status, "review_comment": identity.review_comment,
+                "review_fields": json.loads(identity.review_fields or "[]")}
 
 
 def identity_document(booking_id, kind, actor_id):
@@ -221,14 +287,18 @@ def identity_document(booking_id, kind, actor_id):
         return data, document.media_type
 
 
-def review_identity(booking_id, actor_id, approved, comment=""):
+def review_identity(booking_id, actor_id, approved, comment="", fields=None):
     with Session.begin() as session:
         booking = session.get(Booking, booking_id)
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not booking or not identity:
             raise ValueError("Анкета не найдена")
         identity.status = "verified" if approved else "needs_changes"
+        allowed = {"full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
+                   "passport_division_code", "registration_address", "residential_address", "student_id_number",
+                   "student_institution", "passport_main", "passport_registration", "student_front"}
         identity.review_comment = comment.strip()[:500]
+        identity.review_fields = json.dumps([field for field in (fields or []) if field in allowed], ensure_ascii=False)
         booking.identity_status = identity.status
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
                              action="verified" if approved else "changes_requested"))

@@ -5,7 +5,7 @@ import io
 import pytest
 from docx import Document
 
-from app.db import Article, Booking, Session
+from app.db import Article, Booking, Inspection, RepairTicket, Session
 from app.documents import render_document
 from app.service import (Conflict, assign_booking_assets, availability, create_booking,
                          get_booking, mark_act_signed, now, record_inspection,
@@ -53,19 +53,22 @@ def test_dependencies_assignment_checks_and_return_repair():
     save_dependency(camera_id, cable_id, quantity=1, billable=False)
     start, end = now() + timedelta(hours=3), now() + timedelta(hours=5)
     booking_id = create_booking(7, "Анна", "+70000000000", start, end,
-                                [{"article_id": camera_id, "quantity": 1}], expected_total="200.00")
+                                    [{"article_id": camera_id, "quantity": 1}, {"article_id": cable_id, "quantity": 1}], expected_total="240.00")
     booking = get_booking(booking_id)
     assert len(booking.lines) == 2
-    assert next(line for line in booking.lines if line.article_id == cable_id).hourly_rate == 0
+    assert next(line for line in booking.lines if line.article_id == cable_id).hourly_rate == 20
     assert transition(booking_id, "confirmed", 10) == "confirmed"
+    with pytest.raises(Conflict, match="заполнить документы"):
+        assign_booking_assets(booking_id, 10)
+    with Session.begin() as session:
+        session.get(Booking, booking_id).identity_status = "verified"
     assert assign_booking_assets(booking_id, 10) == "preparing"
     booking = get_booking(booking_id)
     assert len(booking.assets) == 2
     with pytest.raises(Conflict):
         transition(booking_id, "ready", 10)
     for asset in booking.assets:
-        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass",
-                          {"visual": True, "functional": True}, "", 10)
+        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 10)
     assert transition(booking_id, "ready", 10) == "ready"
     with pytest.raises(Conflict):
         transition(booking_id, "issued", 10)
@@ -80,6 +83,16 @@ def test_dependencies_assignment_checks_and_return_repair():
                           "fail" if index == 0 else "pass", {"visual": index != 0}, "", 10,
                           defect="Повреждён разъём", estimated_cost=500, charge_customer=True)
     assert transition(booking_id, "returned", 10) == "returned"
+    returned_at = get_booking(booking_id).returned_at
+    article_id = cable_id
+    still_buffered = availability(returned_at + timedelta(hours=1), returned_at + timedelta(hours=2))
+    available_after_buffer = availability(returned_at + timedelta(hours=25), returned_at + timedelta(hours=26))
+    assert next(item for item in still_buffered if item["id"] == article_id)["available_quantity"] == 0
+    assert next(item for item in available_after_buffer if item["id"] == article_id)["available_quantity"] > 0
+    with Session() as session:
+        saved = session.query(Inspection).filter_by(booking_id=booking_id, equipment_id=booking.assets[0].equipment_id, stage="check_in").one()
+        assert saved.defect == "Повреждён разъём" and saved.estimated_cost == 500 and saved.charge_customer is True
+        assert session.query(RepairTicket).filter_by(booking_id=booking_id, equipment_id=booking.assets[0].equipment_id).count() == 1
     contract_text = "\n".join(paragraph.text for paragraph in Document(io.BytesIO(
         render_document(booking_id, "contract"))).paragraphs)
     issue_text = "\n".join(paragraph.text for paragraph in Document(io.BytesIO(
@@ -91,14 +104,14 @@ def test_dependencies_assignment_checks_and_return_repair():
     assert "дефект/ремонт" in return_text
 
 
-def test_manual_dependent_item_is_charged_but_auto_dependency_is_free():
+def test_each_selected_item_is_booked_separately():
     camera_id = article_with_assets("CAMERA-PRICE", 1, "3500")
     battery_id = article_with_assets("BAT-PRICE", 3, "350")
     save_dependency(camera_id, battery_id, quantity=2, billable=False)
     start, end = now() + timedelta(hours=3), now() + timedelta(hours=7)
     camera_only = create_booking(31, "Клиент", "@client", start, end,
                                  [{"article_id": camera_id, "quantity": 1}], expected_total="14000.00")
-    assert get_booking(camera_only).lines[1].billable_quantity == 0
+    assert len(get_booking(camera_only).lines) == 1
     camera_and_battery = create_booking(32, "Клиент", "@client", start + timedelta(days=2),
                                         end + timedelta(days=2),
                                         [{"article_id": camera_id, "quantity": 1},
@@ -106,7 +119,7 @@ def test_manual_dependent_item_is_charged_but_auto_dependency_is_free():
                                         expected_total="15400.00")
     battery_line = next(line for line in get_booking(camera_and_battery).lines
                         if line.article_id == battery_id)
-    assert battery_line.quantity == 3 and battery_line.billable_quantity == 1
+    assert battery_line.quantity == 1 and battery_line.billable_quantity == 1
 
 
 def test_low_battery_cannot_be_assigned():

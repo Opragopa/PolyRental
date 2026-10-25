@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f4f4f0">
   <title>PolyRental — бронирование</title>
-  <link rel="stylesheet" href="/miniapp/static/style.css?v=20261025-03">
+  <link rel="stylesheet" href="/miniapp/static/style.css?v=20261025-10">
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
-  <script defer src="/miniapp/static/app.js?v=20261025-03"></script>
+  <script defer src="/miniapp/static/app.js?v=20261025-10"></script>
 </head>
 <body>
   <div class="shell">
@@ -43,8 +43,8 @@
           <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда вам нужно оборудование?</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
           <p class="supporting">Укажите дату и время выдачи и возврата по Москве.</p>
           <div class="date-grid">
-            <label class="field"><span>Начало аренды</span><input id="start" type="datetime-local" required aria-describedby="start-hint start-error"><small id="start-hint">Дата и время получения</small><small id="start-error" class="field-error" role="alert" hidden></small></label>
-            <label class="field"><span>Возврат</span><input id="end" type="datetime-local" required aria-describedby="end-hint end-error"><small id="end-hint">Позже начала аренды</small><small id="end-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span>Начало аренды</span><span class="date-input-row"><span><small>Дата</small><input id="start-date" type="date" required aria-label="Дата начала аренды"></span><span><small>Время</small><input id="start-time" type="time" required step="900" aria-label="Время начала аренды"></span></span><input id="start" type="hidden"><small id="start-hint">Выберите дату и время получения</small><small id="start-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span>Возврат</span><span class="date-input-row"><span><small>Дата</small><input id="end-date" type="date" required aria-label="Дата возврата"></span><span><small>Время</small><input id="end-time" type="time" required step="900" aria-label="Время возврата"></span></span><input id="end" type="hidden"><small id="end-hint">Выберите дату и время возврата</small><small id="end-error" class="field-error" role="alert" hidden></small></label>
           </div>
           <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>Мы проверим свободные экземпляры на выбранный срок. Заявка удерживает их на 30 минут после отправки.</p></div>
         </div>
@@ -95,32 +95,38 @@
           <label class="check-row"><input id="consent-check" type="checkbox"><span>Я прочитал(а) текст и даю согласие добровольно</span></label>
           <button id="consent-next" class="button primary" type="button">Продолжить к анкете</button>
         </div>
+        <div id="identity-feedback" class="identity-feedback" hidden></div>
         <form id="identity-form" hidden autocomplete="off">
           <p class="supporting">Поля и изображения передаются напрямую в PolyRental. Они не сохраняются в Telegram или черновиках браузера.</p>
           <div class="form-grid">
-            <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200"></label>
+            <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200" pattern="[А-Яа-яЁёA-Za-z .'-]{2,200}"></label>
             <label class="field"><span>Дата рождения</span><input name="birth_date" type="date" required></label>
-            <label class="field"><span>Серия паспорта</span><input name="passport_series" required maxlength="20" inputmode="numeric"></label>
-            <label class="field"><span>Номер паспорта</span><input name="passport_number" required maxlength="30" inputmode="numeric"></label>
+            <label class="field wide"><span>Серия и номер паспорта</span><input name="passport_combined" required maxlength="11" inputmode="numeric" pattern="[0-9]{4} [0-9]{6}" placeholder="0000 000000" title="4 цифры, пробел, 6 цифр"></label>
             <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" type="date" required></label>
-            <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="20"></label>
+            <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="7" inputmode="numeric" pattern="[0-9]{3}-[0-9]{3}" placeholder="000-000" title="Формат 000-000"></label>
             <label class="field wide"><span>Кем выдан</span><input name="passport_issuer" required maxlength="500"></label>
             <label class="field wide"><span>Адрес регистрации</span><input name="registration_address" required maxlength="500"></label>
+            <label class="check-row wide"><input name="same_address" type="checkbox"><span>Фактический адрес проживания совпадает с адресом регистрации</span></label>
             <label class="field wide"><span>Фактический адрес проживания</span><input name="residential_address" required maxlength="500"></label>
             <label class="field"><span>Номер студенческого</span><input name="student_id_number" required maxlength="100"></label>
-            <label class="field"><span>Действителен до</span><input name="student_valid_until" type="date" required></label>
             <label class="field wide"><span>Учебное заведение</span><input name="student_institution" required maxlength="500"></label>
           </div>
           <h3>Фотографии документов</h3>
-          <p class="supporting">JPEG, PNG или WebP, до 8 МБ на файл и 32 МБ суммарно.</p>
+          <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
           <div class="form-grid">
             <label class="field"><span>Паспорт: разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp" required></label>
             <label class="field"><span>Паспорт: регистрация</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp" required></label>
             <label class="field"><span>Студенческий: лицевая</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" required></label>
-            <label class="field"><span>Студенческий: оборот</span><input name="student_back" type="file" accept="image/jpeg,image/png,image/webp" required></label>
           </div>
           <button id="identity-submit" class="button primary" type="submit">Отправить на проверку</button>
         </form>
+      </section>
+
+      <section id="document-viewer" class="document-viewer" hidden aria-modal="true" role="dialog" aria-label="Просмотр документа">
+        <div class="document-viewer-card">
+          <div class="panel-head"><h2 id="document-viewer-title">Документ</h2><button id="document-viewer-close" class="button ghost compact" type="button">Закрыть</button></div>
+          <div class="document-viewer-body"><button id="document-viewer-prev" class="button ghost document-nav" type="button">Предыдущее</button><img id="document-viewer-image" alt="Документ"><button id="document-viewer-next" class="button ghost document-nav" type="button">Следующее</button></div>
+        </div>
       </section>
 
       <section id="admin-panel" class="panel" hidden aria-label="Управление арендой">

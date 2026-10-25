@@ -16,13 +16,15 @@ from uuid import UUID
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
 from fastapi.responses import FileResponse, Response
+from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from .documents import render_document
 from .pii import (DOCUMENT_KINDS, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
-                  reveal_identity, review_identity, sanitize_image, submit_identity)
+                  reveal_identity, review_identity, sanitize_image, submit_identity,
+                  validate_identity_payload)
 from .rental import (Conflict, assign_booking_assets, availability, create_booking,
                      close_repair, delete_dependency, get_booking, get_booking_by_request,
                      lines_total, list_articles, list_bookings, list_customer_bookings,
@@ -149,11 +151,14 @@ async def notify_cancelled_booking(booking_id: int):
         return
     from .bot import make_bot
     try:
+        from .bot import customer_label
+        booking = await asyncio.to_thread(get_booking, booking_id)
+        label = customer_label(booking) if booking else "клиент"
         async with make_bot(token) as bot:
             for admin_id in os.getenv("ADMIN_IDS", "").split(","):
                 if admin_id.strip().isdigit():
                     try:
-                        await bot.send_message(int(admin_id), f"Клиент отменил заявку №{booking_id}.")
+                        await bot.send_message(int(admin_id), f"{label} отменил заявку №{booking_id}.")
                     except Exception:
                         pass
     except Exception:
@@ -179,6 +184,28 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str):
 @router.get("/miniapp")
 def miniapp_page():
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@router.get("/calendar/{token}.ics")
+def calendar_feed(token: str):
+    expected = os.getenv("ICAL_TOKEN", "")
+    if not expected or not hmac.compare_digest(token, expected):
+        raise HTTPException(404)
+    calendar = Calendar()
+    calendar.add("prodid", "-//PolyRental//Calendar//RU")
+    calendar.add("version", "2.0")
+    for booking in list_bookings():
+        if booking.status not in {"confirmed", "issued"}:
+            continue
+        event = Event()
+        event.add("uid", f"booking-{booking.id}@polyrental")
+        equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
+        event.add("summary", f"Аренда №{booking.id}: {equipment or 'оборудование'}")
+        event.add("description", f"PolyRental · статус: {booking.status}")
+        event.add("dtstart", booking.starts_at)
+        event.add("dtend", booking.ends_at)
+        calendar.add_component(event)
+    return Response(calendar.to_ical(), media_type="text/calendar")
 
 
 @router.get("/api/miniapp/availability")
@@ -269,32 +296,23 @@ async def customer_identity_submit(
     payload: str = Form(),
     policy_version: str = Form(),
     text_hash: str = Form(),
-    passport_main: UploadFile = File(),
-    passport_registration: UploadFile = File(),
-    student_front: UploadFile = File(),
-    student_back: UploadFile = File(),
+    passport_main: UploadFile | None = File(None),
+    passport_registration: UploadFile | None = File(None),
+    student_front: UploadFile | None = File(None),
     user=Depends(require_customer),
 ):
     _limit_pii(user["id"], "customer_submit", 5, 300)
     try:
         fields = json.loads(payload)
-        required = {
-            "full_name", "birth_date", "passport_series", "passport_number",
-            "passport_issued_at", "passport_issuer", "passport_division_code",
-            "registration_address", "residential_address", "student_id_number",
-            "student_institution", "student_valid_until",
-        }
-        if not isinstance(fields, dict) or set(fields) != required or any(
-            not isinstance(fields[key], str) or not fields[key].strip() or len(fields[key]) > 500
-            for key in required
-        ):
-            raise ValueError("Заполните все поля анкеты")
+        fields = validate_identity_payload(fields)
         uploads = {
             "passport_main": passport_main, "passport_registration": passport_registration,
-            "student_front": student_front, "student_back": student_back,
+            "student_front": student_front,
         }
         documents = {}
         for kind, upload in uploads.items():
+            if upload is None:
+                continue
             raw = await upload.read(8 * 1024 * 1024 + 1)
             documents[kind] = await asyncio.to_thread(sanitize_image, raw, upload.content_type or "")
         await asyncio.to_thread(submit_identity, booking_id, user["id"], fields, documents,
@@ -321,6 +339,12 @@ def admin_booking_view(booking):
                          "inspection_profile": asset.equipment.article.inspection_profile if asset.equipment.article else "generic"}
                         for asset in ordered_assets]
     result["pick_list"] = result["assets"]
+    result["inspections"] = [{"equipment_id": inspection.equipment_id, "stage": inspection.stage,
+                              "result": inspection.result, "notes": inspection.notes,
+                              "defect": inspection.defect, "estimated_cost": str(inspection.estimated_cost),
+                              "charge_customer": inspection.charge_customer,
+                              "created_at": inspection.created_at.isoformat() if inspection.created_at else None}
+                             for inspection in booking.inspections]
     result["act_signed_at"] = booking.act_signed_at.isoformat() if booking.act_signed_at else None
     result["lines"] = [{"id": line.id, "article_id": line.article_id,
                          "name": line.article.name, "quantity": line.quantity}
@@ -507,6 +531,7 @@ async def admin_identity_reveal(booking_id: int, user=Depends(require_pii_admin)
 class IdentityReviewRequest(BaseModel):
     approved: bool
     comment: str = Field(default="", max_length=500)
+    fields: list[str] = Field(default_factory=list, max_length=20)
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/identity/review")
@@ -514,7 +539,7 @@ async def admin_identity_review(booking_id: int, payload: IdentityReviewRequest,
                                 background_tasks: BackgroundTasks, user=Depends(require_pii_admin)):
     _limit_pii(user["id"], "admin_pii")
     try:
-        await asyncio.to_thread(review_identity, booking_id, user["id"], payload.approved, payload.comment)
+        await asyncio.to_thread(review_identity, booking_id, user["id"], payload.approved, payload.comment, payload.fields)
         booking = await asyncio.to_thread(get_booking, booking_id)
         if not payload.approved:
             background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id,
