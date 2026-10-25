@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import time
 from collections import defaultdict, deque
 from datetime import datetime
@@ -54,6 +55,7 @@ class PrivateRoute(APIRoute):
 router = APIRouter(route_class=PrivateRoute)
 STATIC_DIR = Path(__file__).with_name("miniapp_static")
 _PII_REQUESTS = defaultdict(deque)
+_DOCUMENT_DOWNLOAD_TOKENS = {}
 
 
 def _limit_pii(user_id, scope, maximum=30, window=60):
@@ -693,6 +695,47 @@ async def admin_generated_document(booking_id: int, kind: str, user=Depends(requ
         return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Cache-Control": "no-store",
                                  "Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})
+    except (ValueError, Conflict) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/documents/{kind}/download-link")
+async def admin_generated_document_download_link(booking_id: int, kind: str, user=Depends(require_pii_admin)):
+    if kind not in {"issue", "receipt"}:
+        raise HTTPException(404, "Документ не найден")
+    _limit_pii(user["id"], "admin_document_download", 20)
+    public_url = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if not public_url.startswith("https://"):
+        raise HTTPException(503, "Защищённая загрузка документов временно недоступна")
+    current = time.monotonic()
+    for token, (_, _, _, expires_at) in list(_DOCUMENT_DOWNLOAD_TOKENS.items()):
+        if expires_at <= current:
+            _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
+    if len(_DOCUMENT_DOWNLOAD_TOKENS) >= 10000:
+        raise HTTPException(503, "Загрузка документов временно недоступна")
+    token = secrets.token_urlsafe(32)
+    _DOCUMENT_DOWNLOAD_TOKENS[token] = (booking_id, kind, user["id"], current + 120)
+    filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+    return {"url": f"{public_url}/api/miniapp/document-download/{token}", "file_name": filename}
+
+
+@router.get("/api/miniapp/document-download/{token}")
+async def download_generated_document(token: str):
+    claim = _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
+    if claim is None:
+        raise HTTPException(404, "Ссылка на документ недействительна или уже использована")
+    booking_id, kind, actor_id, expires_at = claim
+    if expires_at <= time.monotonic():
+        raise HTTPException(404, "Срок действия ссылки истёк. Запросите документ повторно")
+    try:
+        body = await asyncio.to_thread(render_document, booking_id, kind, True, actor_id)
+        filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+        return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        headers={"Cache-Control": "no-store, max-age=0",
+                                 "Content-Disposition": f'attachment; filename="{filename}"',
+                                 "Access-Control-Allow-Origin": "https://web.telegram.org",
+                                 "Access-Control-Expose-Headers": "Content-Disposition",
+                                 "Vary": "Origin"})
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -8,7 +8,7 @@ services:
     profiles: [test]
   miniapp:
     build: .
-    command: uvicorn app.miniapp_server:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.miniapp_server:app --host 0.0.0.0 --port 8000 --no-access-log
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:${POSTGRES_PASSWORD:-polyrental}@db:5432/polyrental

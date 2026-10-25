@@ -591,8 +591,8 @@
           documents.append(passport, student); actions.append(documents);
         }
         if (order.status === "ready" && state.role?.pii_admin) {
-          actions.append(actionButton("Скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id));
-          actions.append(actionButton("Сохранная расписка", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id));
+          actions.append(actionButton("Скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false));
+          actions.append(actionButton("Сохранная расписка", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false));
           actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id));
         }
         if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать", transitionAction("issued"), order.id, "primary"));
@@ -721,9 +721,22 @@
   }
 
   async function downloadSecure(path, filename) {
+    const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+    const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
+    if (supportsNativeDownload) {
+      const ticket = await api(`${path}/download-link`, { method: "POST" });
+      try {
+        tg.downloadFile({ url: ticket.url, file_name: ticket.file_name || filename });
+        return;
+      } catch (_) { /* Older or customized clients may expose but not implement downloadFile. */ }
+    }
     const response = await fetch(path, { headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store" });
     if (!response.ok) { let detail = "Не удалось скачать документ"; try { detail = (await response.json()).detail || detail; } catch (_) {} throw new Error(detail); }
-    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a");
+    link.href = url; link.download = filename; link.style.display = "none"; document.body.append(link); link.click(); link.remove();
+    // iOS Telegram may start reading the file after the click handler returns.
+    // Revoking immediately can leave its document preview on a black screen.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   let documentViewerUrl = "";
