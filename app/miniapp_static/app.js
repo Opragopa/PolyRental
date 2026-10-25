@@ -9,7 +9,9 @@
   const draftKey = "polyrental-booking-draft-v1";
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
-  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, consent: null, adminMode: "orders" };
+  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], consent: null, adminMode: "orders" };
+  const identityPhotoDrafts = new Map();
+  const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
     { id: 1, sku: "CAM-FX3", name: "Камера Sony FX3", description: "Компактная кинокамера для съёмок в движении", rate: "1200.00", available_quantity: 3 },
     { id: 2, sku: "LENS-2470", name: "Объектив 24–70 мм", description: "Универсальный светосильный объектив", rate: "500.00", available_quantity: 4 },
@@ -75,6 +77,67 @@
   }
   function clearDraft() { try { localStorage.removeItem(draftKey); } catch (_) { /* no persistent draft */ } }
 
+  function openPhotoDraftDb() {
+    if (!window.indexedDB) return Promise.reject(new Error("Хранилище временных фото недоступно"));
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open("polyrental-private-drafts", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("photos");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  async function photoDraftTransaction(mode, action) {
+    const db = await openPhotoDraftDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction("photos", mode); const result = action(transaction.objectStore("photos"));
+      transaction.oncomplete = () => { db.close(); resolve(result?.result); };
+      transaction.onerror = transaction.onabort = () => { db.close(); reject(transaction.error); };
+    });
+  }
+  function identityPhotoKey(kind) {
+    const userId = tg?.initDataUnsafe?.user?.id || "user";
+    return `${userId}:${state.identityBookingId}:${kind}`;
+  }
+  async function saveIdentityPhoto(kind, file) {
+    const key = identityPhotoKey(kind);
+    if (!file) { identityPhotoDrafts.delete(key); try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} return; }
+    const entry = { blob: file, name: file.name || "document", type: file.type || "application/octet-stream", savedAt: Date.now() };
+    identityPhotoDrafts.set(key, entry);
+    try { await photoDraftTransaction("readwrite", (store) => store.put(entry, key)); }
+    catch (_) { /* current form still keeps the selected file */ }
+  }
+  async function restoreIdentityPhotos() {
+    const inputs = [...document.querySelectorAll('#identity-form input[type="file"]')];
+    for (const input of inputs) {
+      const key = identityPhotoKey(input.name); let entry = identityPhotoDrafts.get(key);
+      if (!entry) {
+        try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; }
+      }
+      if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) identityPhotoDrafts.set(key, entry);
+      else { identityPhotoDrafts.delete(key); entry = null; try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} }
+      const status = input.closest(".field")?.querySelector(".file-draft-status");
+      if (status) status.textContent = entry ? `Сохранено на этом устройстве: ${entry.name}` : "";
+    }
+  }
+  async function clearIdentityPhotoDrafts(bookingId) {
+    const userId = tg?.initDataUnsafe?.user?.id || "user";
+    for (const kind of ["passport_main", "passport_registration", "student_front"]) {
+      const key = `${userId}:${bookingId}:${kind}`; identityPhotoDrafts.delete(key);
+      try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {}
+    }
+  }
+  async function pruneExpiredIdentityPhotos() {
+    try {
+      const db = await openPhotoDraftDb();
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction("photos", "readwrite"); const cursor = transaction.objectStore("photos").openCursor();
+        cursor.onsuccess = () => { const current = cursor.result; if (!current) return; if (!current.value?.savedAt || Date.now() - current.value.savedAt > photoDraftLifetime) current.delete(); current.continue(); };
+        transaction.oncomplete = resolve; transaction.onerror = transaction.onabort = () => reject(transaction.error);
+      });
+      db.close();
+    } catch (_) { /* the form remains usable if local storage is unavailable */ }
+  }
+
   function newRequestId() {
     if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
     // Telegram's test server permits HTTP on LAN addresses, where randomUUID
@@ -94,7 +157,12 @@
     });
     let body;
     try { body = await response.json(); } catch (_) { throw new Error("Сервер вернул неожиданный ответ. Попробуйте ещё раз."); }
-    if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Не удалось выполнить запрос. Попробуйте ещё раз.");
+    if (!response.ok) {
+      const detail = typeof body.detail === "string" ? body.detail
+        : Array.isArray(body.detail) ? body.detail.map((item) => item.msg || item.message || "").filter(Boolean).join("; ")
+        : "";
+      throw new Error(detail || "Не удалось выполнить запрос. Попробуйте ещё раз.");
+    }
     return body;
   }
 
@@ -300,26 +368,29 @@
 
   async function openIdentity(bookingId) {
     clearError(); state.identityBookingId = bookingId; state.view = "identity"; render();
-    state.consent = null;
+    state.consent = null; state.identityRequiredPhotos = [];
     $("identity-form").reset();
     document.querySelectorAll('#identity-form .needs-fix').forEach((field) => field.classList.remove("needs-fix"));
-    document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = true; });
+    document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = false; });
     document.querySelector('[name="residential_address"]').readOnly = false;
     $("identity-status").hidden = true; $("identity-form").hidden = true; $("identity-feedback").hidden = true; $("consent-step").hidden = false;
     $("consent-check").checked = false; $("consent-text").textContent = "Загружаем текст согласия…";
     try {
       const current = await api(`/api/miniapp/bookings/${bookingId}/identity`);
+      state.identityNeedsChanges = current.status === "needs_changes";
+      await restoreIdentityPhotos();
       const fields = current.fields || {};
       const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
       if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
       for (const [name, value] of Object.entries(fields)) { const input = document.querySelector(`[name="${name}"]`); if (input) input.value = value || ""; }
       const feedback = $("identity-feedback");
       if (current.status === "needs_changes") {
+        state.identityRequiredPhotos = (current.review_fields || []).filter((field) => ["passport_main", "passport_registration", "student_front"].includes(field));
         const labels = { full_name: "ФИО", birth_date: "дата рождения", passport_combined: "серия и номер паспорта", passport_issued_at: "дата выдачи", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "учебное заведение", passport_main: "фото паспорта", passport_registration: "страница регистрации", student_front: "лицевая сторона студенческого" };
         feedback.innerHTML = `<strong>Нужно исправить:</strong> ${(current.review_fields || []).map((field) => escapeHtml(labels[field] || field)).join(", ") || "проверьте данные по комментарию оператора"}.<br>${escapeHtml(current.review_comment || "")}`;
         feedback.hidden = false; $("consent-step").hidden = true; $("identity-form").hidden = false;
         for (const field of current.review_fields || []) { const input = document.querySelector(`[name="${field}"]`); input?.closest(".field")?.classList.add("needs-fix"); }
-        document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = (current.review_fields || []).includes(input.name); });
+        document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = false; });
         return;
       }
       state.consent = await api("/api/miniapp/privacy-consent");
@@ -353,8 +424,18 @@
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields)); upload.set("policy_version", state.consent?.version || ""); upload.set("text_hash", state.consent?.text_hash || "");
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
     try {
-      for (const name of ["passport_main", "passport_registration", "student_front"]) { const file = data.get(name); if (file?.size) upload.set(name, await jpegFile(file)); }
+      for (const name of ["passport_main", "passport_registration", "student_front"]) {
+        const selected = data.get(name); const key = identityPhotoKey(name);
+        let entry = identityPhotoDrafts.get(key);
+        if (!entry) { try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; } }
+        const freshFile = selected?.size ? selected : null;
+        if (state.identityRequiredPhotos.includes(name) && !freshFile) throw new Error(`Загрузите новое фото: ${name === "passport_main" ? "паспорт — страница с фото" : name === "passport_registration" ? "страница регистрации" : "студенческий — лицевая сторона"}.`);
+        const file = freshFile || (entry && Date.now() - entry.savedAt <= photoDraftLifetime ? new File([entry.blob], entry.name, { type: entry.type }) : null);
+        if (file?.size) upload.set(name, await jpegFile(file));
+      }
+      if (!state.identityNeedsChanges && ["passport_main", "passport_registration", "student_front"].some((name) => !upload.get(name))) throw new Error("Добавьте три фотографии документов. Ранее выбранные фото восстановятся автоматически.");
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
+      await clearIdentityPhotoDrafts(state.identityBookingId);
       form.reset(); $("identity-form").hidden = true; $("identity-status").hidden = false;
       $("identity-status").textContent = "Данные отправлены. Менеджер сверит реквизиты с фотографиями.";
     } catch (error) { showError(error.message); }
@@ -452,10 +533,44 @@
     const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
     const approved = window.confirm(`ФИО: ${full.full_name}\nДата рождения: ${full.birth_date}\nПаспорт: ${full.passport_series} ${full.passport_number}\nВыдан: ${full.passport_issued_at}, ${full.passport_issuer}\nКод: ${full.passport_division_code}\nРегистрация: ${full.registration_address}\nПроживание: ${full.residential_address}\nСтуденческий: ${full.student_id_number}, ${full.student_institution}\n\nПодтвердить после сверки фотографий?`);
     if (approved) return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
-    const fields = window.prompt("Что нужно исправить? Введите коды через запятую:\nfull_name, passport_main, passport_registration, student_front, passport_combined, passport_issued_at, passport_division_code, registration_address, residential_address, student_id_number", "passport_main");
-    if (fields === null) return;
-    const comment = window.prompt("Комментарий для клиента без реквизитов:", "Замените нечёткое фото документа") || "Нужны исправления";
-    return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: false, comment, fields: String(fields || "").split(",").map((field) => field.trim()).filter(Boolean) }) });
+    return requestIdentityChanges(bookingId);
+  }
+
+  function requestIdentityChanges(bookingId) {
+    const dialog = $("identity-review-dialog");
+    const form = $("identity-review-form");
+    const fields = [
+      ["full_name", "ФИО"], ["birth_date", "Дата рождения"], ["passport_combined", "Серия и номер паспорта"],
+      ["passport_issued_at", "Дата выдачи паспорта"], ["passport_issuer", "Кем выдан паспорт"],
+      ["passport_division_code", "Код подразделения"], ["registration_address", "Адрес регистрации"],
+      ["residential_address", "Адрес проживания"], ["student_id_number", "Номер студенческого"],
+      ["student_institution", "Учебное заведение"], ["passport_main", "Паспорт — страница с фото"],
+      ["passport_registration", "Паспорт — страница регистрации"], ["student_front", "Студенческий — лицевая сторона"],
+    ];
+    const choices = $("identity-review-fields"); choices.replaceChildren();
+    for (const [value, label] of fields) {
+      const row = document.createElement("label"); row.className = "check-row review-field-option";
+      const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.name = "fields"; checkbox.value = value;
+      const text = document.createElement("span"); text.textContent = label;
+      row.append(checkbox, text); choices.append(row);
+    }
+    form.reset(); dialog.hidden = false; dialog.querySelector("input")?.focus();
+    return new Promise((resolve, reject) => {
+      const finish = () => { dialog.hidden = true; form.removeEventListener("submit", submit); $("identity-review-cancel").removeEventListener("click", cancel); };
+      const cancel = () => { finish(); resolve(); };
+      const submit = async (event) => {
+        event.preventDefault();
+        const button = $("identity-review-submit"); button.disabled = true;
+        const selected = [...form.querySelectorAll('input[name="fields"]:checked')].map((input) => input.value);
+        const comment = String(new FormData(form).get("comment") || "").trim();
+        if (!selected.length && !comment) { showError("Выберите поля для исправления или добавьте комментарий."); button.disabled = false; return; }
+        try {
+          const result = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: false, comment: comment || "Нужны исправления", fields: selected }) });
+          finish(); resolve(result);
+        } catch (error) { showError(error.message); button.disabled = false; }
+      };
+      form.addEventListener("submit", submit); $("identity-review-cancel").addEventListener("click", cancel);
+    });
   }
 
   async function downloadSecure(path, filename) {
@@ -670,6 +785,11 @@
     clearError(); $("consent-step").hidden = true; $("identity-form").hidden = false;
   });
   $("identity-form").addEventListener("submit", submitIdentity);
+  document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => input.addEventListener("change", async () => {
+    const file = input.files?.[0] || null; await saveIdentityPhoto(input.name, file);
+    const status = input.closest(".field")?.querySelector(".file-draft-status");
+    if (status) status.textContent = file ? `Сохранено на этом устройстве: ${file.name}` : "";
+  }));
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
@@ -688,6 +808,7 @@
   registrationInput?.addEventListener("input", () => { if (sameAddressInput?.checked) residentialInput.value = registrationInput.value; });
 
   const hasDraft = restoreDraft();
+  void pruneExpiredIdentityPhotos();
   syncDateFields("start"); syncDateFields("end");
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {

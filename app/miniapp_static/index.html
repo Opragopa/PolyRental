@@ -99,7 +99,7 @@
         </div>
         <div id="identity-feedback" class="identity-feedback" hidden></div>
         <form id="identity-form" hidden autocomplete="off">
-          <p class="supporting">Поля и изображения передаются напрямую в PolyRental. Они не сохраняются в Telegram или черновиках браузера.</p>
+          <p class="supporting">Поля отправляются напрямую в PolyRental. Выбранные фото временно сохраняются только на этом устройстве до отправки анкеты (не более 24 часов) и удаляются после отправки.</p>
           <div class="form-grid">
             <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200" pattern="[А-Яа-яЁёA-Za-z .'\-]{2,200}"></label>
             <label class="field"><span>Дата рождения</span><input name="birth_date" type="date" required></label>
@@ -116,11 +116,21 @@
           <h3>Фотографии документов</h3>
           <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
           <div class="form-grid">
-            <label class="field"><span>Паспорт: разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp" required></label>
-            <label class="field"><span>Паспорт: регистрация</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp" required></label>
-            <label class="field"><span>Студенческий: лицевая</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+            <label class="field"><span>Паспорт: разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
+            <label class="field"><span>Паспорт: регистрация</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
+            <label class="field"><span>Студенческий: лицевая</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
           </div>
           <button id="identity-submit" class="button primary" type="submit">Отправить на проверку</button>
+        </form>
+      </section>
+
+      <section id="identity-review-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="identity-review-title">
+        <form id="identity-review-form" class="dialog-card">
+          <h2 id="identity-review-title">Что нужно исправить?</h2>
+          <p class="supporting">Отметьте поля, которые клиенту нужно обновить. Для фото потребуется загрузить новый файл.</p>
+          <div id="identity-review-fields" class="review-field-list"></div>
+          <label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="500" rows="3" placeholder="Например: замените нечёткое фото документа"></textarea></label>
+          <div class="action-row"><button id="identity-review-cancel" class="button ghost" type="button">Отмена</button><button id="identity-review-submit" class="button primary" type="submit">Отправить запрос</button></div>
         </form>
       </section>
 
