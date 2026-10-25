@@ -9,32 +9,22 @@
   const draftKey = "polyrental-booking-draft-v1";
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
-  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
+  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
   const identityPhotoDrafts = new Map();
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
-    { id: 1, sku: "CAM-FX3", name: "Камера Sony FX3", description: "Компактная кинокамера для съёмок в движении", rate: "1200.00", available_quantity: 3 },
-    { id: 2, sku: "LENS-2470", name: "Объектив 24–70 мм", description: "Универсальный светосильный объектив", rate: "500.00", available_quantity: 4 },
-    { id: 3, sku: "TRI-MANF", name: "Штатив Manfrotto", description: "Устойчивая опора для камеры", rate: "250.00", available_quantity: 2 },
+    { id: 1, sku: "CAM-FX3", name: "Камера Sony FX3", description: "Компактная кинокамера для съёмок в движении", available_quantity: 3 },
+    { id: 2, sku: "LENS-2470", name: "Объектив 24–70 мм", description: "Универсальный светосильный объектив", available_quantity: 4 },
+    { id: 3, sku: "TRI-MANF", name: "Штатив Manfrotto", description: "Устойчивая опора для камеры", available_quantity: 2 },
   ];
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
-  function money(cents) { return `${new Intl.NumberFormat("ru-RU").format(cents / 100)} ₽`; }
-  function cents(rate) { const [whole, fraction = ""] = String(rate).split("."); return Number(whole) * 100 + Number((fraction + "00").slice(0, 2)); }
   function minutes() { return Math.round((new Date(toIso($("end").value)) - new Date(toIso($("start").value))) / 60000); }
-  function totalCents() {
-    const hourly = state.items.reduce((sum, item) => {
-      const quantity = state.quantities.get(item.id) || 0;
-      const dependencies = (item.billable_dependencies || []).reduce((total, dependency) => total + cents(dependency.rate) * dependency.quantity, 0);
-      return sum + (cents(item.rate) + dependencies) * quantity;
-    }, 0);
-    return Math.round(hourly * minutes() / 60);
-  }
   function toIso(value) {
     const text = String(value || "").trim();
     let match = text.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
@@ -163,6 +153,32 @@
       if (status) status.textContent = entry ? `Черновик сохранён на этом устройстве: ${entry.name}`
         : savedDocuments.includes(input.name) ? "Фото уже сохранено в заявке — повторно загружать не нужно."
         : "";
+    }
+  }
+  async function restoreReusableIdentityPhotos() {
+    for (const kind of state.identityReusableDocuments) {
+      const key = identityPhotoKey(kind);
+      let entry = identityPhotoDrafts.get(key);
+      if (!entry) {
+        try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; }
+      }
+      if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) {
+        identityPhotoDrafts.set(key, entry);
+        continue;
+      }
+      const input = document.querySelector(`#identity-form [name="${kind}"]`);
+      const status = input?.closest(".field")?.querySelector(".file-draft-status");
+      try {
+        const response = await fetch(`/api/miniapp/bookings/${state.identityBookingId}/identity/reusable-profile/documents/${kind}`, {
+          headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store",
+        });
+        if (!response.ok) throw new Error("download failed");
+        const blob = await response.blob();
+        await saveIdentityPhoto(kind, new File([blob], `previous-${kind}.jpg`, { type: blob.type || "image/jpeg" }));
+        if (status) status.textContent = "Фото из предыдущей анкеты прикреплено. Новое фото заменит его.";
+      } catch (_) {
+        if (status) status.textContent = "Не удалось перенести фото автоматически. Прикрепите его вручную.";
+      }
     }
   }
   async function clearIdentityPhotoDrafts(bookingId) {
@@ -321,7 +337,7 @@
       const card = document.createElement("article");
       card.className = `item-card${selected ? " selected" : ""}`;
       const safeImage = item.image_url && /^https:\/\//i.test(item.image_url) ? `<img class="item-photo" src="${escapeHtml(item.image_url)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">` : "";
-      card.innerHTML = `<span>${safeImage}<span class="item-top"><span><span class="item-name">${escapeHtml(item.name)}</span><span class="item-number">Артикул ${escapeHtml(item.sku)}</span><span class="available-badge">Свободно: ${item.available_quantity}</span>${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}</span></span></span><span class="item-bottom"><small>${money(cents(item.rate))} / час</small><strong>${money(Math.round(cents(item.rate) * minutes() / 60))}</strong></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
+      card.innerHTML = `<span>${safeImage}<span class="item-top"><span><span class="item-name">${escapeHtml(item.name)}</span><span class="item-number">Артикул ${escapeHtml(item.sku)}</span><span class="available-badge">Свободно: ${item.available_quantity}</span>${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}</span></span></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
       card.querySelector(".quantity-minus").disabled = quantity === 0;
       card.querySelector(".quantity-plus").disabled = quantity >= Math.min(30, item.available_quantity);
       card.querySelector(".quantity-minus").addEventListener("click", () => { if (quantity <= 1) state.quantities.delete(item.id); else state.quantities.set(item.id, quantity - 1); state.requestId = null; renderItems(); saveDraft(); });
@@ -329,12 +345,11 @@
       $("items-grid").append(card);
     }
     $("selected-count").textContent = [...state.quantities.values()].reduce((sum, value) => sum + value, 0);
-    $("selected-total").textContent = money(totalCents());
   }
   function reviewRow(label, value, extraClass = "") { return `<div class="review-row"><span>${escapeHtml(label)}</span><strong class="${extraClass}">${escapeHtml(value)}</strong></div>`; }
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
-    $("review-content").innerHTML = `<div class="review-group">${reviewRow("Выдача", dateText(toIso($("start").value)) + " МСК")}${reviewRow("Возврат", dateText(toIso($("end").value)) + " МСК")}</div><div class="review-group">${chosen.map((item) => { const dependencyTotal = (item.billable_dependencies || []).reduce((sum, dependency) => sum + cents(dependency.rate) * dependency.quantity, 0); return reviewRow(`${item.name} × ${state.quantities.get(item.id)}`, money(Math.round((cents(item.rate) + dependencyTotal) * state.quantities.get(item.id) * minutes() / 60))); }).join("")}</div><div class="review-group">${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Связь", $("customer-contact").value.trim())}</div><div class="review-group">${reviewRow("Итого за период", money(totalCents()), "review-total")}</div>`;
+    $("review-content").innerHTML = `<div class="review-group">${reviewRow("Выдача", dateText(toIso($("start").value)) + " МСК")}${reviewRow("Возврат", dateText(toIso($("end").value)) + " МСК")}</div><div class="review-group">${chosen.map((item) => `<div class="review-row"><span>${escapeHtml(item.name)}</span><strong>× ${state.quantities.get(item.id)}</strong></div>`).join("")}</div><div class="review-group">${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Связь", $("customer-contact").value.trim())}</div>`;
   }
 
   async function next() {
@@ -367,7 +382,7 @@
   async function submit() {
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
     if (!state.requestId) state.requestId = newRequestId();
-    const payload = { request_id: state.requestId, start: toIso($("start").value), end: toIso($("end").value), lines: [...state.quantities].map(([article_id, quantity]) => ({ article_id, quantity })), name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim(), expected_total: (totalCents() / 100).toFixed(2) };
+    const payload = { request_id: state.requestId, start: toIso($("start").value), end: toIso($("end").value), lines: [...state.quantities].map(([article_id, quantity]) => ({ article_id, quantity })), name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim() };
     if (keyboardMode) {
       state.busy = true; render();
       try { tg.sendData(JSON.stringify(payload)); }
@@ -403,7 +418,7 @@
       if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p><p><strong>${escapeHtml(order.total)} ₽</strong>${order.status === "pending" ? ` · удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК` : ""}</p>`;
+        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
           identity.textContent = order.identity_status === "needs_changes" ? "Исправить данные" : "Заполнить документы";
@@ -477,7 +492,7 @@
 
   async function openIdentity(bookingId) {
     clearError(); state.identityBookingId = bookingId; state.view = "identity"; render();
-    state.consent = null; state.identityRequiredPhotos = [];
+    state.consent = null; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
     $("identity-form").reset();
     document.querySelectorAll('#identity-form .needs-fix').forEach((field) => field.classList.remove("needs-fix"));
     document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = false; });
@@ -495,8 +510,9 @@
         const saved = await api(`/api/miniapp/bookings/${bookingId}/identity/reusable-profile`);
         if (saved.reusable) {
           Object.assign(fields, saved.fields || {});
+          state.identityReusableDocuments = saved.documents || [];
           const feedback = $("identity-feedback");
-          feedback.textContent = "Данные из предыдущей анкеты заполнены автоматически. Проверьте их и при необходимости исправьте. Для новой заявки нужно загрузить актуальные фотографии документов. Данные анкеты хранятся до 90 дней после возврата оборудования.";
+          feedback.textContent = "Данные и фотографии из предыдущей анкеты будут подставлены после согласия. Проверьте реквизиты; новое фото заменит сохранённое. Анкета и фотографии хранятся до 90 дней после возврата оборудования.";
           feedback.hidden = false;
         }
       }
@@ -598,7 +614,7 @@
         card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(identityStatusNames[order.identity_status] || order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
         const actions = document.createElement("div"); actions.className = "action-row";
         const summary = document.createElement("p");
-        summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact} · ${order.total} ₽ за период`;
+        summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact}`;
         card.append(summary);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         if (order.status === "pending") actions.append(actionButton("Подтвердить", transitionAction("confirmed"), order.id, "primary"));
@@ -639,7 +655,7 @@
           student.append(actionButton("Студенческий — лицевая сторона", () => openDocumentViewer(order.id, "student_front"), order.id, "ghost document-button"));
           documents.append(passport, student); actions.append(documents);
         }
-        if (order.status === "ready" && state.role?.pii_admin) {
+        if (["ready", "issued", "return_inspection", "returned"].includes(order.status) && state.role?.pii_admin && order.identity_status === "verified") {
           actions.append(actionButton("Скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false));
           actions.append(actionButton("Сохранная расписка", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false));
           actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id));
@@ -874,7 +890,7 @@
 
     for (const article of result.articles) {
       const card = document.createElement("article"); card.className = `admin-card${article.active ? "" : " inactive"}`;
-      card.innerHTML = `<div class="order-head"><h3>${escapeHtml(article.name)}</h3><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p>${escapeHtml(article.sku)} · ${escapeHtml(article.rate)} ₽/ч · буфер ${article.buffer_hours} ч · профиль ${escapeHtml(article.inspection_profile)}</p><p>${escapeHtml(article.description || "Без описания")}</p><div class="equipment-list"></div>`;
+      card.innerHTML = `<div class="order-head"><h3>${escapeHtml(article.name)}</h3><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p>${escapeHtml(article.sku)} · буфер ${article.buffer_hours} ч · профиль ${escapeHtml(article.inspection_profile)}</p><p>${escapeHtml(article.description || "Без описания")}</p><div class="equipment-list"></div>`;
       const cardActions = document.createElement("div"); cardActions.className = "action-row";
       const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact"; editArticle.textContent = "Изменить артикул";
       editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
@@ -899,7 +915,7 @@
     const wrapper = document.createElement("article"); wrapper.className = "admin-card editor-card";
     const value = editor.value || {}; const options = result.articles.map((article) => `<option value="${article.id}" ${Number(value.article_id) === article.id ? "selected" : ""}>${escapeHtml(article.sku)} · ${escapeHtml(article.name)}</option>`).join("");
     if (editor.type === "article") {
-      wrapper.innerHTML = `<h3>${value.id ? "Изменить артикул" : "Новый артикул"}</h3><form class="catalog-form form-grid"><label class="field"><span>SKU / артикул</span><input name="sku" value="${escapeHtml(value.sku || "")}" maxlength="80" required></label><label class="field"><span>Название модели</span><input name="name" value="${escapeHtml(value.name || "")}" maxlength="200" required></label><label class="field wide"><span>Описание</span><textarea name="description" maxlength="4000">${escapeHtml(value.description || "")}</textarea></label><label class="field"><span>Ставка, ₽/час</span><input name="rate" type="number" min="0" step="0.01" value="${escapeHtml(value.rate ?? "0")}" required></label><label class="field"><span>Буфер после возврата, часов</span><input name="buffer_hours" type="number" min="0" max="168" value="${value.buffer_hours ?? 24}" required></label><label class="field"><span>Категория</span><select name="category">${selectOptions(["generic", "camera", "optics", "light", "battery", "accessory"], value.category || "generic")}</select></label><label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic", "camera", "optics", "light", "battery"], value.inspection_profile || "generic")}</select></label><label class="field wide"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" value="${escapeHtml(value.image_url || "")}" maxlength="500" placeholder="https://…"></label><label class="check-row wide"><input name="active" type="checkbox" ${value.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить артикул</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
+      wrapper.innerHTML = `<h3>${value.id ? "Изменить артикул" : "Новый артикул"}</h3><form class="catalog-form form-grid"><label class="field"><span>SKU / артикул</span><input name="sku" value="${escapeHtml(value.sku || "")}" maxlength="80" required></label><label class="field"><span>Название модели</span><input name="name" value="${escapeHtml(value.name || "")}" maxlength="200" required></label><label class="field wide"><span>Описание</span><textarea name="description" maxlength="4000">${escapeHtml(value.description || "")}</textarea></label><label class="field"><span>Буфер после возврата, часов</span><input name="buffer_hours" type="number" min="0" max="168" value="${value.buffer_hours ?? 24}" required></label><label class="field"><span>Категория</span><select name="category">${selectOptions(["generic", "camera", "optics", "light", "battery", "accessory"], value.category || "generic")}</select></label><label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic", "camera", "optics", "light", "battery"], value.inspection_profile || "generic")}</select></label><label class="field wide"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" value="${escapeHtml(value.image_url || "")}" maxlength="500" placeholder="https://…"></label><label class="check-row wide"><input name="active" type="checkbox" ${value.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить артикул</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     } else if (editor.type === "equipment") {
       wrapper.innerHTML = `<h3>${value.id ? "Изменить экземпляр" : "Новый экземпляр"}</h3><form class="catalog-form form-grid"><label class="field wide"><span>Артикул</span><select name="article_id" required><option value="">Выберите артикул</option>${options}</select></label><label class="field"><span>Серийный номер</span><input name="serial" value="${escapeHtml(value.serial || "")}" maxlength="80" required></label><label class="field"><span>Складская ячейка</span><input name="location" value="${escapeHtml(value.location || "")}" maxlength="120" placeholder="A-01"></label><label class="field"><span>Состояние</span><select name="condition">${selectOptions(["available", "maintenance", "retired"], value.condition || "available")}</select></label><label class="field"><span>Здоровье аккумулятора, %</span><input name="health" type="number" min="0" max="100" value="${value.health ?? ""}" placeholder="Только для аккумулятора"></label><label class="field"><span>Заряд аккумулятора, %</span><input name="charge" type="number" min="0" max="100" value="${value.charge ?? ""}" placeholder="Только для аккумулятора"></label><div class="info-strip wide"><span class="info-icon">i</span><p>Серийный номер видят только сотрудники. Клиент получает его в подписываемом акте.</p></div><div class="action-row wide"><button class="button primary" type="submit">Сохранить экземпляр</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     } else {
@@ -909,7 +925,7 @@
     wrapper.querySelector("form").addEventListener("submit", async (event) => {
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
       try {
-        if (editor.type === "article") await api("/api/miniapp/admin/catalog/articles", { method: "POST", body: JSON.stringify({ id: value.id || null, sku: data.get("sku"), name: data.get("name"), description: data.get("description"), rate: data.get("rate"), buffer_hours: Number(data.get("buffer_hours")), category: data.get("category"), inspection_profile: data.get("inspection_profile"), image_url: data.get("image_url"), active: data.get("active") === "on" }) });
+        if (editor.type === "article") await api("/api/miniapp/admin/catalog/articles", { method: "POST", body: JSON.stringify({ id: value.id || null, sku: data.get("sku"), name: data.get("name"), description: data.get("description"), rate: "0", buffer_hours: Number(data.get("buffer_hours")), category: data.get("category"), inspection_profile: data.get("inspection_profile"), image_url: data.get("image_url"), active: data.get("active") === "on" }) });
         else if (editor.type === "equipment") await api("/api/miniapp/admin/catalog/equipment", { method: "POST", body: JSON.stringify({ id: value.id || null, article_id: Number(data.get("article_id")), serial: data.get("serial"), location: data.get("location"), condition: data.get("condition"), health: data.get("health") === "" ? null : Number(data.get("health")), charge: data.get("charge") === "" ? null : Number(data.get("charge")) }) });
         else await api("/api/miniapp/admin/catalog/dependencies", { method: "PUT", body: JSON.stringify({ parent_article_id: Number(data.get("parent_article_id")), child_article_id: Number(data.get("child_article_id")), quantity: Number(data.get("quantity")), billable: data.get("billable") === "on" }) });
         await showAdmin("catalog");
@@ -1029,10 +1045,15 @@
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer(); });
   $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
-  $("consent-next").addEventListener("click", () => {
+  $("consent-next").addEventListener("click", async () => {
     if (!state.consent) return showError("Текст согласия не загружен.");
     if (!$("consent-check").checked) return showError("Чтобы продолжить, подтвердите согласие.");
-    clearError(); $("consent-step").hidden = true; $("identity-form").hidden = false;
+    clearError(); const button = $("consent-next"); button.disabled = true;
+    try {
+      await restoreReusableIdentityPhotos();
+      $("consent-step").hidden = true; $("identity-form").hidden = false;
+    } catch (error) { showError(error.message); }
+    finally { button.disabled = false; }
   });
   $("identity-form").addEventListener("submit", submitIdentity);
   document.querySelectorAll('#identity-form input:not([type="file"]), #identity-form textarea').forEach((input) => input.addEventListener("input", () => clearIdentityFieldError(input)));

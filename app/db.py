@@ -71,6 +71,7 @@ class Booking(Base):
     act_signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     act_signed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     returned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    receipt_number: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     items: Mapped[list["BookingItem"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     lines: Mapped[list["BookingLine"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
@@ -112,6 +113,19 @@ class BookingAsset(Base):
     booking: Mapped[Booking] = relationship(back_populates="assets")
     line: Mapped[BookingLine] = relationship(back_populates="assets")
     equipment: Mapped[Equipment] = relationship()
+
+
+class BookingDocument(Base):
+    """Encrypted, durable copies of signed issue acts and saved receipts."""
+    __tablename__ = "booking_documents"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(160))
+    media_type: Mapped[str] = mapped_column(String(120), default="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    encrypted_data: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class Occupancy(Base):
@@ -286,7 +300,7 @@ def init_db():
                 "client_request_id": "VARCHAR(36)",
                 "identity_status": "VARCHAR(30) NOT NULL DEFAULT 'not_required'",
                 "act_signed_at": "TIMESTAMPTZ", "act_signed_by": "BIGINT",
-                "returned_at": "TIMESTAMPTZ",
+                "returned_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",
             }
             for name, ddl in additions.items():
                 if name not in columns:
@@ -303,5 +317,6 @@ def init_db():
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_customer_request_unique ON bookings (customer_id, client_request_id)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_number_unique ON bookings (receipt_number)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS equipment_article_idx ON equipment (article_id)"))
     _legacy_backfill()

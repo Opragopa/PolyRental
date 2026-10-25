@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .db import Session, init_db
 from .miniapp import STATIC_DIR, router
+from .documents import archive_completed_documents
 from .service import expire_holds
 from .pii import purge_expired_identities
 
@@ -30,6 +31,7 @@ async def expiry_loop():
 @asynccontextmanager
 async def lifespan(_app):
     await asyncio.to_thread(init_db)
+    await asyncio.to_thread(archive_completed_documents)
     await asyncio.to_thread(purge_expired_identities)
     task = asyncio.create_task(expiry_loop())
     try:

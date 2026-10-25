@@ -58,7 +58,7 @@ def test_dependencies_assignment_checks_and_return_repair():
                                     [{"article_id": camera_id, "quantity": 1}, {"article_id": cable_id, "quantity": 1}], expected_total="240.00")
     booking = get_booking(booking_id)
     assert len(booking.lines) == 2
-    assert next(line for line in booking.lines if line.article_id == cable_id).hourly_rate == 20
+    assert next(line for line in booking.lines if line.article_id == cable_id).hourly_rate == 0
     assert transition(booking_id, "confirmed", 10) == "confirmed"
     with pytest.raises(Conflict, match="заполнить документы"):
         assign_booking_assets(booking_id, 10)

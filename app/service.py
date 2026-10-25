@@ -46,7 +46,7 @@ def availability(start, end):
         for item in items:
             overlaps = session.scalars(select(Occupancy).where(Occupancy.equipment_id == item.id, Occupancy.starts_at < end, Occupancy.ends_at > start).order_by(Occupancy.ends_at)).all()
             upcoming = session.scalar(select(func.max(Occupancy.ends_at)).where(Occupancy.equipment_id == item.id, Occupancy.starts_at < end, Occupancy.ends_at > start))
-            result.append({"id": item.id, "number": item.inventory_number, "name": item.name, "description": item.description, "image_url": item.image_url, "rate": str(item.hourly_rate), "condition": item.condition, "available": item.condition == "available" and not overlaps, "next_free": upcoming, "busy_intervals": [{"start": occupancy.starts_at.isoformat(), "end": occupancy.ends_at.isoformat()} for occupancy in overlaps]})
+            result.append({"id": item.id, "number": item.inventory_number, "name": item.name, "description": item.description, "image_url": item.image_url, "condition": item.condition, "available": item.condition == "available" and not overlaps, "next_free": upcoming, "busy_intervals": [{"start": occupancy.starts_at.isoformat(), "end": occupancy.ends_at.isoformat()} for occupancy in overlaps]})
         return result
 
 
@@ -80,13 +80,11 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, equ
             items = session.scalars(select(Equipment).where(Equipment.id.in_(ids))).all()
             if len(items) != len(ids) or any(item.condition != "available" for item in items):
                 raise Conflict("Оборудование недоступно")
-            if expected_total is not None and booking_total(start, end, (item.hourly_rate for item in items)) != Decimal(str(expected_total)):
-                raise Conflict("Цена изменилась. Проверьте заказ ещё раз")
             booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=now() + timedelta(minutes=30))
             session.add(booking)
             session.flush()
             for item in items:
-                session.add(BookingItem(booking_id=booking.id, equipment_id=item.id, hourly_rate=item.hourly_rate))
+                session.add(BookingItem(booking_id=booking.id, equipment_id=item.id, hourly_rate=Decimal("0")))
                 session.add(Occupancy(booking_id=booking.id, equipment_id=item.id, starts_at=start, ends_at=end))
             session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="created"))
             session.flush()

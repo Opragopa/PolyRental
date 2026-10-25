@@ -11,7 +11,7 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit,
+from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingDocument,
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
                  PrivacyConsent, RepairTicket, Session)
@@ -139,7 +139,7 @@ def availability(start, end):
             result.append({
                 "id": article.id, "sku": article.sku, "name": article.name,
                 "description": article.description, "image_url": article.image_url,
-                "rate": str(article.hourly_rate), "category": article.category,
+                "category": article.category,
                 "buffer_hours": article.buffer_hours, "capacity": capacity,
                 "available_quantity": available_count, "available": available_count > 0,
                 "dependencies": [],
@@ -172,7 +172,7 @@ def _normalize_lines(session, requested):
         select(Article).where(Article.id.in_(list(quantities)), Article.is_active.is_(True))).all()}
     if len(articles) != len(quantities):
         raise Conflict("Один из артикулов больше недоступен")
-    return [(articles[article_id], quantity, articles[article_id].hourly_rate,
+    return [(articles[article_id], quantity, Decimal("0"),
              article_id in auto_added, billable_quantities[article_id])
             for article_id, quantity in quantities.items()]
 
@@ -199,9 +199,6 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                 free = _capacity(session, article.id) - _reserved_quantity(session, article.id, start, end)
                 if free < quantity:
                     raise Conflict(f"Недостаточно свободных единиц: {article.name}")
-            calculated = booking_total(start, end, [rate for _, _, rate, _, billable_qty in normalized for _ in range(billable_qty)])
-            if expected_total is not None and calculated != Decimal(str(expected_total)):
-                raise Conflict("Цена изменилась. Проверьте заказ ещё раз")
             booking = Booking(
                 customer_id=customer_id, client_request_id=request_id,
                 customer_name=customer_name.strip(), customer_contact=customer_contact.strip(),
@@ -252,6 +249,7 @@ def delete_booking(booking_id, actor_id):
             RepairTicket.booking_id == booking_id).with_for_update()).all()
         affected_equipment = {ticket.equipment_id for ticket in repair_tickets}
         session.execute(delete(RepairTicket).where(RepairTicket.booking_id == booking_id))
+        session.execute(delete(BookingDocument).where(BookingDocument.booking_id == booking_id))
         for equipment_id in affected_equipment:
             equipment = session.get(Equipment, equipment_id)
             other_open_ticket = session.scalar(select(RepairTicket.id).where(

@@ -24,16 +24,17 @@ from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
-from .documents import render_document
+from .documents import archived_document, operator_document
 from . import __version__
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reusable_identity_fields,
+                  reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
 from .rental import (Conflict, assign_booking_assets, availability, create_booking,
                      close_repair, delete_booking, delete_dependency, get_booking,
-                     lines_total, list_articles, list_bookings, list_customer_bookings,
+                     list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, save_article, save_dependency, save_equipment,
                      transition)
@@ -120,7 +121,6 @@ def require_pii_admin(user=Depends(require_customer)):
 
 
 def booking_view(booking):
-    total = lines_total(booking.starts_at, booking.ends_at, booking.lines)
     return {
         "id": booking.id,
         "status": booking.status,
@@ -131,10 +131,8 @@ def booking_view(booking):
         "customer_contact": booking.customer_contact,
         "identity_status": booking.identity_status,
         "items": [{"id": line.article_id, "name": line.article.name, "quantity": line.quantity,
-                   "rate": str(line.hourly_rate), "billable_quantity": line.billable_quantity,
                    "auto_added": line.auto_added}
                   for line in booking.lines],
-        "total": str(total),
     }
 
 
@@ -151,7 +149,7 @@ class BookingRequest(BaseModel):
     lines: list[BookingLineRequest] = Field(min_length=1, max_length=30)
     name: str = Field(min_length=1, max_length=200)
     contact: str = Field(min_length=1, max_length=200)
-    expected_total: Decimal = Field(ge=0)
+    expected_total: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("contact")
     @classmethod
@@ -274,9 +272,7 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
         raise HTTPException(422, str(exc)) from exc
     available = [item for item in items if item["available"]]
     return {
-        "items": [{**item, "total_per_unit": str(
-            (Decimal(item["rate"]) * Decimal(str((end - start).total_seconds())) / Decimal("3600")).quantize(Decimal("0.01"))
-        )} for item in available],
+        "items": available,
         "unavailable_count": len(items) - len(available),
         "unavailable": [{"name": item["name"], "sku": item["sku"], "available_quantity": 0}
                         for item in items if not item["available"]],
@@ -290,7 +286,7 @@ async def create_customer_booking(payload: BookingRequest, background_tasks: Bac
         booking_id, created = await asyncio.to_thread(
             create_booking,
             user["id"], payload.name.strip(), payload.contact.strip(), payload.start,
-            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total, return_created=True,
+            payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), None, return_created=True,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -392,6 +388,17 @@ async def customer_reusable_identity_profile(booking_id: int, user=Depends(requi
     _limit_pii(user["id"], "customer_read", 20)
     try:
         return await asyncio.to_thread(reusable_identity_fields, booking_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/identity/reusable-profile/documents/{kind}")
+async def customer_reusable_identity_document(booking_id: int, kind: str, user=Depends(require_customer)):
+    _limit_pii(user["id"], "customer_read", 20)
+    try:
+        body, media_type = await asyncio.to_thread(
+            reusable_identity_document, booking_id, user["id"], kind)
+        return Response(body, media_type=media_type, headers={"Cache-Control": "no-store"})
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -507,7 +514,7 @@ async def admin_catalog(user=Depends(require_admin)):
     articles = await asyncio.to_thread(list_articles)
     dependencies = await asyncio.to_thread(list_dependencies)
     return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
-                           "category": article.category, "rate": str(article.hourly_rate),
+                           "category": article.category,
                            "description": article.description,
                            "inspection_profile": article.inspection_profile,
                            "image_url": article.image_url,
@@ -529,7 +536,7 @@ class ArticleRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
-    rate: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    rate: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     category: str = Field(default="generic", max_length=40)
     inspection_profile: str = Field(default="generic", max_length=30)
     buffer_hours: int = Field(default=24, ge=0, le=168)
@@ -541,7 +548,7 @@ class ArticleRequest(BaseModel):
 async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin)):
     try:
         article_id = await asyncio.to_thread(
-            save_article, payload.sku, payload.name, payload.description, payload.rate,
+            save_article, payload.sku, payload.name, payload.description, Decimal("0"),
             payload.category, payload.inspection_profile, payload.buffer_hours,
             payload.image_url, payload.id, payload.active)
         return {"id": article_id}
@@ -654,8 +661,10 @@ async def admin_inspection(booking_id: int, payload: InspectionRequest, user=Dep
 async def admin_act_signed(booking_id: int, user=Depends(require_pii_admin)):
     try:
         await asyncio.to_thread(mark_act_signed, booking_id, user["id"])
+        await asyncio.to_thread(archived_document, booking_id, "issue", user["id"])
+        await asyncio.to_thread(archived_document, booking_id, "receipt", user["id"])
         return {"status": "signed"}
-    except Conflict as exc:
+    except (Conflict, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
@@ -712,11 +721,13 @@ async def admin_identity_document(booking_id: int, kind: str, user=Depends(requi
 @router.get("/api/miniapp/admin/bookings/{booking_id}/documents/{kind}")
 async def admin_generated_document(booking_id: int, kind: str, user=Depends(require_pii_admin)):
     _limit_pii(user["id"], "admin_pii")
+    if kind not in {"issue", "receipt"}:
+        raise HTTPException(404, "Документ не найден")
     try:
-        body = await asyncio.to_thread(render_document, booking_id, kind, True, user["id"])
+        body, filename = await asyncio.to_thread(operator_document, booking_id, kind, user["id"])
         return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Cache-Control": "no-store",
-                                 "Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})
+                                 "Content-Disposition": f'attachment; filename="{filename}"'})
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -750,8 +761,7 @@ async def download_generated_document(token: str):
     if expires_at <= time.monotonic():
         raise HTTPException(404, "Срок действия ссылки истёк. Запросите документ повторно")
     try:
-        body = await asyncio.to_thread(render_document, booking_id, kind, True, actor_id)
-        filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+        body, filename = await asyncio.to_thread(operator_document, booking_id, kind, actor_id)
         return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Cache-Control": "no-store, max-age=0",
                                  "Content-Disposition": f'attachment; filename="{filename}"',

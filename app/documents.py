@@ -1,16 +1,19 @@
 from datetime import datetime, timezone
 import io
+import hashlib
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from docx import Document
 from docxtpl import DocxTemplate
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from .db import Inspection, Session
-from .pii import reveal_identity
-from .rental import Conflict, get_booking, lines_total
+from .db import Booking, BookingDocument, Inspection, PIIAudit, Session
+from .pii import _master_key, reveal_identity
+from .rental import Conflict, get_booking
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 RECEIPT_TEMPLATE = Path(__file__).resolve().parent / "assets" / "receipt-template.docx"
@@ -32,7 +35,6 @@ def ensure_templates():
         doc.add_paragraph("Аренда: {{ starts_at }} — {{ ends_at }} (Москва)")
         doc.add_paragraph("Оборудование: {{ equipment }}")
         doc.add_paragraph("Паспортные данные: {{ identity }}")
-        doc.add_paragraph("Стоимость аренды: {{ total }} руб.")
         doc.add_paragraph("Подпись клиента: __________  Подпись менеджера: __________")
         doc.save(path)
 
@@ -49,7 +51,6 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         raise Conflict("Сначала назначьте конкретные экземпляры")
     if kind == "receipt" and not include_identity:
         raise Conflict("Сохранная расписка содержит реквизиты получателя и доступна только PII_ADMIN_IDS")
-    total = lines_total(booking.starts_at, booking.ends_at, booking.lines)
     if kind == "contract":
         equipment = ", ".join(f"{line.article.name} — {line.quantity} шт." for line in booking.lines)
     else:
@@ -91,7 +92,6 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         "ends_at": booking.ends_at.astimezone(local).strftime("%d.%m.%Y %H:%M"),
         "equipment": equipment,
         "identity": identity_text,
-        "total": f"{total:.2f}",
     }
     if kind == "receipt":
         template_path = RECEIPT_TEMPLATE
@@ -105,12 +105,19 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         receipt_moment = receipt_moment.astimezone(local)
         if not identity_payload.get("full_name"):
             raise Conflict("В проверенной анкете не указано ФИО получателя")
+        with Session.begin() as session:
+            row = session.scalar(select(Booking).where(Booking.id == booking.id).with_for_update())
+            if row is None:
+                raise ValueError("Заявка не найдена")
+            if not row.receipt_number:
+                # Booking IDs are global, monotonic and never reused; padding
+                # keeps common IDs in the requested six-digit YYNNNN format.
+                row.receipt_number = f"ТС-{receipt_moment.year % 100:02d}{row.id:04d}"
+            receipt_number = row.receipt_number
         context.update({
             "date": receipt_moment.strftime("%d.%m.%Y"),
             "time": receipt_moment.strftime("%H:%M"),
-            # Booking IDs are monotonically allocated and never reused after deletion.
-            # The year makes the human-facing number easier to sort and recognize.
-            "receipt_number": f"SR-{booking.created_at.astimezone(local).year}-{booking.id:08d}",
+            "receipt_number": receipt_number.removeprefix("ТС-"),
             "issuer_name": os.getenv("OPERATOR_NAME", "сотрудником организации"),
             "identity_document": f"паспорт {identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
             "passport_issued_at": identity_payload.get("passport_issued_at", ""),
@@ -132,3 +139,78 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
     output = io.BytesIO()
     template.save(output)
     return output.getvalue()
+
+
+def _decrypt_archived_document(document):
+    aad = f"{document.booking_id}:{document.kind}:doc-v1".encode()
+    return AESGCM(_master_key()).decrypt(document.nonce, document.encrypted_data, aad)
+
+
+def archived_document(booking_id, kind, actor_id):
+    """Return an archived DOCX, creating the durable archive on first access."""
+    if kind not in {"issue", "receipt"}:
+        raise ValueError("Неизвестный документ")
+    with Session() as session:
+        saved = session.get(BookingDocument, (booking_id, kind))
+        if saved is not None:
+            body = _decrypt_archived_document(saved)
+            with Session.begin() as audit_session:
+                audit_session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
+                                           action="document_downloaded"))
+            return body, saved.filename
+
+    body = render_document(booking_id, kind, include_identity=True, actor_id=actor_id)
+    filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+    nonce = os.urandom(12)
+    aad = f"{booking_id}:{kind}:doc-v1".encode()
+    encrypted = AESGCM(_master_key()).encrypt(nonce, body, aad)
+    try:
+        with Session.begin() as session:
+            session.add(BookingDocument(booking_id=booking_id, kind=kind, filename=filename,
+                                       media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                       encrypted_data=encrypted, nonce=nonce,
+                                       sha256=hashlib.sha256(body).hexdigest()))
+            session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
+                                 action="document_archived"))
+    except IntegrityError:
+        # A simultaneous request may have won the unique booking/kind insert.
+        pass
+    with Session() as session:
+        saved = session.get(BookingDocument, (booking_id, kind))
+        if saved is None:
+            raise ValueError("Документ не удалось сохранить в архив")
+        return _decrypt_archived_document(saved), saved.filename
+
+
+def operator_document(booking_id, kind, actor_id):
+    """Preview before signature; otherwise return the durable archived copy."""
+    booking = get_booking(booking_id)
+    if booking is None:
+        raise ValueError("Заявка не найдена")
+    if booking.status == "ready" and not booking.act_signed_at:
+        return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
+            f"{'act' if kind == 'issue' else kind}-{booking_id}.docx"
+    return archived_document(booking_id, kind, actor_id)
+
+
+def archive_completed_documents():
+    """Backfill durable copies before retained identity data is purged."""
+    with Session() as session:
+        booking_ids = session.scalars(select(Booking.id).where(
+            Booking.identity_status == "verified",
+            ((Booking.status == "ready") & Booking.act_signed_at.is_not(None)) |
+            Booking.status.in_({"issued", "return_inspection", "returned"})
+        )).all()
+    archived = 0
+    for booking_id in booking_ids:
+        for kind in ("issue", "receipt"):
+            try:
+                with Session() as session:
+                    exists = session.get(BookingDocument, (booking_id, kind)) is not None
+                if not exists:
+                    archived_document(booking_id, kind, 0)
+                    archived += 1
+            except Exception:
+                # A missing/rotated key or malformed legacy record must not stop startup.
+                continue
+    return archived

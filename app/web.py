@@ -156,16 +156,16 @@ def equipment_page(request: Request):
     require_admin(request)
     rows = []
     for item in list_equipment():
-        rows.append(f'<tr><td>{item.id}</td><td>{escape(item.inventory_number)}</td><td>{escape(item.name)}</td><td>{item.hourly_rate}</td><td>{item.condition}</td></tr>')
-    form = '''<section><h2>Добавить или обновить экземпляр</h2><form method="post"><input name="equipment_id" type="number" placeholder="ID для изменения"><input name="number" required placeholder="Инвентарный номер"><input name="name" required placeholder="Название"><input name="description" placeholder="Описание"><input name="image_url" type="url" placeholder="HTTPS-ссылка на фото (необязательно)"><input name="rate" type="number" min="0" step="0.01" required placeholder="Цена за час"><select name="condition"><option value="available">Доступно</option><option value="maintenance">Ремонт</option><option value="retired">Списано</option></select><button>Сохранить</button></form></section>'''
-    return page("Оборудование", '<p><a href="/admin">← Заявки</a></p><section><table><tr><th>ID</th><th>Номер</th><th>Название</th><th>₽/час</th><th>Состояние</th></tr>' + "".join(rows) + '</table></section>' + form)
+        rows.append(f'<tr><td>{item.id}</td><td>{escape(item.inventory_number)}</td><td>{escape(item.name)}</td><td>{item.condition}</td></tr>')
+    form = '''<section><h2>Добавить или обновить экземпляр</h2><form method="post"><input name="equipment_id" type="number" placeholder="ID для изменения"><input name="number" required placeholder="Инвентарный номер"><input name="name" required placeholder="Название"><input name="description" placeholder="Описание"><input name="image_url" type="url" placeholder="HTTPS-ссылка на фото (необязательно)"><select name="condition"><option value="available">Доступно</option><option value="maintenance">Ремонт</option><option value="retired">Списано</option></select><button>Сохранить</button></form></section>'''
+    return page("Оборудование", '<p><a href="/admin">← Заявки</a></p><section><table><tr><th>ID</th><th>Номер</th><th>Название</th><th>Состояние</th></tr>' + "".join(rows) + '</table></section>' + form)
 
 
 @app.post("/admin/equipment")
-def equipment_save(request: Request, number: str = Form(), name: str = Form(), description: str = Form(""), image_url: str = Form(""), rate: str = Form(), condition: str = Form(), equipment_id: str = Form("")):
+def equipment_save(request: Request, number: str = Form(), name: str = Form(), description: str = Form(""), image_url: str = Form(""), condition: str = Form(), equipment_id: str = Form("")):
     require_admin(request)
     try:
-        save_equipment(number, name, description, rate, condition, int(equipment_id) if equipment_id else None, image_url or (None if equipment_id else ""))
+        save_equipment(number, name, description, 0, condition, int(equipment_id) if equipment_id else None, image_url or (None if equipment_id else ""))
     except (ValueError, Conflict, IntegrityError) as exc:
         raise HTTPException(409, str(exc))
     return RedirectResponse("/admin/equipment", status_code=303)

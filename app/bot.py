@@ -67,7 +67,7 @@ def format_items(items):
     lines = []
     for item in items:
         status = f'свободно: {item["available_quantity"]}' if item["available"] else "недоступно"
-        lines.append(f'{item["id"]}: {item["name"]} ({item["sku"]}), {item["rate"]} ₽/час — {status}')
+        lines.append(f'{item["id"]}: {item["name"]} ({item["sku"]}) — {status}')
     return "\n".join(lines) or "Оборудование пока не добавлено"
 
 
@@ -93,7 +93,7 @@ def flow_keyboard(contact=False):
 
 
 def equipment_keyboard(items, selected):
-    buttons = [[InlineKeyboardButton(text=f'{"✓ " if item["id"] in selected else ""}{item["name"]} · {item["rate"]} ₽/ч', callback_data=f'rent:toggle:{item["id"]}')] for item in items]
+    buttons = [[InlineKeyboardButton(text=f'{"✓ " if item["id"] in selected else ""}{item["name"]}', callback_data=f'rent:toggle:{item["id"]}')] for item in items]
     buttons.append([InlineKeyboardButton(text="Продолжить →", callback_data="rent:next")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -139,11 +139,10 @@ async def show_review(message, state):
         await state.set_state(Rent.equipment)
         await message.answer("Выбранное оборудование уже занято. Выберите другое или измените сроки.", reply_markup=flow_keyboard())
         return await show_equipment(message, state)
-    total = booking_total(start_at, end_at, (item["rate"] for item in chosen))
-    await state.update_data(expected_total=str(total), editing=None)
+    await state.update_data(expected_total=None, editing=None)
     text = (f"Проверьте заявку:\n{start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
             f"Оборудование: {', '.join(item['name'] for item in chosen)}\nИмя: {data['name']}\nКонтакт: {data['contact']}\n"
-            f"Итого: {total} ₽\nУдержание начнётся после подтверждения и продлится 30 минут.")
+            f"Удержание начнётся после подтверждения и продлится 30 минут.")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Подтвердить бронирование", callback_data="rent:confirm")],
         [InlineKeyboardButton(text="Изменить сроки", callback_data="rent:edit:start"), InlineKeyboardButton(text="Изменить оборудование", callback_data="rent:edit:equipment")],
@@ -372,7 +371,7 @@ async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
     await query.answer("Создаём заявку…")
     try:
         requested = [{"article_id": article_id, "quantity": 1} for article_id in data["ids"]]
-        booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), data.get("expected_total"), return_created=True)
+        booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), None, return_created=True)
     except (Conflict, ValueError) as exc:
         return await query.message.answer(f"Не удалось создать заявку: {exc}. Измените сроки или оборудование и попробуйте снова.")
     await state.clear()
@@ -435,7 +434,7 @@ async def equipment(message: Message):
     if not is_admin(message.from_user.id):
         return
     items = await asyncio.to_thread(list_equipment)
-    await message.answer("\n".join(f"{e.id}: {e.name} ({e.inventory_number}), {e.hourly_rate} ₽/час, {e.condition}" for e in items) or "Пусто")
+    await message.answer("\n".join(f"{e.id}: {e.name} ({e.inventory_number}), {e.condition}" for e in items) or "Пусто")
 
 
 @router.message(Command("add"))
@@ -443,13 +442,13 @@ async def add_equipment(message: Message):
     if not is_admin(message.from_user.id):
         return
     try:
-        _, number, rate, name = (message.text or "").split(" ", 3)
-        item_id = await asyncio.to_thread(save_equipment, number, name, "", rate, "available")
+        _, number, name = (message.text or "").split(" ", 2)
+        item_id = await asyncio.to_thread(save_equipment, number, name, "", 0, "available")
         await message.answer(f"Экземпляр #{item_id} добавлен. Изменение и состояние доступны в веб-панели.")
     except IntegrityError:
         await message.answer("Экземпляр с таким серийным номером уже существует.")
     except (ValueError, Conflict) as exc:
-        await message.answer(f"Формат: /add НОМЕР ЦЕНА_ЗА_ЧАС НАЗВАНИЕ. {exc}")
+        await message.answer(f"Формат: /add НОМЕР НАЗВАНИЕ. {exc}")
 
 
 @router.message(Command("set"))
@@ -457,13 +456,13 @@ async def set_equipment(message: Message):
     if not is_admin(message.from_user.id):
         return
     try:
-        _, identifier, number, rate, condition, name = (message.text or "").split(" ", 5)
-        item_id = await asyncio.to_thread(save_equipment, number, name, "", rate, condition, int(identifier))
+        _, identifier, number, condition, name = (message.text or "").split(" ", 4)
+        item_id = await asyncio.to_thread(save_equipment, number, name, "", 0, condition, int(identifier))
         await message.answer(f"Экземпляр #{item_id} обновлен")
     except IntegrityError:
         await message.answer("Экземпляр с таким серийным номером уже существует.")
     except (ValueError, Conflict) as exc:
-        await message.answer(f"Формат: /set ID НОМЕР ЦЕНА available|maintenance|retired НАЗВАНИЕ. {exc}")
+        await message.answer(f"Формат: /set ID НОМЕР available|maintenance|retired НАЗВАНИЕ. {exc}")
 
 
 @router.message(Command("bookings"))

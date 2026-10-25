@@ -117,8 +117,10 @@ def consent_text():
         "Реквизиты и фотографии не передаются в сообщения Telegram и не используются для рекламы.\n\n"
         "Полные данные доступны только сотрудникам, включённым в закрытый список проверки документов. "
         "Анкета и фотографии хранятся во время оформления и исполнения аренды, затем удаляются через 90 дней после возврата оборудования; "
-        "если в этот период оформляется новая заявка, введённые реквизиты могут быть предложены для повторного заполнения, "
-        "а согласие на обработку для новой заявки запрашивается отдельно. Фотографии документов в новую заявку не переносятся. "
+        "если в этот период оформляется новая заявка, реквизиты и фотографии могут быть предложены для повторного заполнения; "
+        "новая фотография заменяет сохранённую. Согласие на обработку для новой заявки запрашивается отдельно. "
+        "Подписанные акты выдачи и сохранные расписки сохраняются в зашифрованном архиве заявки без ограничения срока "
+        "и удаляются только при полном удалении заявки уполномоченным оператором. "
         "При открытом ремонте срок хранения отсчитывается после его закрытия. Данные могут быть удалены раньше при наличии законного основания и обращения. "
         "Запрос, уточнение, отзыв согласия или обращение по удалению можно направить через "
         + os.environ["OPERATOR_CONTACT"] + ". Отказ предоставить данные означает невозможность оформить документы "
@@ -199,40 +201,59 @@ def identity_status(booking_id, customer_id=None):
         return result
 
 
-def reusable_identity_fields(booking_id, customer_id):
-    """Return the customer's latest still-retained identity fields for prefill.
-
-    Document photos are deliberately not reused: a new application must include
-    its own current images. Active bookings retain their identity until return;
-    returned bookings are eligible only until their configured deletion date.
-    """
+def _latest_reusable_identity(session, booking_id, customer_id):
     active_statuses = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+    target = session.get(Booking, booking_id)
+    if not target or target.customer_id != customer_id:
+        raise ValueError("Заявка не найдена")
+    eligible = or_(
+        and_(Booking.status.in_(active_statuses), CustomerIdentity.delete_after.is_(None)),
+        and_(Booking.status == "returned", CustomerIdentity.delete_after > now()),
+        and_(Booking.status == "returned", exists(select(RepairTicket.id).where(
+            RepairTicket.booking_id == Booking.id, RepairTicket.status != "closed"))),
+    )
+    return session.scalar(
+        select(CustomerIdentity)
+        .join(Booking, Booking.id == CustomerIdentity.booking_id)
+        .where(CustomerIdentity.customer_id == customer_id,
+               CustomerIdentity.booking_id != booking_id,
+               CustomerIdentity.status.in_({"submitted", "needs_changes", "verified"}),
+               eligible)
+        .order_by(CustomerIdentity.updated_at.desc(), CustomerIdentity.id.desc())
+        .limit(1)
+    )
+
+
+def reusable_identity_fields(booking_id, customer_id):
+    """Return still-retained fields and photo kinds for the customer's new form."""
     with Session.begin() as session:
-        target = session.get(Booking, booking_id)
-        if not target or target.customer_id != customer_id:
-            raise ValueError("Заявка не найдена")
-        eligible = or_(
-            and_(Booking.status.in_(active_statuses), CustomerIdentity.delete_after.is_(None)),
-            and_(Booking.status == "returned", CustomerIdentity.delete_after > now()),
-            and_(Booking.status == "returned", exists(select(RepairTicket.id).where(
-                RepairTicket.booking_id == Booking.id, RepairTicket.status != "closed"))),
-        )
-        identity = session.scalar(
-            select(CustomerIdentity)
-            .join(Booking, Booking.id == CustomerIdentity.booking_id)
-            .where(CustomerIdentity.customer_id == customer_id,
-                   CustomerIdentity.booking_id != booking_id,
-                   CustomerIdentity.status.in_({"submitted", "needs_changes", "verified"}),
-                   eligible)
-            .order_by(CustomerIdentity.updated_at.desc(), CustomerIdentity.id.desc())
-            .limit(1)
-        )
+        identity = _latest_reusable_identity(session, booking_id, customer_id)
         if identity is None:
-            return {"reusable": False, "fields": {}}
+            return {"reusable": False, "fields": {}, "documents": []}
         payload, _ = _decrypt_payload(identity)
         session.add(PIIAudit(booking_id=booking_id, actor_id=customer_id,
                              action="identity_prefilled"))
-        return {"reusable": True, "fields": payload}
+        return {"reusable": True, "fields": payload,
+                "documents": sorted(document.kind for document in identity.documents)}
+
+
+def reusable_identity_document(booking_id, customer_id, kind):
+    if kind not in DOCUMENT_KINDS:
+        raise ValueError("Неизвестный документ")
+    with Session.begin() as session:
+        identity = _latest_reusable_identity(session, booking_id, customer_id)
+        if identity is None:
+            raise ValueError("Сохранённая фотография не найдена")
+        document = session.scalar(select(IdentityDocument).where(
+            IdentityDocument.identity_id == identity.id, IdentityDocument.kind == kind))
+        if not document:
+            raise ValueError("Сохранённая фотография не найдена")
+        _, dek = _decrypt_payload(identity)
+        data = AESGCM(dek).decrypt(document.nonce, document.encrypted_data,
+                                   f"{identity.booking_id}:{kind}".encode())
+        session.add(PIIAudit(booking_id=booking_id, actor_id=customer_id,
+                             action="identity_photo_prefilled"))
+        return data, document.media_type
 
 
 def submit_identity(booking_id, customer_id, payload, documents, policy_version="", text_hash=""):
