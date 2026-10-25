@@ -15,13 +15,14 @@ from uuid import UUID
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from .documents import render_document
+from . import __version__
 from .pii import (DOCUMENT_KINDS, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
@@ -198,7 +199,11 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str):
 
 @router.get("/miniapp")
 def miniapp_page():
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    return HTMLResponse(miniapp_html(), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+def miniapp_html():
+    return (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
 
 
 @router.get("/calendar/{token}.ics")

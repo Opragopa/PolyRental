@@ -16,6 +16,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import __version__
 from .db import Session, init_db
 from .documents import ensure_templates, render_document
 from .miniapp import STATIC_DIR, router as miniapp_router
@@ -62,7 +63,7 @@ async def lifespan(app):
     task.cancel()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, version=__version__)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "change-me-before-deploy"), same_site="lax", https_only=os.getenv("PUBLIC_URL", "").startswith("https://"))
 app.include_router(miniapp_router)
 app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-static")
@@ -81,7 +82,7 @@ def page(title, body):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/login")

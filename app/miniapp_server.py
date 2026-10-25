@@ -7,6 +7,7 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .db import Session, init_db
 from .miniapp import STATIC_DIR, router
 from .service import expire_holds
@@ -39,11 +40,11 @@ async def lifespan(_app):
             await task
 
 
-app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, version=__version__)
 app.include_router(router)
 app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-static")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}

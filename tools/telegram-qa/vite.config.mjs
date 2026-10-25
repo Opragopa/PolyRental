@@ -9,6 +9,7 @@ export const QA_TOKEN = "123:local-qa-only";
 const mode = process.env.QA_TOOL || "vite";
 const source = fileURLToPath(new URL("../../app/miniapp_static/index.html", import.meta.url));
 const appSource = fileURLToPath(new URL("../../app/miniapp_static/app.js", import.meta.url)).replaceAll("\\", "/");
+const releaseVersion = readFileSync(new URL("../../VERSION", import.meta.url), "utf8").trim();
 
 export default defineConfig({
   cacheDir: `node_modules/.vite-${mode}`,
@@ -30,7 +31,7 @@ export default defineConfig({
       transformIndexHtml: {
         order: "pre",
         handler(_html, context) {
-          let html = readFileSync(source, "utf8");
+          let html = readFileSync(source, "utf8").replaceAll("__APP_VERSION__", releaseVersion);
           if (new URL(context.originalUrl || "/", "http://localhost").searchParams.has("legacyCrypto")) {
             html = html.replace("</head>", '<script>Object.defineProperty(crypto,"randomUUID",{value:undefined});</script></head>');
           }

@@ -47,7 +47,7 @@ def qa_page(role: str):
     secret = hmac.new(b"WebAppData", os.environ["BOT_TOKEN"].encode(), hashlib.sha256).digest()
     data["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     sdk = "<script>window.Telegram={WebApp:{initData:" + json.dumps(urlencode(data)) + "}};</script>"
-    html = (miniapp.STATIC_DIR / "index.html").read_text()
+    html = miniapp.miniapp_html()
     metrics = """<script>addEventListener('DOMContentLoaded',()=>{
       const measure=()=>parent.postMessage({qaMetrics:{width:document.documentElement.clientWidth,
         scrollWidth:document.documentElement.scrollWidth,

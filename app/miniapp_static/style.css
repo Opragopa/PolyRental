@@ -23,6 +23,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .topbar { gap: 16px; padding-bottom: 34px; border-bottom: 1px solid var(--line); }
 .brand { justify-content: flex-start; gap: 10px; font-size: 18px; font-weight: 800; letter-spacing: -.04em; }
 .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font: 800 20px Georgia, serif; }
+.app-version { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
 .topbar-note, .timezone, .eyebrow, .step-kicker { color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .heading-row { gap: 16px; align-items: flex-end; margin-top: 34px; }
 .eyebrow { margin: 0 0 8px; color: var(--accent); }
