@@ -25,7 +25,8 @@ def prepared_booking(prefix="QA", count=2):
 
 def now_interval():
     from app.rental import now
-    return now() + timedelta(hours=3), now() + timedelta(hours=5)
+    start = now() + timedelta(days=4, hours=3)
+    return start, start + timedelta(hours=2)
 
 
 def test_reassignment_invalidates_old_inspection():
@@ -91,7 +92,7 @@ def test_nonoverlapping_bookings_do_not_add_up_to_false_unavailability():
     with Session.begin() as session:
         from app.db import Article
         session.get(Article, article_id).buffer_hours = 0
-    start = now() + timedelta(days=2)
+    start = now() + timedelta(days=5)
     for offset in (1, 3):
         create_booking(42, "Тест", "@qa", start + timedelta(hours=offset),
                        start + timedelta(hours=offset + 1),

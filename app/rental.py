@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -37,9 +38,14 @@ def validated_rate(value):
         raise ValueError("Укажите корректную ставку") from exc
 
 
-def validate_interval(start, end):
+def validate_interval(start, end, enforce_booking_notice=False):
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("Укажите корректные дату и время начала и возврата")
+    moscow = ZoneInfo("Europe/Moscow")
+    if enforce_booking_notice:
+        earliest_date = now().astimezone(moscow).date() + timedelta(days=4)
+        if start.astimezone(moscow).date() < earliest_date:
+            raise ValueError("Выдачу можно назначить не раньше чем через 4 календарных дня; дата сегодня + 3 дня недоступна")
     if start < now() - timedelta(minutes=1):
         raise ValueError("Начало аренды уже прошло")
 
@@ -182,7 +188,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                     Booking.customer_id == customer_id, Booking.client_request_id == request_id))
                 if previous:
                     return (previous, False) if return_created else previous
-            validate_interval(start, end)
+            validate_interval(start, end, enforce_booking_notice=True)
             if not customer_name.strip() or not customer_contact.strip():
                 raise ValueError("Нужны имя и контакт клиента")
             normalized = _normalize_lines(session, requested)

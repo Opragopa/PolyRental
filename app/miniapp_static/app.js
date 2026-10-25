@@ -55,6 +55,29 @@
     if (match) { $(`${id}-date`).value = match[1]; $(`${id}-time`).value = match[2]; }
     else { $(`${id}-date`).value = ""; $(`${id}-time`).value = ""; }
   }
+  function moscowDateIso(date = new Date()) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(date).map((part) => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+  function addIsoDays(value, days) {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day + days));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  function bookingDateLabel(value) {
+    return new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })
+      .format(new Date(`${value}T12:00:00Z`));
+  }
+  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 4); }
+  function applyBookingDateLimits() {
+    const min = minimumBookingDate();
+    $("start-date").min = min;
+    $("end-date").min = $("start-date").value >= min ? $("start-date").value : min;
+    $("start-hint").textContent = `Доступно с ${bookingDateLabel(min)}; даты ближайших трёх дней закрыты.`;
+    $("end-hint").textContent = `Возврат — позже выдачи, не раньше ${bookingDateLabel($("end-date").min)}.`;
+  }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
@@ -241,6 +264,9 @@
     const startIso = toIso($("start").value); const endIso = toIso($("end").value);
     if (!startIso) { fieldError("start", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
     if (!endIso) { fieldError("end", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
+    const minDate = minimumBookingDate();
+    if ($("start-date").value < minDate) { fieldError("start", `Выберите дату выдачи не раньше ${bookingDateLabel(minDate)}.`); return false; }
+    if ($("end-date").value < minDate) { fieldError("end", `Выберите дату возврата не раньше ${bookingDateLabel(minDate)}.`); return false; }
     if (new Date(startIso) < new Date(Date.now() - 60000)) { fieldError("start", "Начало аренды должно быть в будущем."); return false; }
     if (minutes() <= 0) { fieldError("end", "Возврат должен быть позже выдачи."); return false; }
     return true;
@@ -582,21 +608,21 @@
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
-          const ready = actionButton("Подтвердить комплектацию", transitionAction("ready"), order.id, "primary");
+          const ready = actionButton("Далее", transitionAction("ready"), order.id, "primary");
           const canConfirm = () => order.assets.length > 0 && order.assets.every((asset) => inspectionFor(order, asset, "pre_issue")?.result === "pass");
           const readinessHint = document.createElement("p"); readinessHint.className = "workflow-hint";
           const updateReadinessHint = () => {
             const failedCount = order.assets.filter((asset) => inspectionFor(order, asset, "pre_issue")?.result === "fail").length;
             readinessHint.textContent = failedCount
               ? `Неисправность отмечена у ${failedCount} экземпляр(а). Замените неисправную технику, затем повторите проверку.`
-              : "Кнопка подтверждения станет активной после успешной проверки всех экземпляров. Можно отметить все исправные сразу.";
+              : "Проверьте все экземпляры. После успешной проверки нажмите «Далее», чтобы подтвердить готовность заказа.";
             readinessHint.hidden = canConfirm();
           };
           ready.disabled = !canConfirm();
-          ready.title = ready.disabled ? "Подтверждение доступно после успешной проверки всех назначенных экземпляров" : "Все экземпляры проверены — подтвердить готовность к выдаче";
+          ready.title = ready.disabled ? "Сначала проверьте все назначенные экземпляры" : "Подтвердить готовность заказа к выдаче";
           appendInspectionGroup(actions, order, "pre_issue", () => {
             ready.disabled = !canConfirm();
-            ready.title = ready.disabled ? "Подтверждение доступно после успешной проверки всех назначенных экземпляров" : "Все экземпляры проверены — подтвердить готовность к выдаче";
+            ready.title = ready.disabled ? "Сначала проверьте все назначенные экземпляры" : "Подтвердить готовность заказа к выдаче";
             updateReadinessHint();
           });
           updateReadinessHint(); actions.append(readinessHint);
@@ -623,11 +649,24 @@
         if (["pending", "confirmed", "preparing", "ready"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.id)) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
         if (order.status === "issued") actions.append(actionButton("Начать возврат", transitionAction("return_inspection"), order.id, "primary"));
         if (order.status === "return_inspection") {
-          const finishReturn = actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary");
-          finishReturn.disabled = order.assets.some((asset) => !inspectionFor(order, asset, "check_in"));
+          const finishReturn = actionButton("Далее", transitionAction("returned"), order.id, "primary");
+          const canFinishReturn = () => order.assets.length > 0 && order.assets.every((asset) => Boolean(inspectionFor(order, asset, "check_in")));
+          const returnHint = document.createElement("p"); returnHint.className = "workflow-hint";
+          const updateReturnHint = () => {
+            const unchecked = order.assets.filter((asset) => !inspectionFor(order, asset, "check_in")).length;
+            returnHint.textContent = unchecked
+              ? `Проверьте каждый экземпляр при возврате: осталось ${unchecked}. Затем нажмите «Далее», чтобы завершить возврат.`
+              : "Проверка завершена. Нажмите «Далее», чтобы закрыть возврат.";
+            returnHint.hidden = canFinishReturn();
+          };
+          finishReturn.disabled = !canFinishReturn();
+          finishReturn.title = finishReturn.disabled ? "Сначала проверьте каждый возвращённый экземпляр" : "Завершить возврат";
           appendInspectionGroup(actions, order, "check_in", () => {
-            finishReturn.disabled = order.assets.some((asset) => !inspectionFor(order, asset, "check_in"));
+            finishReturn.disabled = !canFinishReturn();
+            finishReturn.title = finishReturn.disabled ? "Сначала проверьте каждый возвращённый экземпляр" : "Завершить возврат";
+            updateReturnHint();
           });
+          updateReturnHint(); actions.append(returnHint, finishReturn);
         }
         card.append(actions);
         if (state.role?.admin) {
@@ -1010,7 +1049,7 @@
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
   for (const id of ["start", "end"]) {
-    for (const part of ["date", "time"]) $(`${id}-${part}`).addEventListener("input", () => { syncDateTime(id); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
+    for (const part of ["date", "time"]) $(`${id}-${part}`).addEventListener("input", () => { syncDateTime(id); applyBookingDateLimits(); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
   }
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; fieldError(id, ""); });
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
@@ -1025,7 +1064,7 @@
 
   const hasDraft = restoreDraft();
   void pruneExpiredIdentityPhotos();
-  syncDateFields("start"); syncDateFields("end");
+  syncDateFields("start"); syncDateFields("end"); applyBookingDateLimits();
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);

@@ -53,7 +53,8 @@ def configure(monkeypatch):
 
 def create_confirmed(client, headers):
     save_equipment("CAM-01", "Камера", "Кинокамера", "100", "available")
-    start, end = now() + timedelta(hours=3), now() + timedelta(hours=5)
+    start = now() + timedelta(days=4, hours=3)
+    end = start + timedelta(hours=2)
     article_id = availability(start, end)[0]["id"]
     payload = {"request_id": str(uuid4()), "start": start.isoformat(), "end": end.isoformat(),
                "lines": [{"article_id": article_id, "quantity": 1}], "name": "Анна",

@@ -29,7 +29,8 @@ def article_with_assets(prefix, count, rate="100", category=None, health=None, c
 
 def test_quantity_booking_concurrency_and_buffer():
     article_id = article_with_assets("CAM", 2)
-    start, end = now() + timedelta(hours=4), now() + timedelta(hours=6)
+    start = now() + timedelta(days=4, hours=4)
+    end = start + timedelta(hours=2)
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(create_booking, customer, f"Клиент {customer}", "@test",
                                start, end, [{"article_id": article_id, "quantity": 2}])
@@ -51,7 +52,8 @@ def test_dependencies_assignment_checks_and_return_repair():
     camera_id = article_with_assets("CAMERA", 1)
     cable_id = article_with_assets("CABLE", 1, "20")
     save_dependency(camera_id, cable_id, quantity=1, billable=False)
-    start, end = now() + timedelta(hours=3), now() + timedelta(hours=5)
+    start = now() + timedelta(days=4, hours=3)
+    end = start + timedelta(hours=2)
     booking_id = create_booking(7, "Анна", "+70000000000", start, end,
                                     [{"article_id": camera_id, "quantity": 1}, {"article_id": cable_id, "quantity": 1}], expected_total="240.00")
     booking = get_booking(booking_id)
@@ -108,7 +110,8 @@ def test_each_selected_item_is_booked_separately():
     camera_id = article_with_assets("CAMERA-PRICE", 1, "3500")
     battery_id = article_with_assets("BAT-PRICE", 3, "350")
     save_dependency(camera_id, battery_id, quantity=2, billable=False)
-    start, end = now() + timedelta(hours=3), now() + timedelta(hours=7)
+    start = now() + timedelta(days=4, hours=3)
+    end = start + timedelta(hours=4)
     camera_only = create_booking(31, "Клиент", "@client", start, end,
                                  [{"article_id": camera_id, "quantity": 1}], expected_total="14000.00")
     assert len(get_booking(camera_only).lines) == 1
@@ -124,7 +127,8 @@ def test_each_selected_item_is_booked_separately():
 
 def test_low_battery_cannot_be_assigned():
     article_id = article_with_assets("BAT", 1, category="battery", health=79, charge=100)
-    start, end = now() + timedelta(hours=3), now() + timedelta(hours=4)
+    start = now() + timedelta(days=4, hours=3)
+    end = start + timedelta(hours=1)
     booking_id = create_booking(1, "Клиент", "@client", start, end,
                                 [{"article_id": article_id, "quantity": 1}])
     transition(booking_id, "confirmed", 10)
