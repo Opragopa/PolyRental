@@ -214,6 +214,8 @@ class IdentityDocument(Base):
     encrypted_data: Mapped[bytes] = mapped_column(LargeBinary)
     nonce: Mapped[bytes] = mapped_column(LargeBinary)
     size: Mapped[int] = mapped_column(Integer)
+    encrypted_check: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    check_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     __table_args__ = (UniqueConstraint("identity_id", "kind", name="identity_document_kind_unique"),)
 
 
@@ -352,6 +354,11 @@ def init_db():
             columns = _columns(connection, "customer_identities")
             if "review_fields" not in columns:
                 connection.execute(text("ALTER TABLE customer_identities ADD COLUMN review_fields TEXT NOT NULL DEFAULT '[]'"))
+        if "identity_documents" in tables:
+            columns = _columns(connection, "identity_documents")
+            for name in ("encrypted_check", "check_nonce"):
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE identity_documents ADD COLUMN {name} BYTEA"))
         if "booking_lines" in tables:
             columns = _columns(connection, "booking_lines")
             if "billable_quantity" not in columns:

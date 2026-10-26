@@ -33,6 +33,7 @@ from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .booking_messages import booking_status_text
 from .notification_outbox import notify
 from . import __version__
+from .roles import configured_ids, is_staff, role_for, audit_admin_access
 from .db import BookingDocument, Inspection, Session
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
@@ -114,11 +115,11 @@ def require_customer(x_telegram_init_data: str = Header(default="")):
 
 
 def _ids(name):
-    return {int(value.strip()) for value in os.getenv(name, "").split(",") if value.strip().isdigit()}
+    return configured_ids(name)
 
 
 def require_admin(user=Depends(require_customer)):
-    if user["id"] not in _ids("ADMIN_IDS") and user["id"] not in pii_admin_ids():
+    if not is_staff(user["id"]):
         raise HTTPException(403, "Доступ только для сотрудников")
     return user
 
@@ -309,8 +310,10 @@ async def create_customer_booking(payload: BookingRequest, background_tasks: Bac
 
 @router.get("/api/miniapp/me")
 async def current_role(user=Depends(require_customer)):
-    return {"id": user["id"], "admin": user["id"] in _ids("ADMIN_IDS") or user["id"] in pii_admin_ids(),
-            "pii_admin": user["id"] in pii_admin_ids()}
+    role = role_for(user["id"])
+    if role["admin"]:
+        audit_admin_access(user["id"], "miniapp")
+    return role
 
 
 @router.get("/api/miniapp/bookings")

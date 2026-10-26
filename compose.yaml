@@ -44,7 +44,7 @@ services:
       retries: 20
   test:
     build: .
-    command: pytest -q
+    command: sh -c "alembic upgrade head && pytest -q"
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:polyrental_test@db_test:5432/polyrental_test
     depends_on:

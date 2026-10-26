@@ -20,6 +20,7 @@ from .db import init_db
 from .booking_messages import booking_status_text
 from .notification_outbox import notify
 from .miniapp import BookingRequest
+from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 
 router = Router()
@@ -69,7 +70,7 @@ def booking_created_text(booking):
 
 
 def is_admin(user_id):
-    return str(user_id) in {v.strip() for v in os.getenv("ADMIN_IDS", "").split(",")}
+    return is_staff(user_id)
 
 
 def format_items(items):
@@ -89,8 +90,9 @@ def miniapp_url():
 
 
 def main_keyboard():
-    app_url = miniapp_url()
-    book_button = KeyboardButton(text="Забронировать", web_app=WebAppInfo(url=app_url)) if app_url else KeyboardButton(text="Забронировать")
+    # Reply-keyboard WebApps may lack signed initData. Launch through the
+    # message handler's inline WebApp so every role is authenticated by API.
+    book_button = KeyboardButton(text="Забронировать")
     return ReplyKeyboardMarkup(keyboard=[[book_button], [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Связаться с менеджером")]], resize_keyboard=True)
 
 
@@ -110,8 +112,7 @@ def equipment_keyboard(items, selected):
 async def notify_managers(_bot, booking_id):
     message = (f"<b>Новая заявка №{booking_id}</b>\n"
                f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
-    recipients = [int(admin_id.strip()) for admin_id in os.getenv("ADMIN_IDS", "").split(",")
-                  if admin_id.strip().isdigit()]
+    recipients = configured_ids("ADMIN_IDS")
     await asyncio.gather(*(notify(booking_id, recipient_id, "booking_created", message)
                            for recipient_id in recipients))
 
@@ -173,8 +174,11 @@ async def start(message: Message, state: FSMContext):
 @router.message(F.text == "Забронировать")
 async def book(message: Message, state: FSMContext):
     if miniapp_url():
+        staff = is_staff(message.from_user.id)
+        if staff:
+            audit_admin_access(message.from_user.id, "bot_book")
         await message.answer("Откройте удобную форму бронирования или продолжите в чате.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=miniapp_url()))],
+            [InlineKeyboardButton(text="Открыть управление" if staff else "Открыть приложение", web_app=WebAppInfo(url=miniapp_url()))],
             [InlineKeyboardButton(text="Бронировать в чате", callback_data="rent:chat")],
         ]))
         return
@@ -420,8 +424,8 @@ async def support_message(message: Message, state: FSMContext, bot: Bot):
     if not message.text or not message.text.strip():
         return await message.answer("Отправьте вопрос текстом.")
     name = message.from_user.full_name or "Клиент"
-    for admin_id in os.getenv("ADMIN_IDS", "").split(","):
-        if admin_id.strip().isdigit():
+    for admin_id in configured_ids("ADMIN_IDS"):
+        if admin_id:
             try:
                 await bot.send_message(int(admin_id), f"<b>Вопрос от клиента</b> · {html.escape(name)} (Telegram ID <code>{message.from_user.id}</code>)\n{html.escape(message.text[:3000])}\nОтветить: <code>/reply {message.from_user.id} ТЕКСТ</code>", parse_mode=ParseMode.HTML)
             except Exception:
@@ -511,6 +515,7 @@ async def change(message: Message, bot: Bot):
 
 
 async def main():
+    validate_role_config()
     await asyncio.to_thread(init_db)
     token = os.getenv("BOT_TOKEN", "")
     if not token:

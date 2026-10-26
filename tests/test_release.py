@@ -16,7 +16,7 @@ def test_release_version_is_visible_and_matches_health(application):
         assert f'content="{__version__}"' in page.text
         assert f'>v{__version__}</span>' in page.text
         assert "__APP_VERSION__" not in page.text
-        for asset in ["app.js", "style.css"]:
+        for asset in ["range-calendar.js", "app.js", "style.css"]:
             url = f"/miniapp/static/{asset}?v={__version__}"
             assert url in page.text
             assert client.get(url).status_code == 200

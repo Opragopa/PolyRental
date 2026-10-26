@@ -3,6 +3,9 @@ import os
 import pytest
 from sqlalchemy import delete
 
+# Test-only default; deployment still fails fast without ADMIN_IDS.
+os.environ.setdefault("ADMIN_IDS", "100")
+
 from app.db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingItem,
                     BookingLine, CustomerIdentity, Equipment, IdentityDocument, Inspection,
                     NotificationDelivery, Occupancy, PIIAudit, PrivacyConsent, RepairTicket, Session, init_db)

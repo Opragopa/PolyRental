@@ -16,7 +16,7 @@
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
   let contactEdited = false;
-  const datePicker = { target: null, month: null };
+  let rangeCalendar = null;
   const identityPhotoDrafts = new Map();
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
@@ -46,7 +46,6 @@
     return `<div class="${className}-placeholder" aria-label="${escapeHtml(meta[0])}"><span aria-hidden="true">${meta[1]}</span><small>${escapeHtml(meta[0])}</small></div>`;
   }
   function conditionLabel(condition) { return ({ available: "Доступен", maintenance: "На ремонте", retired: "Выведен из эксплуатации" })[condition] || condition; }
-  function minutes() { return Math.round((new Date(toIso($("end").value)) - new Date(toIso($("start").value))) / 60000); }
   function toIso(value) {
     const text = String(value || "").trim();
     let match = text.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
@@ -54,34 +53,17 @@
     match = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     return match ? `${text}:00+03:00` : "";
   }
-  function pickerText(value) {
-    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-    return match ? `${match[3]}.${match[2]}.${match[1]} ${match[4]}:${match[5]}` : "";
-  }
   function datePickerText(value) {
-    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return match ? `${match[3]}.${match[2]}.${match[1]}` : "Выберите дату";
-  }
-  function isIsoDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")); }
-  function monthStart(value) { return `${value.slice(0, 7)}-01`; }
-  function daysInMonth(value) {
-    const [year, month] = value.slice(0, 7).split("-").map(Number);
-    return new Date(Date.UTC(year, month, 0)).getUTCDate();
-  }
-  function weekdayOffset(value) { return (new Date(`${value}T12:00:00Z`).getUTCDay() + 6) % 7; }
-  function refreshDatePickerButton(id) {
-    const button = $(`${id}-date-picker`); const value = $(`${id}-date`).value;
-    button.textContent = datePickerText(value); button.classList.toggle("empty", !value);
+    return value ? new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "short"}).format(new Date(`${value}T12:00:00Z`)) : "дата";
   }
   function syncDateTime(id) {
-    const date = $(`${id}-date`).value; const time = $(`${id}-time`).value;
-    $(id).value = date && time ? `${date}T${time}` : ""; refreshDatePickerButton(id);
+    const date = $(`${id}-date`).value, time = $(`${id}-time`).value;
+    $(id).value = date && time ? `${date}T${time}` : "";
   }
   function syncDateFields(id) {
     const match = String($(id).value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-    if (match) { $(`${id}-date`).value = match[1]; $(`${id}-time`).value = match[2]; }
-    else { $(`${id}-date`).value = ""; $(`${id}-time`).value = ""; }
-    refreshDatePickerButton(id);
+    $(`${id}-date`).value = match?.[1] || "";
+    $(`${id}-time`).value = match?.[2] || "12:00";
   }
   function moscowDateIso(date = new Date()) {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -89,71 +71,41 @@
     }).formatToParts(date).map((part) => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
   }
-  function addIsoDays(value, days) {
-    const [year, month, day] = value.split("-").map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day + days));
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  const addIsoDays = window.PolyRentalCalendar.addDays;
+  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 4); }
+  function bookingDateLabel(value) {
+    return new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long"}).format(new Date(`${value}T12:00:00Z`));
+  }
+  function dateValidationMessage() {
+    return window.PolyRentalCalendar.periodError($("start").value, $("end").value, minimumBookingDate());
+  }
+  function applyBookingDateLimits() {
+    $("start-hint").textContent = `Выдача с ${bookingDateLabel(minimumBookingDate())}. Время по Москве.`;
+    for (const id of ["start", "end"]) {
+      $(`${id}-time-label`).textContent = `${id === "start" ? "Начало" : "Конец"} (${$(`${id}-date`).value ? datePickerText($(`${id}-date`).value) : "дата"})`;
+      $(`${id}-time`).disabled = !$("end-date").value;
+    }
+    const start = $("start").value, end = $("end").value;
+    $("period-summary").textContent = start && end ? `${datePickerText($("start-date").value)}, ${$("start-time").value} — ${datePickerText($("end-date").value)}, ${$("end-time").value} · МСК` : $("start-date").value ? `${datePickerText($("start-date").value)} — выберите конец` : "Выберите начало и конец";
+    $("period-error").textContent = dateValidationMessage();
+  }
+  function periodChanged() {
+    syncDateTime("start"); syncDateTime("end"); applyBookingDateLimits();
+    state.items = []; state.quantities.clear(); state.requestId = null;
+    fieldError("start", ""); fieldError("end", ""); saveDraft(); render();
   }
   function applyDuration(days) {
     if (!Number.isInteger(days) || days < 1 || days > 365) { fieldError("end", "Укажите срок от 1 до 365 суток."); return; }
-    if (!$("start-date").value || !$("start-time").value) { fieldError("start", "Сначала выберите дату и время выдачи."); return; }
+    if (!$("start-date").value) { fieldError("start", "Сначала выберите дату выдачи."); return; }
     $("end-date").value = addIsoDays($("start-date").value, days);
     $("end-time").value = $("start-time").value;
-    syncDateTime("end"); applyBookingDateLimits();
-    state.items = []; state.quantities.clear(); state.requestId = null;
-    fieldError("start", ""); fieldError("end", ""); saveDraft();
-  }
-  function bookingDateLabel(value) {
-    return new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })
-      .format(new Date(`${value}T12:00:00Z`));
-  }
-  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 4); }
-  function applyBookingDateLimits() {
-    const min = minimumBookingDate();
-    const endMin = $("start-date").value >= min ? $("start-date").value : min;
-    $("start-hint").textContent = `Доступно с ${bookingDateLabel(min)}; даты ближайших трёх дней закрыты.`;
-    $("end-hint").textContent = `Возврат — позже выдачи, не раньше ${bookingDateLabel(endMin)}.`;
-  }
-  function openDatePicker(id) {
-    datePicker.target = id;
-    const selected = $(`${id}-date`).value;
-    datePicker.month = monthStart(isIsoDate(selected) ? selected : minimumBookingDate());
-    renderDatePicker(); $("calendar-dialog").hidden = false;
-  }
-  function closeDatePicker() { $("calendar-dialog").hidden = true; datePicker.target = null; }
-  function renderDatePicker() {
-    const target = datePicker.target; if (!target || !datePicker.month) return;
-    const min = target === "start" ? minimumBookingDate() : ($("start-date").value || minimumBookingDate());
-    $("calendar-title").textContent = new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" }).format(new Date(`${datePicker.month}T12:00:00Z`));
-    const grid = $("calendar-days"); grid.replaceChildren();
-    for (let index = 0; index < weekdayOffset(datePicker.month); index += 1) grid.append(document.createElement("span"));
-    for (let day = 1; day <= daysInMonth(datePicker.month); day += 1) {
-      const value = `${datePicker.month.slice(0, 7)}-${String(day).padStart(2, "0")}`;
-      const button = document.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.textContent = String(day);
-      button.disabled = value < min; button.setAttribute("role", "gridcell");
-      if (value === $(`${target}-date`).value) button.classList.add("selected");
-      button.addEventListener("click", () => selectCalendarDate(target, value)); grid.append(button);
-    }
-    $("calendar-prev").disabled = datePicker.month <= monthStart(min);
-  }
-  function selectCalendarDate(id, value) {
-    const previousStart = $("start-date").value;
-    $(`${id}-date`).value = value;
-    if (id === "start" && (!$("end-date").value || $("end-date").value <= value || previousStart !== value)) {
-      $("end-date").value = addIsoDays(value, 1); $("end-time").value = $("start-time").value || "12:00";
-    }
-    syncDateTime("start"); syncDateTime("end"); applyBookingDateLimits();
-    state.items = []; state.quantities.clear(); state.requestId = null;
-    fieldError(id, ""); saveDraft(); closeDatePicker();
+    rangeCalendar.setRange($("start-date").value, $("end-date").value); periodChanged();
   }
   function ensureBookingPeriod() {
-    const min = minimumBookingDate(); const startDate = $("start-date").value; const endDate = $("end-date").value;
-    const validTime = (value) => /^\d{2}:\d{2}$/.test(value || "");
-    if (!isIsoDate(startDate) || startDate < min || !isIsoDate(endDate) || endDate <= startDate || !validTime($("start-time").value) || !validTime($("end-time").value)) {
-      $("start-date").value = min; $("end-date").value = addIsoDays(min, 1); $("start-time").value = "12:00"; $("end-time").value = "12:00";
-      state.quantities.clear(); syncDateTime("start"); syncDateTime("end"); saveDraft(); return false;
+    if ($("start-date").value && $("start-date").value < minimumBookingDate()) {
+      $("start").value = ""; $("end").value = ""; syncDateFields("start"); syncDateFields("end"); state.quantities.clear(); return false;
     }
-    syncDateTime("start"); syncDateTime("end"); return true;
+    return Boolean($("start-date").value && $("end-date").value);
   }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
   function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
@@ -179,7 +131,7 @@
     showError(error?.message || "Не удалось сохранить анкету. Проверьте введённые данные и попробуйте ещё раз.");
   }
   function fieldError(id, message) {
-    const input = $(id); const focusTarget = $(`${id}-date-picker`) || $(`${id}-date`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
+    const input = $(id); const focusTarget = $(`${id}-time`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
     focusTarget.setAttribute("aria-invalid", String(Boolean(message)));
     error.textContent = message || ""; error.hidden = !message;
     if (message) focusTarget.focus();
@@ -348,6 +300,7 @@
   }
 
   function render() {
+    document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 0);
     const done = state.step === 4;
     $("booking-flow").hidden = state.view !== "flow";
     $("orders-panel").hidden = state.view !== "orders";
@@ -373,13 +326,13 @@
     const showAction = state.view === "flow" && !done;
     $("action-bar").hidden = !showAction || nativeButtons;
     $("back-button").hidden = state.step === 0;
-    const labels = ["Показать оборудование", "Продолжить", "Проверить заказ", "Подтвердить бронирование"];
+    const labels = ["Продолжить", "Продолжить", "Проверить заказ", "Подтвердить бронирование"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
-    $("main-button").disabled = state.busy || (!authorized && !keyboardMode && !preview);
+    $("main-button").disabled = state.busy || (state.step === 0 && Boolean(dateValidationMessage())) || (!authorized && !keyboardMode && !preview);
     if (nativeButtons) {
       tg.MainButton.setText(state.busy ? "Подождите…" : labels[state.step] || "Продолжить");
       if (showAction) tg.MainButton.show(); else tg.MainButton.hide();
-      if (state.busy) tg.MainButton.disable(); else tg.MainButton.enable();
+      if ($("main-button").disabled) tg.MainButton.disable(); else tg.MainButton.enable();
       if (state.step > 0 && !done && state.view === "flow") tg.BackButton?.show(); else tg.BackButton?.hide();
       if (state.busy) tg.MainButton.showProgress?.(); else tg.MainButton.hideProgress?.();
     }
@@ -389,17 +342,8 @@
   }
 
   function validateDates() {
-    clearError(); fieldError("start", ""); fieldError("end", "");
-    if (!$("start").value) { fieldError("start", "Выберите дату и время выдачи."); return false; }
-    if (!$("end").value) { fieldError("end", "Выберите дату и время возврата."); return false; }
-    const startIso = toIso($("start").value); const endIso = toIso($("end").value);
-    if (!startIso) { fieldError("start", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
-    if (!endIso) { fieldError("end", "Введите дату в формате ДД.ММ.ГГГГ ЧЧ:ММ."); return false; }
-    const minDate = minimumBookingDate();
-    if ($("start-date").value < minDate) { fieldError("start", `Выберите дату выдачи не раньше ${bookingDateLabel(minDate)}.`); return false; }
-    if ($("end-date").value < minDate) { fieldError("end", `Выберите дату возврата не раньше ${bookingDateLabel(minDate)}.`); return false; }
-    if (new Date(startIso) < new Date(Date.now() - 60000)) { fieldError("start", "Начало аренды должно быть в будущем."); return false; }
-    if (minutes() <= 0) { fieldError("end", "Возврат должен быть позже выдачи."); return false; }
+    clearError(); applyBookingDateLimits();
+    if (dateValidationMessage()) { render(); return false; }
     return true;
   }
   function validateContacts() {
@@ -792,7 +736,7 @@
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id,
-            order.identity_status === "verified" ? "secondary lock-exempt" : "primary workflow-next lock-exempt"));
+            order.identity_status === "verified" ? "secondary lock-exempt" : "primary workflow-next lock-exempt", false));
           const documents = document.createElement("details"); documents.className = "document-actions";
           documents.innerHTML = `<summary>Документы анкеты</summary><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
           const passport = document.createElement("div"); passport.className = "document-group";
@@ -945,11 +889,38 @@
 
   async function reviewIdentity(bookingId) {
     const masked = await api(`/api/miniapp/admin/bookings/${bookingId}/identity`);
-    if (!window.confirm(`Анкета: ${masked.full_name}\nПаспорт: ${masked.passport}\nСтуденческий: ${masked.student_id}\n\nРаскрыть полные реквизиты? Действие будет записано в журнал.`)) return;
-    const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
-    const approved = window.confirm(`ФИО: ${full.full_name}\nДата рождения: ${full.birth_date}\nПаспорт: ${full.passport_series} ${full.passport_number}\nВыдан: ${full.passport_issued_at}, ${full.passport_issuer}\nКод: ${full.passport_division_code}\nРегистрация: ${full.registration_address}\nПроживание: ${full.residential_address}\nСтуденческий: ${full.student_id_number}, ${full.student_institution}\n\nПодтвердить после сверки фотографий?`);
-    if (approved) return api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
-    return requestIdentityChanges(bookingId);
+    const reasons = {
+      manual_review: "Нужна ручная проверка", student_text: "Найдены признаки студенческого билета",
+      other_document: "Найдены признаки другого документа", blank_image: "Признаки документа не обнаружены: однотонное фото",
+      uncertain: "Недостаточно признаков: возможны блики или нечёткое фото",
+      unavailable: "Локальная проверка недоступна", timeout: "Время проверки истекло",
+    };
+    const labels = {passport_main: "Паспорт: фото", passport_registration: "Паспорт: регистрация", student_front: "Студенческий"};
+    document.querySelector(".identity-check-review")?.remove();
+    const card = document.createElement("section"); card.className = "admin-card identity-check-review";
+    card.setAttribute("aria-label", "Результаты проверки документов");
+    const title = document.createElement("h3"); title.textContent = `Проверка анкеты · №${bookingId}`; card.append(title);
+    for (const [kind, check] of Object.entries(masked.document_checks || {})) {
+      const row = document.createElement("p");
+      row.textContent = `${labels[kind] || kind}: ${check.document === "document" ? "документ" : check.document === "not_document" ? "не документ" : "не определено"}, ${check.student === "student" ? "студенческий" : check.student === "other" ? "другой документ" : "тип не определён"}. ${reasons[check.reason] || reasons.manual_review}.`;
+      card.append(row);
+    }
+    const notice = document.createElement("p"); notice.textContent = "Предварительный результат. Сверьте фотографии и реквизиты перед ручным решением."; card.append(notice);
+    const actions = document.createElement("div"); actions.className = "action-row";
+    actions.append(actionButton("Раскрыть реквизиты", async () => {
+      const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
+      const details = document.createElement("p"); details.className = "identity-revealed";
+      details.textContent = `ФИО: ${full.full_name}. Дата рождения: ${full.birth_date}. Паспорт: ${full.passport_series} ${full.passport_number}. Выдан: ${full.passport_issued_at}, ${full.passport_issuer}. Код: ${full.passport_division_code}. Регистрация: ${full.registration_address}. Проживание: ${full.residential_address}. Студенческий: ${full.student_id_number}, ${full.student_institution}.`;
+      card.querySelector(".identity-revealed")?.remove(); card.append(details);
+    }, bookingId, "secondary", false));
+    actions.append(actionButton("Подтвердить документы", async () => {
+      if (!window.confirm("Фотографии и реквизиты сверены? Подтвердить документы?")) return;
+      await api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
+    }, bookingId, "primary"));
+    actions.append(actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost"));
+    const close = document.createElement("button"); close.className = "button ghost"; close.type = "button"; close.textContent = "Закрыть";
+    close.addEventListener("click", () => card.remove()); actions.append(close); card.append(actions);
+    $("admin-content").prepend(card); card.scrollIntoView({behavior:"smooth", block:"start"});
   }
 
   function requestIdentityChanges(bookingId) {
@@ -1312,13 +1283,13 @@
     clearError(); state.view = "flow";
     if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; }
     syncDateFields("start"); syncDateFields("end");
-    render();
+    rangeCalendar.setRange($("start-date").value, $("end-date").value); applyBookingDateLimits(); render();
   });
   $("tab-orders").addEventListener("click", showOrders);
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
   $("identity-close").addEventListener("click", () => { $("identity-form").reset(); state.consent = null; state.identityBookingId = null; showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer(); if (event.key === "Escape" && !$("calendar-dialog").hidden) closeDatePicker(); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer();  });
   $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("consent-next").addEventListener("click", async () => {
@@ -1345,14 +1316,8 @@
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
-  for (const id of ["start", "end"]) {
-    $(`${id}-time`).addEventListener("input", () => { syncDateTime(id); applyBookingDateLimits(); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
-    $(`${id}-date-picker`).addEventListener("click", () => openDatePicker(id));
-  }
-  $("calendar-prev").addEventListener("click", () => { datePicker.month = addIsoDays(datePicker.month, -1).slice(0, 7) + "-01"; renderDatePicker(); });
-  $("calendar-next").addEventListener("click", () => { datePicker.month = addIsoDays(datePicker.month, daysInMonth(datePicker.month)).slice(0, 7) + "-01"; renderDatePicker(); });
-  $("calendar-close").addEventListener("click", closeDatePicker);
-  $("calendar-dialog").addEventListener("click", (event) => { if (event.target === $("calendar-dialog")) closeDatePicker(); });
+  for (const id of ["start", "end"]) $(`${id}-time`).addEventListener("input", periodChanged);
+  $("period-clear").addEventListener("click", () => rangeCalendar.reset());
   document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
   $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });
@@ -1371,6 +1336,10 @@
   void pruneExpiredIdentityPhotos();
   syncDateFields("start"); syncDateFields("end");
   const restoredPeriod = ensureBookingPeriod(); applyBookingDateLimits();
+  rangeCalendar = new window.PolyRentalCalendar.RangeCalendar($("range-calendar"), {
+    minimum: minimumBookingDate(), start: $("start-date").value, end: $("end-date").value,
+    onChange: ({start, end}) => { $("start-date").value = start; $("end-date").value = end; periodChanged(); },
+  });
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
@@ -1381,9 +1350,11 @@
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
   else if (hasDraft && restoredPeriod) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
   if (nativeButtons) { tg.MainButton.onClick(next); tg.BackButton?.onClick(back); tg.expand?.(); }
-  if (authorized) api("/api/miniapp/me").then((role) => { state.role = role; $("tab-admin").hidden = !role.admin; }).catch(() => {});
+  if (authorized) api("/api/miniapp/me").then((role) => { state.role = role; $("tab-admin").hidden = !role.admin; if (role.admin) { $("tab-new").textContent = "Как клиент"; return showAdmin("orders"); } }).catch(() => {});
   tg?.onEvent?.("activated", () => { if (state.view === "orders") showOrders(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "orders") showOrders(); });
+  const applyTheme = () => { document.documentElement.dataset.theme = tg?.colorScheme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); };
+  applyTheme(); tg?.onEvent?.("themeChanged", applyTheme);
   tg?.ready?.();
   render();
 })();

@@ -15,7 +15,7 @@ def test_http_entry_requires_explicit_test_environment(monkeypatch, flag):
     monkeypatch.setenv("PUBLIC_URL", "http://192.0.2.1:8002/")
     if flag == "1":
         assert miniapp_url() == "http://192.0.2.1:8002/miniapp"
-        assert main_keyboard().keyboard[0][0].web_app.url == miniapp_url()
+        assert main_keyboard().keyboard[0][0].web_app is None
     else:
         assert miniapp_url() is None
         assert main_keyboard().keyboard[0][0].web_app is None

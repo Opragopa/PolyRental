@@ -29,9 +29,11 @@ if ($headCommit -ne $ExpectedCommit) { throw 'Production checkout does not conta
 $compose = @('compose', '-f', 'compose.yaml', '-f', 'compose.miniapp.yaml', '-f', 'compose.public.yaml')
 & docker @compose up -d db
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start PostgreSQL' }
+& docker @compose build bot miniapp
+if ($LASTEXITCODE -ne 0) { throw 'Unable to build the release images' }
 & docker @compose run --rm miniapp alembic upgrade head
 if ($LASTEXITCODE -ne 0) { throw 'Database migrations did not apply' }
-& docker @compose up -d --build bot miniapp nginx
+& docker @compose up -d bot miniapp nginx
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start production services' }
 
 for ($attempt = 1; $attempt -le 12; $attempt++) {
