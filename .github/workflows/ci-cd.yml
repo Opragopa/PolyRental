@@ -12,9 +12,9 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run tests in the isolated PostgreSQL service
         run: docker compose --profile test run --rm --build test
 
