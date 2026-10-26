@@ -7,12 +7,14 @@
   const keyboardMode = !authorized && !preview && Boolean(tg?.sendData) && Boolean(tg?.platform) && tg.platform !== "unknown";
   const nativeButtons = (authorized || keyboardMode) && Boolean(tg?.MainButton);
   const draftKey = "polyrental-booking-draft-v1";
+  const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
+  let contactEdited = false;
   const identityPhotoDrafts = new Map();
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
@@ -120,6 +122,31 @@
     return false;
   }
   function clearDraft() { try { localStorage.removeItem(draftKey); } catch (_) { /* no persistent draft */ } }
+  function saveContact() {
+    try {
+      localStorage.setItem(contactKey, JSON.stringify({ name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim() }));
+    } catch (_) { /* storage can be disabled */ }
+  }
+  function restoreContact() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(contactKey) || "null");
+      if (!saved || typeof saved.name !== "string" || typeof saved.contact !== "string") return false;
+      $("customer-name").value = saved.name.slice(0, 200);
+      $("customer-contact").value = saved.contact.slice(0, 200);
+      return Boolean(saved.name || saved.contact);
+    } catch (_) { return false; }
+  }
+  async function restoreLastBookingContact(hasSavedContact) {
+    if (!authorized || hasSavedContact) return;
+    try {
+      const result = await api("/api/miniapp/bookings");
+      const recent = result.items?.[0];
+      if (!recent || contactEdited) return;
+      if (recent.customer_name) $("customer-name").value = recent.customer_name;
+      if (recent.customer_contact) $("customer-contact").value = recent.customer_contact;
+      saveContact();
+    } catch (_) { /* Telegram profile remains available as a fallback */ }
+  }
 
   function openPhotoDraftDb() {
     if (!window.indexedDB) return Promise.reject(new Error("Хранилище временных фото недоступно"));
@@ -438,6 +465,9 @@
       try {
         const data = new FormData(form);
         await api(`/api/miniapp/bookings/${order.id}/contact`, { method: "PATCH", body: JSON.stringify({ name: data.get("name"), contact: data.get("contact") }) });
+        $("customer-name").value = String(data.get("name") || "").trim();
+        $("customer-contact").value = String(data.get("contact") || "").trim();
+        saveContact();
         await showOrders();
       } catch (error) { showError(error.message); button.disabled = false; }
     });
@@ -745,18 +775,12 @@
         if (["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status)) {
           const lease = order.operation_lease;
           const mine = lease?.actor_id === state.role?.id;
-          const ownership = document.createElement("p"); ownership.className = "workflow-hint";
-          ownership.textContent = lease ? `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name}. Захват действует до ${dateText(lease.expires_at)} МСК.` : "Этап свободен для обработки.";
-          const claim = document.createElement("button"); claim.type = "button"; claim.className = "button ghost compact";
-          claim.textContent = mine ? "Освободить этап" : "Взять этап в работу";
-          claim.disabled = Boolean(lease && !mine);
-          claim.addEventListener("click", async () => {
-            claim.disabled = true;
-            try { await api(`/api/miniapp/admin/bookings/${order.id}/operation`, { method: mine ? "DELETE" : "POST" }); await showAdmin("orders"); }
-            catch (error) { claim.disabled = false; showError(error.message); }
-          });
-          if (lease && !mine) actions.querySelectorAll("button:not(.document-button):not(.lock-exempt)").forEach((button) => { button.disabled = true; });
-          card.append(ownership, claim);
+          if (lease) {
+            const ownership = document.createElement("p"); ownership.className = "workflow-hint";
+            ownership.textContent = `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name}. До ${dateText(lease.expires_at)} МСК.`;
+            card.append(ownership);
+            if (!mine) actions.querySelectorAll("button:not(.document-button):not(.lock-exempt)").forEach((button) => { button.disabled = true; });
+          }
         }
         card.append(actions);
         if (state.role?.admin) {
@@ -1138,7 +1162,7 @@
   $("back-button").addEventListener("click", back);
   $("tab-new").addEventListener("click", () => {
     clearError(); state.view = "flow";
-    if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; $("customer-name").value = ""; $("customer-contact").value = ""; }
+    if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; }
     syncDateFields("start"); syncDateFields("end");
     render();
   });
@@ -1178,7 +1202,7 @@
   }
   document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
   $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
-  for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; fieldError(id, ""); });
+  for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
   passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });
   const divisionInput = document.querySelector('[name="passport_division_code"]');
@@ -1190,13 +1214,14 @@
   registrationInput?.addEventListener("input", () => { if (sameAddressInput?.checked) residentialInput.value = registrationInput.value; });
 
   const hasDraft = restoreDraft();
+  const hasSavedContact = restoreContact();
   void pruneExpiredIdentityPhotos();
   syncDateFields("start"); syncDateFields("end"); applyBookingDateLimits();
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
-    if ($("customer-name").value) $("step-contact").querySelector(".supporting").textContent = "Имя взято из профиля Telegram — его можно исправить. Менеджер использует контакт только для согласования аренды и документов.";
   }
+  void restoreLastBookingContact(hasSavedContact);
   if (preview) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Демонстрация интерфейса: можно пройти шаги, но заявка не отправляется."; }
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
