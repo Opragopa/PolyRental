@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import parse_qsl, quote
+from urllib.parse import parse_qsl, urlencode
 from uuid import UUID
 
 import httpx
@@ -271,6 +271,15 @@ def miniapp_html():
 
 @router.get("/calendar/{token}.ics")
 def calendar_feed(token: str):
+    return _calendar_feed_response(token)
+
+
+@router.get("/calendar.ics")
+def calendar_feed_query(token: str = Query(min_length=1, max_length=512)):
+    return _calendar_feed_response(token)
+
+
+def _calendar_feed_response(token: str):
     expected = os.getenv("ICAL_TOKEN", "")
     if not expected or not hmac.compare_digest(token, expected):
         raise HTTPException(404)
@@ -550,7 +559,7 @@ async def admin_calendar_feed(user=Depends(require_admin)):
     token = os.getenv("ICAL_TOKEN", "").strip()
     if not public_url.startswith("https://") or not token:
         raise HTTPException(503, "Подписка календаря не настроена")
-    return {"url": f"{public_url}/calendar/{quote(token, safe='')}.ics"}
+    return {"url": f"{public_url}/calendar.ics?{urlencode({'token': token})}"}
 
 
 @router.delete("/api/miniapp/admin/bookings/{booking_id}")

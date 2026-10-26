@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from urllib.parse import quote
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -176,7 +176,7 @@ def calendar_page(request: Request):
     require_admin(request)
     bookings = [b for b in list_bookings(limit=None) if b.status in {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}]
     rows = "".join(f'<tr><td>#{b.id}</td><td>{b.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}</td><td>{b.status}</td></tr>' for b in sorted(bookings, key=lambda b: b.starts_at))
-    url = "/calendar/" + quote(os.getenv("ICAL_TOKEN", "")) + ".ics"
+    url = "/calendar.ics?" + urlencode({"token": os.getenv("ICAL_TOKEN", "")})
     return page("Календарь броней", f'<p><a href="/admin">← Заявки</a> · <a href="{url}">Подписка iCal</a></p><section><table><tr><th>Заявка</th><th>Начало МСК</th><th>Конец МСК</th><th>Статус</th></tr>{rows}</table></section>')
 
 
