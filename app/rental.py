@@ -12,9 +12,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingDocument,
+                 BookingOperationLease,
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
                  PrivacyConsent, RepairTicket, Session)
+from .schedule import response_deadline
 
 
 class Conflict(Exception):
@@ -22,10 +24,62 @@ class Conflict(Exception):
 
 
 ACTIVE_STATUSES = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+OPERATION_LEASE = timedelta(minutes=10)
 
 
 def now():
     return datetime.now(timezone.utc)
+
+
+def _claim_stage(session, booking, actor_id, actor_name="", stage=None):
+    """Call while holding the booking row lock to serialize competing claims."""
+    stage = stage or booking.status
+    lease = session.get(BookingOperationLease, (booking.id, stage))
+    current = now()
+    if lease and lease.expires_at > current and lease.actor_id != actor_id:
+        raise Conflict(f"Этап обрабатывает {lease.actor_name or f'оператор {lease.actor_id}'}. Попробуйте позже")
+    if lease is None:
+        lease = BookingOperationLease(booking_id=booking.id, stage=stage)
+        session.add(lease)
+    same_actor = lease.actor_id == actor_id if lease.actor_id is not None else False
+    lease.actor_id = actor_id
+    lease.actor_name = (actor_name or (lease.actor_name if same_actor else "")).strip()[:160] or f"оператор {actor_id}"
+    lease.expires_at = current + OPERATION_LEASE
+    return lease
+
+
+def claim_booking_operation(booking_id, actor_id, actor_name="", stage=None):
+    with Session.begin() as session:
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        if booking is None:
+            raise ValueError("Заявка не найдена")
+        if booking.status not in ACTIVE_STATUSES:
+            raise Conflict("Этот этап уже завершён")
+        lease = _claim_stage(session, booking, actor_id, actor_name, stage)
+        return {"stage": lease.stage, "actor_id": lease.actor_id,
+                "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat()}
+
+
+def release_booking_operation(booking_id, actor_id, stage=None):
+    with Session.begin() as session:
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        if booking is None:
+            raise ValueError("Заявка не найдена")
+        lease = session.get(BookingOperationLease, (booking_id, stage or booking.status))
+        if lease and lease.actor_id == actor_id:
+            session.delete(lease)
+        elif lease and lease.expires_at > now():
+            raise Conflict("Этап обрабатывает другой оператор")
+
+
+def active_operation_leases():
+    with Session() as session:
+        rows = session.execute(select(BookingOperationLease, Booking.status).join(
+            Booking, Booking.id == BookingOperationLease.booking_id).where(
+            BookingOperationLease.expires_at > now())).all()
+        return {lease.booking_id: {"stage": lease.stage, "actor_id": lease.actor_id,
+                                   "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat()}
+                for lease, status in rows if lease.stage == status}
 
 
 def validated_rate(value):
@@ -203,7 +257,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                 customer_id=customer_id, client_request_id=request_id,
                 customer_name=customer_name.strip(), customer_contact=customer_contact.strip(),
                 starts_at=start, ends_at=end, status="pending",
-                hold_expires_at=now() + timedelta(minutes=30), identity_status="not_required",
+                hold_expires_at=response_deadline(now()), identity_status="not_required",
             )
             session.add(booking)
             session.flush()
@@ -245,6 +299,12 @@ def delete_booking(booking_id, actor_id):
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if booking is None:
             raise ValueError("Заявка не найдена")
+
+        active_holder = session.scalar(select(BookingOperationLease).where(
+            BookingOperationLease.booking_id == booking_id,
+            BookingOperationLease.expires_at > now()).limit(1))
+        if active_holder:
+            raise Conflict("Освободите этап обработки перед удалением заявки")
 
         repair_tickets = session.scalars(select(RepairTicket).where(
             RepairTicket.booking_id == booking_id).with_for_update()).all()
@@ -343,12 +403,13 @@ def _validate_asset(asset, article_id):
             raise Conflict(f"Аккумулятор {asset.inventory_number}: заряд ниже 95%")
 
 
-def assign_booking_assets(booking_id, actor_id, assignments=None):
+def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name=""):
     with Session.begin() as session:
         booking = session.scalar(select(Booking).options(selectinload(Booking.lines)).where(
             Booking.id == booking_id).with_for_update())
         if not booking or booking.status not in {"confirmed", "preparing"}:
             raise Conflict("Комплектация доступна только для подтверждённого заказа")
+        _claim_stage(session, booking, actor_id, actor_name)
         if booking.identity_status != "verified":
             raise Conflict("Сначала клиент должен заполнить документы и пройти проверку у оператора")
         old_assets = set(session.scalars(select(BookingAsset.equipment_id).where(
@@ -389,12 +450,15 @@ def assign_booking_assets(booking_id, actor_id, assignments=None):
                 Inspection.equipment_id.in_(old_assets ^ new_assets)))
             booking.act_signed_at = booking.act_signed_by = None
         booking.status = "preparing"
+        old_lease = session.get(BookingOperationLease, (booking.id, "confirmed"))
+        if old_lease:
+            session.delete(old_lease)
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="preparing"))
         return booking.status
 
 
 def record_inspection(booking_id, equipment_id, stage, result, checklist, notes, actor_id,
-                      defect="", estimated_cost=0, charge_customer=False):
+                      defect="", estimated_cost=0, charge_customer=False, actor_name=""):
     if stage not in {"pre_issue", "check_in"} or result not in {"pass", "fail"}:
         raise ValueError("Неверный результат проверки")
     with Session.begin() as session:
@@ -402,6 +466,7 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
         expected_status = "preparing" if stage == "pre_issue" else "return_inspection"
         if not booking or booking.status != expected_status:
             raise ValueError("Проверка недоступна на текущем этапе заказа")
+        _claim_stage(session, booking, actor_id, actor_name)
         assigned = session.get(BookingAsset, (booking_id, equipment_id))
         if not assigned:
             raise ValueError("Экземпляр не назначен заказу")
@@ -433,10 +498,14 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
 
 def mark_act_signed(booking_id, actor_id):
     with Session.begin() as session:
-        booking = session.get(Booking, booking_id)
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if not booking or booking.status != "ready" or booking.identity_status != "verified":
             raise Conflict("Нужны готовый заказ и проверенные документы клиента")
+        if booking.act_signed_at:
+            raise Conflict("Подписание акта уже отмечено")
+        _claim_stage(session, booking, actor_id, stage="act_sign")
         booking.act_signed_at, booking.act_signed_by = now(), actor_id
+        session.delete(session.get(BookingOperationLease, (booking.id, "act_sign")))
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="act_signed"))
 
 
@@ -451,11 +520,11 @@ TRANSITIONS = {
 }
 
 
-def transition(booking_id, action, actor_id, customer_id=None):
+def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
     if customer_id is not None and action != "cancelled":
         raise Conflict("Клиент может только отменить свою заявку")
     if action == "preparing":
-        return assign_booking_assets(booking_id, actor_id)
+        return assign_booking_assets(booking_id, actor_id, actor_name=actor_name)
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if booking is None or (customer_id is not None and booking.customer_id != customer_id):
@@ -468,6 +537,8 @@ def transition(booking_id, action, actor_id, customer_id=None):
             return "expired"
         if action not in TRANSITIONS.get(booking.status, set()):
             raise Conflict("Недопустимое изменение статуса")
+        if customer_id is None:
+            _claim_stage(session, booking, actor_id, actor_name)
         if action == "confirmed":
             booking.identity_status = "required"
         elif action == "ready":
@@ -506,7 +577,11 @@ def transition(booking_id, action, actor_id, customer_id=None):
                 identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
                 if identity:
                     identity.delete_after = now() + timedelta(hours=24)
+        previous_status = booking.status
         booking.status = action
+        lease = session.get(BookingOperationLease, (booking.id, previous_status))
+        if lease:
+            session.delete(lease)
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=action))
         return booking.status
 

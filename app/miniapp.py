@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -37,11 +38,12 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identit
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
-from .rental import (Conflict, assign_booking_assets, availability, create_booking,
+from .rental import (Conflict, active_operation_leases, assign_booking_assets, availability,
+                     claim_booking_operation, create_booking,
                      close_repair, delete_booking, delete_dependency, get_booking,
                      list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
-                     record_inspection, save_article, save_dependency, save_equipment,
+                     record_inspection, release_booking_operation, save_article, save_dependency, save_equipment,
                      transition, update_booking_contact)
 from .universities import SAINT_PETERSBURG_UNIVERSITIES
 
@@ -117,6 +119,11 @@ def require_admin(user=Depends(require_customer)):
     if user["id"] not in _ids("ADMIN_IDS") and user["id"] not in pii_admin_ids():
         raise HTTPException(403, "Доступ только для сотрудников")
     return user
+
+
+def operator_name(user):
+    name = " ".join(filter(None, [user.get("first_name", ""), user.get("last_name", "")])).strip()
+    return name or (f"@{user['username']}" if user.get("username") else f"оператор {user['id']}")
 
 
 def require_pii_admin(user=Depends(require_customer)):
@@ -198,7 +205,9 @@ async def notify_new_booking(booking_id: int, customer_id: int):
     try:
         async with make_bot(token) as bot:
             await notify_managers(bot, booking_id)
-            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\nОборудование удерживается 30 минут. Ожидайте подтверждения менеджера.", parse_mode=ParseMode.HTML)
+            booking = await asyncio.to_thread(get_booking, booking_id)
+            deadline = booking.hold_expires_at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
+            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает ответа менеджера</i> до <u>{deadline} МСК</u>.", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -234,7 +243,10 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str):
     from .bot import make_bot
     try:
         async with make_bot(token) as bot:
-            await bot.send_message(customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {html.escape(labels.get(status, status))}.", parse_mode=ParseMode.HTML)
+            formatted_status = html.escape(labels.get(status, status))
+            if status == "cancelled":
+                formatted_status = f"<s>{formatted_status}</s>"
+            await bot.send_message(customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {formatted_status}.", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -550,7 +562,31 @@ def admin_booking_view(booking):
 
 @router.get("/api/miniapp/admin/bookings")
 async def admin_bookings(user=Depends(require_admin)):
-    return {"items": [admin_booking_view(booking) for booking in await asyncio.to_thread(list_bookings)]}
+    bookings, leases = await asyncio.gather(asyncio.to_thread(list_bookings),
+                                            asyncio.to_thread(active_operation_leases))
+    return {"items": [admin_booking_view(booking) | {"operation_lease": leases.get(booking.id)}
+                      for booking in bookings]}
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/operation")
+async def admin_claim_operation(booking_id: int, user=Depends(require_admin)):
+    try:
+        return await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], operator_name(user))
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.delete("/api/miniapp/admin/bookings/{booking_id}/operation")
+async def admin_release_operation(booking_id: int, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(release_booking_operation, booking_id, user["id"])
+        return {"status": "released"}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/api/miniapp/admin/calendar-feed")
@@ -568,6 +604,8 @@ async def admin_delete_booking(booking_id: int, user=Depends(require_admin)):
         await asyncio.to_thread(delete_booking, booking_id, user["id"])
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     for token, claim in list(_DOCUMENT_DOWNLOAD_TOKENS.items()):
         if claim[0] == booking_id:
             _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
@@ -679,7 +717,8 @@ class TransitionRequest(BaseModel):
 async def admin_transition(booking_id: int, payload: TransitionRequest,
                            background_tasks: BackgroundTasks, user=Depends(require_admin)):
     try:
-        status = await asyncio.to_thread(transition, booking_id, payload.action, user["id"])
+        status = await asyncio.to_thread(transition, booking_id, payload.action, user["id"],
+                                         actor_name=operator_name(user))
         booking = await asyncio.to_thread(get_booking, booking_id)
         background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id, status)
         return admin_booking_view(booking) | {"status": status}
@@ -696,7 +735,8 @@ class AssignmentRequest(BaseModel):
 @router.put("/api/miniapp/admin/bookings/{booking_id}/assignments")
 async def admin_assign(booking_id: int, payload: AssignmentRequest, user=Depends(require_admin)):
     try:
-        await asyncio.to_thread(assign_booking_assets, booking_id, user["id"], payload.assignments or None)
+        await asyncio.to_thread(assign_booking_assets, booking_id, user["id"], payload.assignments or None,
+                                operator_name(user))
         return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -718,10 +758,13 @@ async def admin_inspection(booking_id: int, payload: InspectionRequest, user=Dep
     try:
         await asyncio.to_thread(record_inspection, booking_id, payload.equipment_id, payload.stage,
                                 payload.result, payload.checklist, payload.notes, user["id"],
-                                payload.defect, payload.estimated_cost, payload.charge_customer)
+                                payload.defect, payload.estimated_cost, payload.charge_customer,
+                                operator_name(user))
         return {"status": "saved"}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/inspection-photo")
@@ -732,6 +775,10 @@ async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
         normalized, _ = sanitize_image(raw, photo.content_type or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    try:
+        await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], operator_name(user))
+    except (ValueError, Conflict) as exc:
+        raise HTTPException(409, str(exc)) from exc
     with Session.begin() as session:
         record = session.scalar(select(Inspection).where(
             Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
@@ -785,7 +832,10 @@ class IdentityReviewRequest(BaseModel):
 async def admin_identity_review(booking_id: int, payload: IdentityReviewRequest,
                                 background_tasks: BackgroundTasks, user=Depends(require_pii_admin)):
     _limit_pii(user["id"], "admin_pii")
+    claimed = False
     try:
+        await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], "", "identity_review")
+        claimed = True
         await asyncio.to_thread(review_identity, booking_id, user["id"], payload.approved, payload.comment, payload.fields)
         booking = await asyncio.to_thread(get_booking, booking_id)
         if not payload.approved:
@@ -794,6 +844,11 @@ async def admin_identity_review(booking_id: int, payload: IdentityReviewRequest,
         return {"status": "verified" if payload.approved else "needs_changes"}
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    finally:
+        if claimed:
+            await asyncio.to_thread(release_booking_operation, booking_id, user["id"], "identity_review")
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/identity/documents/{kind}")

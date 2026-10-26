@@ -42,11 +42,11 @@ def test_chat_double_confirmation_is_idempotent(monkeypatch):
 def test_bot_catalog_errors_are_handled(monkeypatch):
     monkeypatch.setenv("ADMIN_IDS", "100")
     message = SimpleNamespace(from_user=SimpleNamespace(id=100), answer=AsyncMock(),
-                              text="/add DUP abc Тест")
+                              text="/add DUP")
     asyncio.run(bot.add_equipment(message))
-    assert "ставку" in message.answer.call_args.args[0]
+    assert "Формат: /add" in message.answer.call_args.args[0]
     save_equipment("DUP", "Тест", "", 100, "available")
-    message.text = "/add DUP 100 Тест"
+    message.text = "/add DUP Тест"
     asyncio.run(bot.add_equipment(message))
     assert "уже существует" in message.answer.call_args.args[0]
 
@@ -67,4 +67,4 @@ def test_legacy_panel_shows_articles_and_handles_document_conflict(monkeypatch):
     assert f'/admin/bookings/{booking_id}/issued' not in response.text
     assert client.get(f"/admin/bookings/{booking_id}/documents/issue").status_code == 409
     assert client.post("/admin/equipment", data={"number":"NEW", "name":"Тест",
-                                                "rate":"abc", "condition":"available"}).status_code == 409
+                                                "condition":"unknown"}).status_code == 409

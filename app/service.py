@@ -6,7 +6,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from .db import Audit, Booking, BookingItem, Equipment, Occupancy, Session
+from .db import Audit, Booking, BookingItem, BookingOperationLease, Equipment, Occupancy, Session
+from .rental import Conflict as RentalConflict, _claim_stage
+from .schedule import response_deadline
 
 
 class Conflict(Exception):
@@ -80,7 +82,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, equ
             items = session.scalars(select(Equipment).where(Equipment.id.in_(ids))).all()
             if len(items) != len(ids) or any(item.condition != "available" for item in items):
                 raise Conflict("Оборудование недоступно")
-            booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=now() + timedelta(minutes=30))
+            booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=response_deadline(now()))
             session.add(booking)
             session.flush()
             for item in items:
@@ -115,8 +117,16 @@ def transition(booking_id, action, actor_id, customer_id=None):
             return "expired"
         if action not in TRANSITIONS.get(booking.status, set()):
             raise Conflict("Недопустимое изменение статуса")
+        if customer_id is None:
+            try:
+                _claim_stage(session, booking, actor_id)
+            except RentalConflict as exc:
+                raise Conflict(str(exc)) from exc
         if action in {"cancelled", "returned"}:
             session.execute(delete(Occupancy).where(Occupancy.booking_id == booking.id))
+        lease = session.get(BookingOperationLease, (booking.id, booking.status))
+        if lease:
+            session.delete(lease)
         booking.status = action
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=action))
         return booking.status

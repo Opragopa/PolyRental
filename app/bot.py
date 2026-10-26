@@ -61,6 +61,15 @@ def parse_time(value):
     return naive.replace(tzinfo=MOSCOW)
 
 
+def booking_deadline_text(booking):
+    return booking.hold_expires_at.astimezone(MOSCOW).strftime("%d.%m.%Y %H:%M МСК")
+
+
+def booking_created_text(booking):
+    return (f"<b>Заявка №{booking.id} создана</b>\n"
+            f"<i>Ожидает ответа менеджера</i> до <u>{booking_deadline_text(booking)}</u>.")
+
+
 def is_admin(user_id):
     return str(user_id) in {v.strip() for v in os.getenv("ADMIN_IDS", "").split(",")}
 
@@ -106,7 +115,7 @@ async def notify_managers(bot, booking_id):
     for admin_id in os.getenv("ADMIN_IDS", "").split(","):
         if admin_id.strip().isdigit():
             try:
-                await bot.send_message(int(admin_id), f"<b>Новая заявка №{booking_id}</b>\nКлиент: {html.escape(label)}\n<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>", parse_mode=ParseMode.HTML)
+                await bot.send_message(int(admin_id), f"<b>Новая заявка №{booking_id}</b>\nКлиент: <tg-spoiler>{html.escape(label)}</tg-spoiler>\n<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>", parse_mode=ParseMode.HTML)
             except Exception:
                 pass
 
@@ -143,9 +152,9 @@ async def show_review(message, state):
         return await show_equipment(message, state)
     await state.update_data(expected_total=None, editing=None)
     items_text = "\n".join(f"• {html.escape(item['name'])}" for item in chosen)
-    text = (f"<b>Проверьте заявку</b>\n\n<b>Период:</b> {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
-            f"<b>Оборудование</b>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> {html.escape(data['contact'])}\n\n"
-            "Удержание начнётся после подтверждения и продлится 30 минут.")
+    text = (f"<b>Проверьте заявку</b>\n\n<u>Период</u>: {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
+            f"<u>Оборудование</u>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> <tg-spoiler>{html.escape(data['contact'])}</tg-spoiler>\n\n"
+            "<i>После отправки покажем, до какого времени заявка ожидает ответа менеджера.</i>")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Подтвердить бронирование", callback_data="rent:confirm")],
         [InlineKeyboardButton(text="Изменить сроки", callback_data="rent:edit:start"), InlineKeyboardButton(text="Изменить оборудование", callback_data="rent:edit:equipment")],
@@ -158,7 +167,7 @@ async def show_review(message, state):
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    text = "<b>PolyRental</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
+    text = "<b>Политех.АРЕНДА</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
     if not miniapp_url():
         text += " Пока PUBLIC_URL не указывает на HTTPS, бронирование доступно в чате."
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
@@ -191,7 +200,8 @@ async def booking_from_miniapp(message: Message, bot: Bot):
         )
     except (ValueError, Conflict) as exc:
         return await message.answer(f"Не удалось создать заявку: {exc}. Откройте приложение и проверьте сроки, оборудование и контакты.", reply_markup=main_keyboard())
-    await message.answer(f"Заявка №{booking_id} создана. Оборудование удерживается 30 минут, ожидайте подтверждения менеджера.", reply_markup=main_keyboard())
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    await message.answer(booking_created_text(booking), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
     if created:
         await notify_managers(bot, booking_id)
 
@@ -378,7 +388,8 @@ async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
     except (Conflict, ValueError) as exc:
         return await query.message.answer(f"Не удалось создать заявку: {exc}. Измените сроки или оборудование и попробуйте снова.")
     await state.clear()
-    await query.message.answer(f"Заявка №{booking_id} создана. Оборудование удерживается 30 минут, ожидайте подтверждения менеджера.", reply_markup=main_keyboard())
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    await query.message.answer(booking_created_text(booking), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
     if created:
         await notify_managers(bot, booking_id)
 
@@ -395,8 +406,11 @@ async def my_bookings(message: Message):
              "cancelled": "отменена", "expired": "удержание истекло"}
     lines = []
     for booking in bookings[:10]:
-        lines.append(f"№{booking.id} · {names.get(booking.status, booking.status)} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
-    await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(f"• {html.escape(line)}" for line in lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+        status = html.escape(names.get(booking.status, booking.status))
+        if booking.status in {"cancelled", "expired"}:
+            status = f"<s>{status}</s>"
+        lines.append(f"• <b>№{booking.id}</b> · {status} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
+    await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
 @router.message(F.text == "Связаться с менеджером")
@@ -413,7 +427,7 @@ async def support_message(message: Message, state: FSMContext, bot: Bot):
     for admin_id in os.getenv("ADMIN_IDS", "").split(","):
         if admin_id.strip().isdigit():
             try:
-                await bot.send_message(int(admin_id), f"Вопрос от {name} (Telegram ID {message.from_user.id}):\n{message.text}\nОтветить: /reply {message.from_user.id} ТЕКСТ")
+                await bot.send_message(int(admin_id), f"<b>Вопрос от клиента</b> · {html.escape(name)} (Telegram ID <code>{message.from_user.id}</code>)\n{html.escape(message.text[:3000])}\nОтветить: <code>/reply {message.from_user.id} ТЕКСТ</code>", parse_mode=ParseMode.HTML)
             except Exception:
                 pass
     await state.clear()
@@ -426,7 +440,7 @@ async def reply_to_customer(message: Message, bot: Bot):
         return
     try:
         _, customer_id, body = (message.text or "").split(" ", 2)
-        await bot.send_message(int(customer_id), f"Ответ менеджера PolyRental:\n{body}")
+        await bot.send_message(int(customer_id), f"<b>Ответ менеджера</b>\n{html.escape(body[:3000])}", parse_mode=ParseMode.HTML)
         await message.answer("Ответ отправлен.")
     except Exception:
         await message.answer("Формат: /reply TELEGRAM_ID ТЕКСТ")
@@ -473,7 +487,7 @@ async def bookings(message: Message):
     if not is_admin(message.from_user.id):
         return
     data = await asyncio.to_thread(list_bookings)
-    await message.answer("\n".join(f"#{b.id} {b.status} {b.customer_name}: {b.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{b.ends_at.astimezone(MOSCOW):%d.%m %H:%M}" for b in data[:30]) or "Заявок нет")
+    await message.answer("\n".join(f"<b>№{b.id}</b> · {html.escape(b.status)} · <tg-spoiler>{html.escape(b.customer_name)}</tg-spoiler>: {b.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{b.ends_at.astimezone(MOSCOW):%d.%m %H:%M}" for b in data[:30]) or "Заявок нет", parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("confirm", "cancel", "prepare", "ready", "issue", "checkin", "return"))
@@ -490,9 +504,12 @@ async def change(message: Message, bot: Bot):
         if status == "expired":
             return await message.answer("Удержание истекло; создайте новую заявку")
         labels = {"confirmed": "подтверждена", "preparing": "комплектуется", "ready": "готова к выдаче", "issued": "выдана", "return_inspection": "проверяется при возврате", "returned": "возвращена", "cancelled": "отменена"}
-        await message.answer(f"<b>Заявка №{booking_id}</b> · {labels.get(status, html.escape(status))}", parse_mode=ParseMode.HTML)
+        formatted_status = html.escape(labels.get(status, status))
+        if status == "cancelled":
+            formatted_status = f"<s>{formatted_status}</s>"
+        await message.answer(f"<b>Заявка №{booking_id}</b> · {formatted_status}", parse_mode=ParseMode.HTML)
         booking = await asyncio.to_thread(get_booking, booking_id)
-        await bot.send_message(booking.customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {labels.get(status, html.escape(status))}", parse_mode=ParseMode.HTML)
+        await bot.send_message(booking.customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {formatted_status}", parse_mode=ParseMode.HTML)
     except (ValueError, Conflict) as exc:
         await message.answer(f"Ошибка: {exc}. Формат: {command} НОМЕР")
 

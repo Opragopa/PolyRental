@@ -56,6 +56,15 @@
     const date = new Date(Date.UTC(year, month - 1, day + days));
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
   }
+  function applyDuration(days) {
+    if (!Number.isInteger(days) || days < 1 || days > 365) { fieldError("end", "Укажите срок от 1 до 365 суток."); return; }
+    if (!$("start-date").value || !$("start-time").value) { fieldError("start", "Сначала выберите дату и время выдачи."); return; }
+    $("end-date").value = addIsoDays($("start-date").value, days);
+    $("end-time").value = $("start-time").value;
+    syncDateTime("end"); applyBookingDateLimits();
+    state.items = []; state.quantities.clear(); state.requestId = null;
+    fieldError("start", ""); fieldError("end", ""); saveDraft();
+  }
   function bookingDateLabel(value) {
     return new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })
       .format(new Date(`${value}T12:00:00Z`));
@@ -406,7 +415,7 @@
       const booking = await api("/api/miniapp/bookings", { method: "POST", body: JSON.stringify(payload) });
       state.booking = booking; state.step = 4; clearDraft();
       $("done-title").textContent = `Заявка №${booking.id} создана`;
-      $("done-description").textContent = `Оборудование удерживается до ${dateText(booking.hold_expires_at)} МСК. Менеджер подтвердит заявку в Telegram.`;
+      $("done-description").textContent = `Ответ менеджера ожидается до ${dateText(booking.hold_expires_at)} МСК. Статус придёт в Telegram.`;
       tg?.HapticFeedback?.notificationOccurred("success");
     } catch (error) {
       const changed = error.message.includes("Цена изменилась") || error.message.includes("занято") || error.message.includes("недоступно");
@@ -447,7 +456,7 @@
       if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Удержание до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
+        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Ответ менеджера до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
         if (order.status === "pending") appendPendingContactEditor(card, order);
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
@@ -675,7 +684,7 @@
           actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
-          actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id));
+          actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id, "secondary lock-exempt"));
           const documents = document.createElement("details"); documents.className = "document-actions";
           documents.innerHTML = `<summary>Документы анкеты</summary><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
           const passport = document.createElement("div"); passport.className = "document-group";
@@ -690,8 +699,8 @@
         if (canSeeDocuments && state.role?.pii_admin) {
           const canGenerateDocuments = order.identity_status === "verified" && order.assets.length > 0;
           const archivedDocuments = new Set(order.archived_documents || []);
-          const actButton = actionButton("Сформировать / скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false);
-          const receiptButton = actionButton("Сформировать / скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false);
+          const actButton = actionButton("Сформировать / скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary lock-exempt", false);
+          const receiptButton = actionButton("Сформировать / скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary lock-exempt", false);
           const documents = document.createElement("details"); documents.className = "document-actions generated-documents";
           const documentSummary = document.createElement("summary"); documentSummary.textContent = "Акт и сохранная расписка"; documents.append(documentSummary);
           actButton.disabled = !(archivedDocuments.has("issue") || canGenerateDocuments);
@@ -706,8 +715,8 @@
           const documentButtons = document.createElement("div"); documentButtons.className = "document-group";
           documentButtons.append(actButton, receiptButton); documents.append(documentButtons); actions.append(documents);
         }
-        if (order.status === "ready" && state.role?.pii_admin && order.identity_status === "verified") {
-          actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id));
+        if (order.status === "ready" && state.role?.pii_admin && order.identity_status === "verified" && !order.act_signed_at) {
+          actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id, "secondary lock-exempt"));
         }
         if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать", transitionAction("issued"), order.id, "primary"));
         if (order.status === "ready" && !order.act_signed_at) { const note = document.createElement("p"); note.textContent = "Оператор должен отметить подписание акта перед выдачей."; actions.append(note); }
@@ -732,6 +741,22 @@
             updateReturnHint();
           });
           updateReturnHint(); actions.append(returnHint, finishReturn);
+        }
+        if (["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status)) {
+          const lease = order.operation_lease;
+          const mine = lease?.actor_id === state.role?.id;
+          const ownership = document.createElement("p"); ownership.className = "workflow-hint";
+          ownership.textContent = lease ? `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name}. Захват действует до ${dateText(lease.expires_at)} МСК.` : "Этап свободен для обработки.";
+          const claim = document.createElement("button"); claim.type = "button"; claim.className = "button ghost compact";
+          claim.textContent = mine ? "Освободить этап" : "Взять этап в работу";
+          claim.disabled = Boolean(lease && !mine);
+          claim.addEventListener("click", async () => {
+            claim.disabled = true;
+            try { await api(`/api/miniapp/admin/bookings/${order.id}/operation`, { method: mine ? "DELETE" : "POST" }); await showAdmin("orders"); }
+            catch (error) { claim.disabled = false; showError(error.message); }
+          });
+          if (lease && !mine) actions.querySelectorAll("button:not(.document-button):not(.lock-exempt)").forEach((button) => { button.disabled = true; });
+          card.append(ownership, claim);
         }
         card.append(actions);
         if (state.role?.admin) {
@@ -1151,6 +1176,8 @@
   for (const id of ["start", "end"]) {
     for (const part of ["date", "time"]) $(`${id}-${part}`).addEventListener("input", () => { syncDateTime(id); applyBookingDateLimits(); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
   }
+  document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
+  $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; fieldError(id, ""); });
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
   passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });

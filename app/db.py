@@ -80,6 +80,16 @@ class Booking(Base):
     inspections: Mapped[list["Inspection"]] = relationship(cascade="all, delete-orphan")
 
 
+class BookingOperationLease(Base):
+    """Temporary claim on the current workflow stage, not ownership of a booking."""
+    __tablename__ = "booking_operation_leases"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(30), primary_key=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    actor_name: Mapped[str] = mapped_column(String(160), default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class BookingItem(Base):
     """Legacy concrete booking rows, retained for migration compatibility."""
     __tablename__ = "booking_items"
