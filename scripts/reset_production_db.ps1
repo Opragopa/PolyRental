@@ -49,7 +49,7 @@ try {
     }
     & docker run --rm --env BACKUP_MASTER_KEY -v $backupMount polyrental-miniapp:latest python /app/scripts/verify_encrypted_backup.py "/backup/$($backup.Name)" --output "/backup/$verifyArchiveName"
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $verifyArchive) -or (Get-Item -LiteralPath $verifyArchive).Length -le 0) { throw 'Unable to decrypt the backup for isolated restore verification.' }
-    & docker run --rm --network "container:$verifyName" -e PGPASSWORD=verify -v $backupMount postgres:16 pg_restore -h 127.0.0.1 -U postgres -d verify --exit-on-error "/backup/$verifyArchiveName"
+    & docker run --rm --network "container:$verifyName" -e PGPASSWORD=verify -v $backupMount postgres:16 pg_restore -h 127.0.0.1 -U postgres -d verify --exit-on-error --no-owner "/backup/$verifyArchiveName"
     if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup restore verification failed; reset stopped.' }
 } finally {
     & docker rm -f $verifyName 2>$null | Out-Null
