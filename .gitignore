@@ -1,4 +1,7 @@
 .env
+/local-qa-data/
+/tools/browser-qa/.browsers/
+/artifacts/
 __pycache__/
 .pytest_cache/
 .venv/

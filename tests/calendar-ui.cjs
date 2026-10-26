@@ -1,6 +1,6 @@
 /* Run with NODE_PATH pointing to an installed playwright package. No server,
  * database, Telegram traffic or personal data is used by this browser suite. */
-const { chromium } = require("playwright");
+const { chromium, webkit } = require("playwright");
 const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
@@ -9,12 +9,15 @@ const assets = path.join(root, "app", "miniapp_static");
 const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll("__APP_VERSION__", "0.3.0");
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {}) });
+  const engineName = process.env.PLAYWRIGHT_BROWSER || "chromium";
+  assert.ok(["chromium", "webkit"].includes(engineName), "Unsupported browser engine");
+  const engine = engineName === "webkit" ? webkit : chromium;
+  const browser = await engine.launch({ headless: true, ...(engineName === "chromium" && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {}) });
   const results = [];
   try {
     for (const [width, height] of [[320,640], [360,640], [390,844], [430,844]]) {
       for (const dark of [false, true]) {
-        const page = await browser.newPage({ viewport:{width,height}, timezoneId:"America/Los_Angeles", colorScheme:dark?"dark":"light" });
+        const page = await browser.newPage({ viewport:{width,height}, isMobile:true, hasTouch:true, timezoneId:"America/Los_Angeles", colorScheme:dark?"dark":"light" });
         const errors = [], requests = [];
         page.on("pageerror", error => errors.push(error.message));
         await page.route("**/*", async route => {
@@ -82,7 +85,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         const afterMonth=await page.locator("#range-calendar").boundingBox();
         assert.equal(afterMonth.height,beforeMonth.height);
         await page.getByRole("button",{name:"Предыдущий месяц"}).click();
-        if ((width===360&&!dark) || (width===390&&dark)) await page.screenshot({path:path.join(root,"docs","qa",`v0.3.0-calendar-${width}-${dark?"dark":"light"}.png`)});
+        if (engineName === "chromium" && ((width===360&&!dark) || (width===390&&dark))) await page.screenshot({path:path.join(root,"docs","qa",`v0.3.0-calendar-${width}-${dark?"dark":"light"}.png`)});
         await page.locator("#period-clear").click();
         assert.equal(await page.locator(".calendar-day.selected").count(),0);
         await page.locator('[data-date="2026-10-30"]').click();
@@ -133,6 +136,36 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     assert.deepEqual(reviews[1].fields,["student_front"]);
     assert.deepEqual(errors,[]);
     await page.close();
-    console.log(JSON.stringify({passed:results.length+2,viewports:results},null,2));
+    // Exercise native SDK button/activation/theme semantics, separately from DOM buttons.
+    const native=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+    const nativeErrors=[];native.on("pageerror",error=>nativeErrors.push(error.message));
+    const sdk=`window.__qaSdk={visible:false,enabled:false,theme:"light",events:{}};
+      window.Telegram={WebApp:{initData:"signed-test",colorScheme:"light",platform:"ios",
+        onEvent:(name,fn)=>window.__qaSdk.events[name]=fn,
+        MainButton:{setText:()=>{},show:()=>window.__qaSdk.visible=true,hide:()=>window.__qaSdk.visible=false,
+          enable:()=>window.__qaSdk.enabled=true,disable:()=>window.__qaSdk.enabled=false,
+          onClick:fn=>window.__qaSdk.click=fn,showProgress:()=>{},hideProgress:()=>{}},
+        BackButton:{show:()=>{},hide:()=>{},onClick:()=>{}},ready:()=>{},expand:()=>{}}};`;
+    await native.route("**/*",async route=>{
+      const url=new URL(route.request().url());
+      if(url.hostname==="telegram.org")return route.fulfill({contentType:"text/javascript",body:sdk});
+      if(url.pathname.startsWith("/miniapp/static/")){const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith("css")?"text/css":"text/javascript"});}
+      if(url.pathname==="/api/miniapp/me")return route.fulfill({json:{id:42,admin:false,pii_admin:false}});
+      if(url.pathname.startsWith("/api/"))return route.fulfill({json:{items:[]}});
+      return route.fulfill({body:html,contentType:"text/html"});
+    });
+    await native.clock.install({time:new Date("2026-10-26T10:00:00Z")});
+    await native.goto("http://polyrental.test/miniapp");
+    assert.equal(await native.locator("#action-bar").isHidden(),true);
+    assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[true,false]);
+    await native.locator('[data-date="2026-10-30"]').tap();
+    await native.locator('[data-date="2026-10-31"]').tap();
+    assert.equal(await native.evaluate(()=>__qaSdk.enabled),true);
+    await native.evaluate(()=>{Telegram.WebApp.colorScheme="dark";__qaSdk.events.themeChanged();});
+    assert.equal(await native.locator("html").getAttribute("data-theme"),"dark");
+    await native.locator("#period-clear").tap();
+    assert.equal(await native.evaluate(()=>__qaSdk.enabled),false);
+    assert.deepEqual(nativeErrors,[]);await native.close();
+    console.log(JSON.stringify({engine:engineName,passed:results.length+3,viewports:results},null,2));
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

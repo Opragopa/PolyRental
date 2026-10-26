@@ -60,7 +60,7 @@ Telegram-бот и ролевая Mini App для аренды оборудов�
 
 Зашифрованная резервная копия без промежуточного plaintext-файла: задайте отдельный `BACKUP_MASTER_KEY` и выполните `python scripts/backup_encrypted.py D:\PolyRentalBackups`. Скрипт шифрует поток `pg_dump` через AES-256-GCM и удаляет зашифрованные копии старше 30 дней. Ключ храните отдельно от копий и рабочей базы.
 
-Тесты: `docker compose --profile test run --rm --build test`. Compose создаёт для них отдельную БД `polyrental_test`, применяет Alembic-миграции и запускает pytest. UI и unit-тесты календаря описаны в [стратегии тестирования](docs/testing-strategy.md); обе группы обязательны для deployment в CI.
+Тесты: `docker compose --profile test run --rm --build test`. Compose создаёт для них отдельную БД `polyrental_test`, применяет Alembic-миграции и запускает pytest. UI и unit-тесты календаря описаны в [стратегии тестирования](docs/testing-strategy.md). CI проверяет Python, Chromium, WebKit и синтетический benchmark документов перед deployment. [Отчёт приёмки](docs/qa/v0.3.0-acceptance.md) отделяет автоматические результаты от проверки физического iPhone и точности на реальных документах.
 
 ### CI/CD
 

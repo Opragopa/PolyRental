@@ -164,7 +164,8 @@ def test_internal_checker_deadline():
         gate.set()
 
 
-def test_local_ocr_on_synthetic_student_document():
+@pytest.mark.parametrize("angle", [-12, -7, 0, 7, 12])
+def test_local_ocr_on_synthetic_student_document(angle):
     import shutil
     from PIL import ImageDraw, ImageFont
     if not shutil.which("tesseract"):
@@ -173,6 +174,7 @@ def test_local_ocr_on_synthetic_student_document():
     # Purely synthetic label, without any person's data.
     font = ImageFont.truetype("DejaVuSans.ttf", 52)
     ImageDraw.Draw(image).text((35, 65), "СТУДЕНЧЕСКИЙ БИЛЕТ", font=font, fill="black")
+    image = image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor="white")
     raw = io.BytesIO()
     image.save(raw, format="PNG")
     verdict = LocalDocumentChecker().check(raw.getvalue())

@@ -175,11 +175,13 @@ npx tma-devkit dev --app http://localhost:8000/miniapp
 docker compose --profile test run --rm --build test
 node --test tests/calendar.test.cjs
 npm ci --prefix tools/browser-qa
-tools/browser-qa/node_modules/.bin/playwright install --with-deps chromium
+tools/browser-qa/node_modules/.bin/playwright install --with-deps chromium webkit
 NODE_PATH=./tools/browser-qa/node_modules node tests/calendar-ui.cjs
+NODE_PATH=./tools/browser-qa/node_modules PLAYWRIGHT_BROWSER=webkit node tests/calendar-ui.cjs
+docker compose --profile test run --rm -v "$PWD:/app" test python scripts/benchmark_documents.py --output artifacts/document-benchmark.json
 ```
 
-В PowerShell после `npm ci` используйте `& ./tools/browser-qa/node_modules/.bin/playwright.cmd install chromium`, затем `$env:NODE_PATH='./tools/browser-qa/node_modules'; node tests/calendar-ui.cjs`. Для установленного Chrome можно задать `$env:PLAYWRIGHT_CHANNEL='chrome'` вместо загрузки Chromium.
+В PowerShell после `npm ci` используйте `& ./tools/browser-qa/node_modules/.bin/playwright.cmd install chromium webkit`, затем `$env:NODE_PATH='./tools/browser-qa/node_modules'; node tests/calendar-ui.cjs`. Для установленного Chrome можно задать `$env:PLAYWRIGHT_CHANNEL='chrome'` вместо загрузки Chromium. Второй прогон: `$env:PLAYWRIGHT_BROWSER='webkit'; node tests/calendar-ui.cjs`. Для Docker bind mount в PowerShell используйте `-v "${PWD}:/app"`.
 
 Browser suite работает с локальными файлами через перехват запросов: БД, бот, Интернет и production ему не нужны. Она проверяет 320×640, 360×640, 390×844 и 430×844 в обеих темах, размеры тач-целей, первый экран, переход месяца без изменения высоты, клавиатуру, выбор и сброс диапазона, время МСК при timezone устройства America/Los_Angeles, сохранение при навигации и отсутствие API-вызовов в preview. Фото проверяются на синтетических пропорциях 4000×200, 100×3000 и 120×120. Отдельный сценарий проверяет открытие управления по серверной роли и переход «Как клиент».
 

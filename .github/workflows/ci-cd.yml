@@ -19,23 +19,43 @@ jobs:
         run: docker compose --profile test run --rm --build test
 
   browser:
-    name: Calendar and mobile UI
+    name: Mobile UI (${{ matrix.browser }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - run: npm ci --prefix tools/browser-qa
-      - run: tools/browser-qa/node_modules/.bin/playwright install --with-deps chromium
+      - run: tools/browser-qa/node_modules/.bin/playwright install --with-deps ${{ matrix.browser }}
       - run: node --test tests/calendar.test.cjs
       - run: node tests/calendar-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+
+  documents:
+    name: Local document robustness
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t polyrental-document-qa .
+      - run: mkdir -p artifacts
+      - name: Synthetic classification benchmark (no personal data)
+        run: docker run --rm -v "$PWD/artifacts:/artifacts" polyrental-document-qa python scripts/benchmark_documents.py --output /artifacts/document-benchmark.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-document-benchmark
+          path: artifacts/document-benchmark.json
 
   deploy:
     name: Deploy production
-    needs: [test, browser]
+    needs: [test, browser, documents]
     # Production credentials are repository secrets. A successful push to main
     # is the deliberate deployment trigger.
     if: github.ref == 'refs/heads/main'

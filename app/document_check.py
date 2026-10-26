@@ -37,6 +37,35 @@ class DocumentChecker(Protocol):
     def check(self, data: bytes) -> Verdict: ...
 
 
+def _deskew(image):
+    """Estimate small page tilt locally from horizontal ink projections.
+
+    A 360px working mask bounds the cost. It contains no extracted text and
+    is never stored. Require a clear score improvement to leave upright or
+    unstructured images alone; unreadable inputs still go to manual review.
+    """
+    mask = image.copy()
+    mask.thumbnail((360, 360))
+    mask = mask.point(lambda value: 255 if value < 110 else 0)
+
+    def score(angle):
+        candidate = mask.rotate(angle, resample=Image.Resampling.NEAREST, expand=True, fillcolor=0)
+        data, width = candidate.tobytes(), candidate.width
+        rows = [sum(data[offset:offset + width]) for offset in range(0, len(data), width)]
+        return sum((right - left) ** 2 for left, right in zip(rows, rows[1:]))
+
+    baseline = score(0)
+    angle, best = 0, baseline
+    for candidate in (-15, -12, -9, -6, -3, 3, 6, 9, 12, 15):
+        value = score(candidate)
+        if value > best:
+            angle, best = candidate, value
+    if angle and best > baseline * 1.25:
+        image = image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=255)
+        image.thumbnail((1400, 1400))
+    return image
+
+
 class LocalDocumentChecker:
     def check(self, data):
         with Image.open(io.BytesIO(data)) as image:
@@ -45,7 +74,7 @@ class LocalDocumentChecker:
             if ImageStat.Stat(image).stddev[0] < 2:
                 return Verdict("not_document", "unknown", "blank_image")
             output = io.BytesIO()
-            ImageOps.autocontrast(image).save(output, format="PNG")
+            _deskew(ImageOps.autocontrast(image)).save(output, format="PNG")
         try:
             result = subprocess.run(
                 ["tesseract", "stdin", "stdout", "-l", "rus+eng", "--psm", "11"],

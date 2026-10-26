@@ -1,0 +1,895 @@
+{
+  "schema": 1,
+  "source": "synthetic",
+  "dataset_sha256": "41f77456c34bccc698d1aadd2b835206296519818f92e3fff1002511b482e718",
+  "gates_scope": "synthetic_engineering_regression_only",
+  "thresholds": {
+    "max_false_non_document_rate": 0.0,
+    "max_false_student_rate": 0.0,
+    "min_student_recall": 0.8,
+    "max_p95_seconds": 3.0
+  },
+  "metrics": {
+    "cases": 72,
+    "labels": {
+      "student": 24,
+      "other": 24,
+      "not_document": 24
+    },
+    "document_accuracy": 0.6389,
+    "document_coverage": 0.6389,
+    "student_recall": 0.8333,
+    "false_non_document_rate": 0.0,
+    "false_student_rate": 0.0,
+    "manual_review_rate": 1.0,
+    "p50_seconds": 0.1089,
+    "p95_seconds": 0.1565,
+    "reasons": {
+      "student_text": 20,
+      "uncertain": 26,
+      "other_document": 20,
+      "blank_image": 6
+    }
+  },
+  "gates": {
+    "false_non_document": true,
+    "false_student": true,
+    "student_recall": true,
+    "latency": true
+  },
+  "passed": true,
+  "by_condition": {
+    "clean": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.75,
+      "document_coverage": 0.75,
+      "student_recall": 1.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.1066,
+      "p95_seconds": 0.1161,
+      "reasons": {
+        "student_text": 4,
+        "other_document": 4,
+        "blank_image": 1,
+        "uncertain": 3
+      }
+    },
+    "low_light": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.75,
+      "document_coverage": 0.75,
+      "student_recall": 1.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.1064,
+      "p95_seconds": 0.1133,
+      "reasons": {
+        "student_text": 4,
+        "other_document": 4,
+        "blank_image": 1,
+        "uncertain": 3
+      }
+    },
+    "glare": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.75,
+      "document_coverage": 0.75,
+      "student_recall": 1.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.1111,
+      "p95_seconds": 0.1202,
+      "reasons": {
+        "student_text": 4,
+        "other_document": 4,
+        "blank_image": 1,
+        "uncertain": 3
+      }
+    },
+    "rotation": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.0833,
+      "document_coverage": 0.0833,
+      "student_recall": 0.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.118,
+      "p95_seconds": 0.135,
+      "reasons": {
+        "uncertain": 11,
+        "blank_image": 1
+      }
+    },
+    "perspective": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.75,
+      "document_coverage": 0.75,
+      "student_recall": 1.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.1116,
+      "p95_seconds": 0.2513,
+      "reasons": {
+        "student_text": 4,
+        "other_document": 4,
+        "blank_image": 1,
+        "uncertain": 3
+      }
+    },
+    "blur": {
+      "cases": 12,
+      "labels": {
+        "student": 4,
+        "other": 4,
+        "not_document": 4
+      },
+      "document_accuracy": 0.75,
+      "document_coverage": 0.75,
+      "student_recall": 1.0,
+      "false_non_document_rate": 0.0,
+      "false_student_rate": 0.0,
+      "manual_review_rate": 1.0,
+      "p50_seconds": 0.1078,
+      "p95_seconds": 0.1138,
+      "reasons": {
+        "student_text": 4,
+        "other_document": 4,
+        "blank_image": 1,
+        "uncertain": 3
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "case-0001",
+      "expected": "student",
+      "condition": "clean",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1113
+    },
+    {
+      "id": "case-0002",
+      "expected": "student",
+      "condition": "low_light",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1091
+    },
+    {
+      "id": "case-0003",
+      "expected": "student",
+      "condition": "glare",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1173
+    },
+    {
+      "id": "case-0004",
+      "expected": "student",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.135
+    },
+    {
+      "id": "case-0005",
+      "expected": "student",
+      "condition": "perspective",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.2513
+    },
+    {
+      "id": "case-0006",
+      "expected": "student",
+      "condition": "blur",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1096
+    },
+    {
+      "id": "case-0007",
+      "expected": "student",
+      "condition": "clean",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1161
+    },
+    {
+      "id": "case-0008",
+      "expected": "student",
+      "condition": "low_light",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1109
+    },
+    {
+      "id": "case-0009",
+      "expected": "student",
+      "condition": "glare",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1128
+    },
+    {
+      "id": "case-0010",
+      "expected": "student",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1339
+    },
+    {
+      "id": "case-0011",
+      "expected": "student",
+      "condition": "perspective",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1565
+    },
+    {
+      "id": "case-0012",
+      "expected": "student",
+      "condition": "blur",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1138
+    },
+    {
+      "id": "case-0013",
+      "expected": "student",
+      "condition": "clean",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1074
+    },
+    {
+      "id": "case-0014",
+      "expected": "student",
+      "condition": "low_light",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.109
+    },
+    {
+      "id": "case-0015",
+      "expected": "student",
+      "condition": "glare",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1197
+    },
+    {
+      "id": "case-0016",
+      "expected": "student",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1325
+    },
+    {
+      "id": "case-0017",
+      "expected": "student",
+      "condition": "perspective",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.232
+    },
+    {
+      "id": "case-0018",
+      "expected": "student",
+      "condition": "blur",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1117
+    },
+    {
+      "id": "case-0019",
+      "expected": "student",
+      "condition": "clean",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1115
+    },
+    {
+      "id": "case-0020",
+      "expected": "student",
+      "condition": "low_light",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1133
+    },
+    {
+      "id": "case-0021",
+      "expected": "student",
+      "condition": "glare",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1118
+    },
+    {
+      "id": "case-0022",
+      "expected": "student",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1218
+    },
+    {
+      "id": "case-0023",
+      "expected": "student",
+      "condition": "perspective",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1645
+    },
+    {
+      "id": "case-0024",
+      "expected": "student",
+      "condition": "blur",
+      "document": "document",
+      "student": "student",
+      "reason": "student_text",
+      "manual_review": true,
+      "seconds": 0.1122
+    },
+    {
+      "id": "case-0025",
+      "expected": "other",
+      "condition": "clean",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1069
+    },
+    {
+      "id": "case-0026",
+      "expected": "other",
+      "condition": "low_light",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1065
+    },
+    {
+      "id": "case-0027",
+      "expected": "other",
+      "condition": "glare",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1148
+    },
+    {
+      "id": "case-0028",
+      "expected": "other",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1234
+    },
+    {
+      "id": "case-0029",
+      "expected": "other",
+      "condition": "perspective",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1149
+    },
+    {
+      "id": "case-0030",
+      "expected": "other",
+      "condition": "blur",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1076
+    },
+    {
+      "id": "case-0031",
+      "expected": "other",
+      "condition": "clean",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1064
+    },
+    {
+      "id": "case-0032",
+      "expected": "other",
+      "condition": "low_light",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1088
+    },
+    {
+      "id": "case-0033",
+      "expected": "other",
+      "condition": "glare",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1202
+    },
+    {
+      "id": "case-0034",
+      "expected": "other",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1096
+    },
+    {
+      "id": "case-0035",
+      "expected": "other",
+      "condition": "perspective",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1104
+    },
+    {
+      "id": "case-0036",
+      "expected": "other",
+      "condition": "blur",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1088
+    },
+    {
+      "id": "case-0037",
+      "expected": "other",
+      "condition": "clean",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.101
+    },
+    {
+      "id": "case-0038",
+      "expected": "other",
+      "condition": "low_light",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1042
+    },
+    {
+      "id": "case-0039",
+      "expected": "other",
+      "condition": "glare",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1076
+    },
+    {
+      "id": "case-0040",
+      "expected": "other",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1181
+    },
+    {
+      "id": "case-0041",
+      "expected": "other",
+      "condition": "perspective",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.111
+    },
+    {
+      "id": "case-0042",
+      "expected": "other",
+      "condition": "blur",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.108
+    },
+    {
+      "id": "case-0043",
+      "expected": "other",
+      "condition": "clean",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1079
+    },
+    {
+      "id": "case-0044",
+      "expected": "other",
+      "condition": "low_light",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1064
+    },
+    {
+      "id": "case-0045",
+      "expected": "other",
+      "condition": "glare",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1105
+    },
+    {
+      "id": "case-0046",
+      "expected": "other",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1174
+    },
+    {
+      "id": "case-0047",
+      "expected": "other",
+      "condition": "perspective",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1123
+    },
+    {
+      "id": "case-0048",
+      "expected": "other",
+      "condition": "blur",
+      "document": "document",
+      "student": "other",
+      "reason": "other_document",
+      "manual_review": true,
+      "seconds": 0.1073
+    },
+    {
+      "id": "case-0049",
+      "expected": "not_document",
+      "condition": "clean",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0043
+    },
+    {
+      "id": "case-0050",
+      "expected": "not_document",
+      "condition": "low_light",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0043
+    },
+    {
+      "id": "case-0051",
+      "expected": "not_document",
+      "condition": "glare",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0043
+    },
+    {
+      "id": "case-0052",
+      "expected": "not_document",
+      "condition": "rotation",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0074
+    },
+    {
+      "id": "case-0053",
+      "expected": "not_document",
+      "condition": "perspective",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0056
+    },
+    {
+      "id": "case-0054",
+      "expected": "not_document",
+      "condition": "blur",
+      "document": "not_document",
+      "student": "unknown",
+      "reason": "blank_image",
+      "manual_review": true,
+      "seconds": 0.0043
+    },
+    {
+      "id": "case-0055",
+      "expected": "not_document",
+      "condition": "clean",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0824
+    },
+    {
+      "id": "case-0056",
+      "expected": "not_document",
+      "condition": "low_light",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0828
+    },
+    {
+      "id": "case-0057",
+      "expected": "not_document",
+      "condition": "glare",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0891
+    },
+    {
+      "id": "case-0058",
+      "expected": "not_document",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1041
+    },
+    {
+      "id": "case-0059",
+      "expected": "not_document",
+      "condition": "perspective",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0864
+    },
+    {
+      "id": "case-0060",
+      "expected": "not_document",
+      "condition": "blur",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0864
+    },
+    {
+      "id": "case-0061",
+      "expected": "not_document",
+      "condition": "clean",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0903
+    },
+    {
+      "id": "case-0062",
+      "expected": "not_document",
+      "condition": "low_light",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0779
+    },
+    {
+      "id": "case-0063",
+      "expected": "not_document",
+      "condition": "glare",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.09
+    },
+    {
+      "id": "case-0064",
+      "expected": "not_document",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.1148
+    },
+    {
+      "id": "case-0065",
+      "expected": "not_document",
+      "condition": "perspective",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0984
+    },
+    {
+      "id": "case-0066",
+      "expected": "not_document",
+      "condition": "blur",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0891
+    },
+    {
+      "id": "case-0067",
+      "expected": "not_document",
+      "condition": "clean",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.086
+    },
+    {
+      "id": "case-0068",
+      "expected": "not_document",
+      "condition": "low_light",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0893
+    },
+    {
+      "id": "case-0069",
+      "expected": "not_document",
+      "condition": "glare",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.102
+    },
+    {
+      "id": "case-0070",
+      "expected": "not_document",
+      "condition": "rotation",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.118
+    },
+    {
+      "id": "case-0071",
+      "expected": "not_document",
+      "condition": "perspective",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0915
+    },
+    {
+      "id": "case-0072",
+      "expected": "not_document",
+      "condition": "blur",
+      "document": "unknown",
+      "student": "unknown",
+      "reason": "uncertain",
+      "manual_review": true,
+      "seconds": 0.0934
+    }
+  ]
+}
