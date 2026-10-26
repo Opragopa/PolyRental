@@ -36,6 +36,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup failed; reset stopped.' }
 $backup = Get-ChildItem -LiteralPath $backupDirectory -Filter 'polyrental-*.prbak' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 if (-not $backup -or $backup.Length -le 0) { throw 'Encrypted backup file is missing or empty; reset stopped.' }
 $verifyName = "polyrental-backup-verify-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
+$verifyArchiveName = "$($backup.BaseName).verify-$([Guid]::NewGuid().ToString('N').Substring(0, 12)).dump"
+$verifyArchive = Join-Path $backupDirectory $verifyArchiveName
 try {
     & docker run -d --rm --name $verifyName -e POSTGRES_PASSWORD=verify -e POSTGRES_DB=verify postgres:16
     if ($LASTEXITCODE -ne 0) { throw 'Unable to start isolated PostgreSQL backup verifier.' }
@@ -45,11 +47,13 @@ try {
         if ($attempt -eq 20) { throw 'Isolated backup verifier did not become ready.' }
         Start-Sleep -Seconds 1
     }
-    $verifyCommand = "docker run --rm -i --env BACKUP_MASTER_KEY -v `"$backupMount`" polyrental-miniapp:latest python /app/scripts/verify_encrypted_backup.py /backup/$($backup.Name) --stdout | docker run --rm -i --network container:$verifyName -e PGPASSWORD=verify postgres:16 pg_restore -h 127.0.0.1 -U postgres -d verify --exit-on-error -"
-    & cmd.exe /d /s /c $verifyCommand
+    & docker run --rm --env BACKUP_MASTER_KEY -v $backupMount polyrental-miniapp:latest python /app/scripts/verify_encrypted_backup.py "/backup/$($backup.Name)" --output "/backup/$verifyArchiveName"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $verifyArchive) -or (Get-Item -LiteralPath $verifyArchive).Length -le 0) { throw 'Unable to decrypt the backup for isolated restore verification.' }
+    & docker run --rm --network "container:$verifyName" -e PGPASSWORD=verify -v $backupMount postgres:16 pg_restore -h 127.0.0.1 -U postgres -d verify --exit-on-error "/backup/$verifyArchiveName"
     if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup restore verification failed; reset stopped.' }
 } finally {
     & docker rm -f $verifyName 2>$null | Out-Null
+    if (Test-Path -LiteralPath $verifyArchive) { Remove-Item -LiteralPath $verifyArchive -Force }
 }
 
 $dbContainer = (& docker @compose ps -q db).Trim()

@@ -14,7 +14,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("backup", type=Path)
     parser.add_argument("--stdout", action="store_true", help="Write the verified PostgreSQL archive to standard output")
+    parser.add_argument("--output", type=Path, help="Write the verified PostgreSQL archive to this file")
     args = parser.parse_args()
+    if args.stdout and args.output:
+        parser.error("--stdout and --output cannot be used together")
     data = args.backup.read_bytes()
     if len(data) <= len(MAGIC) + 12 + 16 or not data.startswith(MAGIC):
         raise SystemExit("Backup file is empty or has an invalid header")
@@ -28,6 +31,10 @@ def main():
         raise SystemExit("Backup decrypted to an empty archive")
     if args.stdout:
         sys.stdout.buffer.write(archive)
+        return
+    if args.output:
+        args.output.write_bytes(archive)
+        print(f"Decrypted PostgreSQL archive: {args.output} ({len(archive)} bytes)")
         return
     check = subprocess.run(["pg_restore", "--list", "-"], input=archive, capture_output=True)
     if check.returncode:
