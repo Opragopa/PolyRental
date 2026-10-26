@@ -61,7 +61,7 @@ Telegram-бот и ролевая Mini App для аренды оборудов�
 
 ### CI/CD
 
-GitHub Actions запускает тесты для pull request и каждого push. Push в `main` также разворачивается на production Windows-хост через SSH после успешных тестов. Добавьте в GitHub Secrets значения `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (строка known_hosts для хоста) и `DEPLOY_PATH` (абсолютный путь к клону, например `C:\PROJECTS\PolyRental`). Перед первым запуском настройте на сервере SSH-доступ для ключа и доступ этого пользователя к Docker и `git pull` из `origin`. Когда всё готово, добавьте GitHub Actions variable `DEPLOY_ENABLED` со значением `true`; до этого deployment-job будет пропущен, а CI продолжит проверять код.
+GitHub Actions запускает тесты для pull request и каждого push. Deployment после успешного push в `main` выполняет self-hosted runner на production Windows-хосте: входящий SSH и роутерный проброс не нужны. Установите runner с меткой `polyrental-production` от имени пользователя, у которого есть доступ к Docker, `.env` и read-only Deploy key для `git pull`. В GitHub Actions Variables добавьте `DEPLOY_PATH` (абсолютный путь к production-клону, например `C:\PROJECTS\PolyRental`) и `DEPLOY_ENABLED=true`; пока флажок не включён, deployment-job будет пропущен, а CI продолжит проверять код.
 
 Адаптированная [стратегия тестирования Mini App](docs/testing-strategy.md): локальный preview, API и роли, эмуляция Telegram, реальные клиенты и проверка удобства пользователями.
 
