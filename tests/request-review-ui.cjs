@@ -34,6 +34,16 @@ const openCard = async (page, id) => {
   await card(page, id).locator(".request-toggle").click();
   await card(page, id).locator(".request-body").waitFor({ state: "visible" });
 };
+const assertHistory = async (page, id) => {
+  const entries = card(page, id).locator(".request-history-list li");
+  // Opening the accordion starts a separate fetch; visible request details do
+  // not mean its asynchronously loaded audit history has rendered yet.
+  await entries.nth(1).waitFor({ state: "visible" });
+  assert.deepEqual(await entries.locator("strong").allTextContents(), ["Заявка подтверждена", "Анкета одобрена"]);
+  const actors = await entries.locator("span").allTextContents();
+  assert.match(actors[0], /МСК · ID 100$/);
+  assert.match(actors[1], /МСК · ID 200$/);
+};
 const waitUntil = async (predicate, message) => {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (await predicate()) return;
@@ -130,7 +140,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.equal(overflow, false, `No horizontal overflow at ${width}px`);
       const touch = await review.getByRole("button").evaluateAll(buttons => buttons.filter(button => button.getBoundingClientRect().height > 0).every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44; }));
       assert.equal(touch, true, "Review touch targets are at least 44px");
-      assert.match(await card(page, 8).locator(".request-history").innerText(), /100/);
+      await assertHistory(page, 8);
       if (process.env.QA_SCREENSHOTS) {
         fs.mkdirSync(process.env.QA_SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.QA_SCREENSHOTS, `v0.3.1-review-${width}-${dark ? "dark" : "light"}.png`), fullPage: true });
@@ -183,7 +193,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.equal(await page.getByRole("button", { name: /^Проверить анкету|Раскрыть реквизиты|Подтвердить документы|Отклонить \/ исправить/ }).count(), 0);
       assert.equal(await page.locator(".identity-check-review").count(), 0);
       assert.equal(requests.filter(request => request.path.includes("/identity")).length, 0, "An ordinary operator never fetches PII or verdicts");
-      assert.match(await card(page, 7).locator(".request-history").innerText(), /100/);
+      await assertHistory(page, 7);
       assert.deepEqual(errors, []); passed.push("operator PII boundary"); await page.close();
     }
 
