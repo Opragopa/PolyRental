@@ -58,7 +58,9 @@ try {
 
 $dbContainer = (& docker @compose ps -q db).Trim()
 if (-not $dbContainer) { throw 'Unable to resolve the production PostgreSQL container.' }
-$dbVolume = (& docker inspect $dbContainer --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}').Trim()
+$mountsJson = (& docker inspect $dbContainer --format '{{json .Mounts}}').Trim()
+if (-not $mountsJson) { throw 'Unable to inspect production PostgreSQL mounts; reset stopped.' }
+$dbVolume = (($mountsJson | ConvertFrom-Json) | Where-Object { $_.Destination -eq '/var/lib/postgresql/data' } | Select-Object -First 1).Name
 if (-not $dbVolume) { throw 'Unable to resolve the PostgreSQL data volume; reset stopped.' }
 Write-Output "Removing only PostgreSQL volume: $dbVolume"
 & docker @compose down
