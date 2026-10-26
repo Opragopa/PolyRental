@@ -79,7 +79,8 @@ if __name__ == "__main__":
         for index in range(1, 4):
             save_equipment(f"QA-CAM-{index}", "", "", 0, "available", article_id=article_id,
                            storage_location=f"A-0{index}")
-        start = now() + timedelta(days=3)
+        # Keep the fixture valid when the booking notice is four calendar days.
+        start = now() + timedelta(days=4)
         booking_id = create_booking(42, "QA клиент", "@qa", start, start + timedelta(hours=2),
                                     [{"article_id": article_id, "quantity": 1}])
         transition(booking_id, "confirmed", 100)
@@ -100,4 +101,4 @@ if __name__ == "__main__":
         review_identity(booking_id, 200, True)
         assign_booking_assets(booking_id, 100)
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("QA_PORT", "8000")))
