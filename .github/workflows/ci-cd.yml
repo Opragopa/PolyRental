@@ -38,8 +38,9 @@ jobs:
       - name: Update and restart the production services
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: >-
-          ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST"
+          ssh -o BatchMode=yes -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST"
           "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '$DEPLOY_PATH\\scripts\\deploy.ps1'"
