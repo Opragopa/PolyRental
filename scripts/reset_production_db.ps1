@@ -29,12 +29,28 @@ if ((& git rev-parse HEAD).Trim() -ne $ExpectedCommit) { throw 'Production check
 $compose = @('compose', '-f', 'compose.yaml', '-f', 'compose.miniapp.yaml', '-f', 'compose.public.yaml')
 & docker @compose up -d db
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start PostgreSQL for backup' }
-& python scripts/backup_encrypted.py $backupDirectory
+$backupMount = "$backupDirectory`:/backup"
+$backupCommand = "docker $($compose -join ' ') exec -T db pg_dump -U polyrental -d polyrental --format=custom | docker run --rm -i --env BACKUP_MASTER_KEY -v `"$backupMount`" polyrental-miniapp:latest python /app/scripts/backup_encrypted.py /backup --stdin"
+& cmd.exe /d /s /c $backupCommand
 if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup failed; reset stopped.' }
 $backup = Get-ChildItem -LiteralPath $backupDirectory -Filter 'polyrental-*.prbak' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 if (-not $backup -or $backup.Length -le 0) { throw 'Encrypted backup file is missing or empty; reset stopped.' }
-& python scripts/verify_encrypted_backup.py $backup.FullName
-if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup verification failed; reset stopped.' }
+$verifyName = "polyrental-backup-verify-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
+try {
+    & docker run -d --rm --name $verifyName -e POSTGRES_PASSWORD=verify -e POSTGRES_DB=verify postgres:16
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to start isolated PostgreSQL backup verifier.' }
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        & docker exec $verifyName pg_isready -U postgres -d verify | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
+        if ($attempt -eq 20) { throw 'Isolated backup verifier did not become ready.' }
+        Start-Sleep -Seconds 1
+    }
+    $verifyCommand = "docker run --rm -i --env BACKUP_MASTER_KEY -v `"$backupMount`" polyrental-miniapp:latest python /app/scripts/verify_encrypted_backup.py /backup/$($backup.Name) --stdout | docker run --rm -i --network container:$verifyName -e PGPASSWORD=verify postgres:16 pg_restore -h 127.0.0.1 -U postgres -d verify --exit-on-error -"
+    & cmd.exe /d /s /c $verifyCommand
+    if ($LASTEXITCODE -ne 0) { throw 'Encrypted backup restore verification failed; reset stopped.' }
+} finally {
+    & docker rm -f $verifyName 2>$null | Out-Null
+}
 
 $dbContainer = (& docker @compose ps -q db).Trim()
 if (-not $dbContainer) { throw 'Unable to resolve the production PostgreSQL container.' }
