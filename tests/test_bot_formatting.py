@@ -1,8 +1,6 @@
 import asyncio
-from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from zoneinfo import ZoneInfo
 
 from aiogram.enums import ParseMode
 
@@ -11,13 +9,12 @@ from app.bot import booking_created_text, change, reply_to_customer, support_mes
 from app.miniapp import notify_booking_status
 
 
-def test_booking_message_highlights_deadline():
-    booking = SimpleNamespace(id=42, hold_expires_at=datetime(2026, 10, 26, 14, 30,
-                                                               tzinfo=ZoneInfo("Europe/Moscow")))
+def test_booking_message_waits_for_operator_without_deadline():
+    booking = SimpleNamespace(id=42, hold_expires_at=None)
     text = booking_created_text(booking)
     assert "<b>Заявка №42 создана</b>" in text
-    assert "<i>Ожидает ответа менеджера</i>" in text
-    assert "<u>26.10.2026 14:30 МСК</u>" in text
+    assert "Ожидает решения оператора" in text
+    assert "до подтверждения или отмены" in text
 
 
 def test_support_message_escapes_user_text(monkeypatch):

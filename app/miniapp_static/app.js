@@ -442,7 +442,7 @@
       const booking = await api("/api/miniapp/bookings", { method: "POST", body: JSON.stringify(payload) });
       state.booking = booking; state.step = 4; clearDraft();
       $("done-title").textContent = `Заявка №${booking.id} создана`;
-      $("done-description").textContent = `Ответ менеджера ожидается до ${dateText(booking.hold_expires_at)} МСК. Статус придёт в Telegram.`;
+      $("done-description").textContent = "Заявка будет ждать решения оператора без ограничения по времени. Статус придёт в Telegram.";
       tg?.HapticFeedback?.notificationOccurred("success");
     } catch (error) {
       const changed = error.message.includes("Цена изменилась") || error.message.includes("занято") || error.message.includes("недоступно");
@@ -486,7 +486,7 @@
       if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? `<p>Ответ менеджера до ${escapeHtml(dateText(order.hold_expires_at))} МСК</p>` : ""}`;
+        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? "<p>Ожидает решения оператора без ограничения по времени.</p>" : ""}`;
         if (order.status === "pending") appendPendingContactEditor(card, order);
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
@@ -686,14 +686,14 @@
         summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact}`;
         card.append(summary);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
-        if (order.status === "pending") actions.append(actionButton("Подтвердить", transitionAction("confirmed"), order.id, "primary"));
+        if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
         if (order.status === "confirmed") {
-          if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary"));
+          if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
           else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = "Комплектацию можно начать после заполнения документов клиентом и проверки оператором."; actions.append(note); }
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
-          const ready = actionButton("Далее", transitionAction("ready"), order.id, "primary");
+          const ready = actionButton("Подтвердить готовность к выдаче", transitionAction("ready"), order.id, "primary workflow-next");
           const canConfirm = () => order.assets.length > 0 && order.assets.every((asset) => inspectionFor(order, asset, "pre_issue")?.result === "pass");
           const readinessHint = document.createElement("p"); readinessHint.className = "workflow-hint";
           const updateReadinessHint = () => {
@@ -714,7 +714,8 @@
           actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
-          actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id, "secondary lock-exempt"));
+          actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id,
+            order.identity_status === "verified" ? "secondary lock-exempt" : "primary workflow-next lock-exempt"));
           const documents = document.createElement("details"); documents.className = "document-actions";
           documents.innerHTML = `<summary>Документы анкеты</summary><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
           const passport = document.createElement("div"); passport.className = "document-group";
@@ -746,14 +747,14 @@
           documentButtons.append(actButton, receiptButton); documents.append(documentButtons); actions.append(documents);
         }
         if (order.status === "ready" && state.role?.pii_admin && order.identity_status === "verified" && !order.act_signed_at) {
-          actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id, "secondary lock-exempt"));
+          actions.append(actionButton("Отметить подписание акта", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id, "primary workflow-next lock-exempt"));
         }
-        if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать", transitionAction("issued"), order.id, "primary"));
+        if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать оборудование", transitionAction("issued"), order.id, "primary workflow-next"));
         if (order.status === "ready" && !order.act_signed_at) { const note = document.createElement("p"); note.textContent = "Оператор должен отметить подписание акта перед выдачей."; actions.append(note); }
         if (["pending", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.id, order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
-        if (order.status === "issued") actions.append(actionButton("Начать возврат", transitionAction("return_inspection"), order.id, "primary"));
+        if (order.status === "issued") actions.append(actionButton("Начать приём оборудования", transitionAction("return_inspection"), order.id, "primary workflow-next"));
         if (order.status === "return_inspection") {
-          const finishReturn = actionButton("Далее", transitionAction("returned"), order.id, "primary");
+          const finishReturn = actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary workflow-next");
           const canFinishReturn = () => order.assets.length > 0 && order.assets.every((asset) => Boolean(inspectionFor(order, asset, "check_in")));
           const returnHint = document.createElement("p"); returnHint.className = "workflow-hint";
           const updateReturnHint = () => {
@@ -966,6 +967,20 @@
       button.addEventListener("click", () => renderAdminCatalog(result, { type })); toolbar.append(button);
     }
     content.append(toolbar);
+    const importer = document.createElement("details"); importer.className = "catalog-import";
+    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>CSV в UTF-8 с разделителем «;» или «,». Обязательные колонки: <code>sku</code>, <code>name</code>, <code>serial</code>. Для существующего артикула можно добавить новые экземпляры; серийные номера не должны повторяться. Файл импортируется целиком или не импортируется вовсе.</p><a href="/miniapp/static/equipment-import-template.csv" download="equipment-import-template.csv">Скачать шаблон CSV</a><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
+    importer.querySelector("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget; const button = form.querySelector('[type="submit"]'); button.disabled = true;
+      try {
+        const result = await api("/api/miniapp/admin/catalog/import-csv", { method: "POST", body: new FormData(form) });
+        await showAdmin("catalog");
+        const notice = document.createElement("p"); notice.className = "notice"; notice.setAttribute("role", "status");
+        notice.textContent = `Добавлено моделей: ${result.articles_created}; экземпляров: ${result.equipment_created}.`;
+        $("admin-content").prepend(notice);
+      } catch (error) { showError(error.message); button.disabled = false; }
+    });
+    content.append(importer);
     if (editor) content.append(catalogEditor(result, editor));
 
     if (result.dependencies.length) {

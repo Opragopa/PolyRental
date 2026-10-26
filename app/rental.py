@@ -16,7 +16,6 @@ from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, Booki
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
                  PrivacyConsent, RepairTicket, Session)
-from .schedule import response_deadline
 
 
 class Conflict(Exception):
@@ -105,15 +104,7 @@ def validate_interval(start, end, enforce_booking_notice=False):
 
 
 def expire_holds(session):
-    expired = session.scalars(select(Booking).where(
-        Booking.status == "pending", Booking.hold_expires_at <= now()).with_for_update()).all()
-    for booking in expired:
-        booking.status = "expired"
-        booking.identity_status = "not_required"
-        identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
-        if identity:
-            identity.delete_after = now() + timedelta(hours=24)
-        session.add(Audit(booking_id=booking.id, actor_id=0, action="expired"))
+    """Keep the old entry point for callers; pending bookings no longer expire."""
 
 
 def booking_total(start, end, rates):
@@ -257,7 +248,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                 customer_id=customer_id, client_request_id=request_id,
                 customer_name=customer_name.strip(), customer_contact=customer_contact.strip(),
                 starts_at=start, ends_at=end, status="pending",
-                hold_expires_at=response_deadline(now()), identity_status="not_required",
+                hold_expires_at=None, identity_status="not_required",
             )
             session.add(booking)
             session.flush()
@@ -531,10 +522,6 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             raise ValueError("Заявка не найдена")
         if customer_id is not None and booking.status not in {"pending", "confirmed"}:
             raise Conflict("Отмена клиентом доступна только до начала комплектации")
-        if booking.status == "pending" and booking.hold_expires_at <= now():
-            booking.status = "expired"
-            session.add(Audit(booking_id=booking.id, actor_id=0, action="expired"))
-            return "expired"
         if action not in TRANSITIONS.get(booking.status, set()):
             raise Conflict("Недопустимое изменение статуса")
         if customer_id is None:

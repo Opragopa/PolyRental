@@ -62,13 +62,9 @@ def parse_time(value):
     return naive.replace(tzinfo=MOSCOW)
 
 
-def booking_deadline_text(booking):
-    return booking.hold_expires_at.astimezone(MOSCOW).strftime("%d.%m.%Y %H:%M МСК")
-
-
 def booking_created_text(booking):
     return (f"<b>Заявка №{booking.id} создана</b>\n"
-            f"<i>Ожидает ответа менеджера</i> до <u>{booking_deadline_text(booking)}</u>.")
+            "<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.")
 
 
 def is_admin(user_id):
@@ -155,7 +151,7 @@ async def show_review(message, state):
     items_text = "\n".join(f"• {html.escape(item['name'])}" for item in chosen)
     text = (f"<b>Проверьте заявку</b>\n\n<u>Период</u>: {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
             f"<u>Оборудование</u>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> <tg-spoiler>{html.escape(data['contact'])}</tg-spoiler>\n\n"
-            "<i>После отправки покажем, до какого времени заявка ожидает ответа менеджера.</i>")
+            "<i>После отправки заявка будет ждать решения оператора без ограничения по времени.</i>")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Подтвердить бронирование", callback_data="rent:confirm")],
         [InlineKeyboardButton(text="Изменить сроки", callback_data="rent:edit:start"), InlineKeyboardButton(text="Изменить оборудование", callback_data="rent:edit:equipment")],

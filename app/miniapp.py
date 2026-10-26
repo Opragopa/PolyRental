@@ -15,7 +15,6 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -30,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from .documents import archived_document, operator_document
+from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .booking_messages import booking_status_text
 from . import __version__
 from .db import BookingDocument, Inspection, Session
@@ -206,9 +206,7 @@ async def notify_new_booking(booking_id: int, customer_id: int):
     try:
         async with make_bot(token) as bot:
             await notify_managers(bot, booking_id)
-            booking = await asyncio.to_thread(get_booking, booking_id)
-            deadline = booking.hold_expires_at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
-            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает ответа менеджера</i> до <u>{deadline} МСК</u>.", parse_mode=ParseMode.HTML)
+            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -628,6 +626,18 @@ async def admin_catalog(user=Depends(require_admin)):
                                "child_article_id": item.child_article_id,
                                "quantity": item.quantity, "billable": item.billable}
                               for item in dependencies]}
+
+
+@router.post("/api/miniapp/admin/catalog/import-csv")
+async def admin_import_catalog_csv(file: UploadFile = File(...), user=Depends(require_admin)):
+    data = await file.read(MAX_CSV_BYTES + 1)
+    await file.close()
+    try:
+        return await asyncio.to_thread(import_catalog_csv, data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "Артикул или серийный номер уже добавлен другим оператором") from exc
 
 
 class ArticleRequest(BaseModel):

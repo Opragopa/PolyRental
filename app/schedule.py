@@ -1,11 +1,9 @@
-"""Moscow working hours used for booking response deadlines."""
+"""Moscow working calendar for planned issue and return schedules."""
 
 import os
-from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import date, time
 
 
-MOSCOW = ZoneInfo("Europe/Moscow")
 FEDERAL_HOLIDAYS = {(1, day) for day in range(1, 9)} | {
     (2, 23), (3, 8), (5, 1), (5, 9), (6, 12), (11, 4),
 }
@@ -34,18 +32,3 @@ def is_working_day(day):
 def working_hours(day):
     """Weekdays: 09:00–17:30; June through August: 08:30–17:00."""
     return (time(8, 30), time(17, 0)) if 6 <= day.month <= 8 else (time(9, 0), time(17, 30))
-
-
-def response_deadline(created_at):
-    """Allow 30 minutes during office hours, or until the next working day closes."""
-    local = created_at.astimezone(MOSCOW)
-    opening, closing = working_hours(local.date())
-    close_at = datetime.combine(local.date(), closing, MOSCOW)
-    if is_working_day(local.date()) and opening <= local.time() < closing:
-        short_deadline = local + timedelta(minutes=30)
-        if short_deadline <= close_at:
-            return short_deadline.astimezone(timezone.utc)
-    day = local.date() if is_working_day(local.date()) and local.time() < opening else local.date() + timedelta(days=1)
-    while not is_working_day(day):
-        day += timedelta(days=1)
-    return datetime.combine(day, working_hours(day)[1], MOSCOW).astimezone(timezone.utc)

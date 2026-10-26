@@ -8,7 +8,6 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import Audit, Booking, BookingItem, BookingOperationLease, Equipment, Occupancy, Session
 from .rental import Conflict as RentalConflict, _claim_stage
-from .schedule import response_deadline
 
 
 class Conflict(Exception):
@@ -32,11 +31,7 @@ def validate_interval(start, end, enforce_booking_notice=False):
 
 
 def expire_holds(session):
-    expired = session.scalars(select(Booking).where(Booking.status == "pending", Booking.hold_expires_at <= now()).with_for_update()).all()
-    for booking in expired:
-        session.execute(delete(Occupancy).where(Occupancy.booking_id == booking.id))
-        booking.status = "expired"
-        session.add(Audit(booking_id=booking.id, actor_id=0, action="expired"))
+    """Legacy entry point; pending bookings now wait for an operator decision."""
 
 
 def availability(start, end):
@@ -82,7 +77,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, equ
             items = session.scalars(select(Equipment).where(Equipment.id.in_(ids))).all()
             if len(items) != len(ids) or any(item.condition != "available" for item in items):
                 raise Conflict("Оборудование недоступно")
-            booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=response_deadline(now()))
+            booking = Booking(customer_id=customer_id, client_request_id=request_id, customer_name=customer_name.strip(), customer_contact=customer_contact.strip(), starts_at=start, ends_at=end, status="pending", hold_expires_at=None)
             session.add(booking)
             session.flush()
             for item in items:
@@ -110,11 +105,6 @@ def transition(booking_id, action, actor_id, customer_id=None):
             raise ValueError("Заявка не найдена")
         if customer_id is not None and booking.customer_id != customer_id:
             raise ValueError("Заявка не найдена")
-        if booking.status == "pending" and booking.hold_expires_at <= now():
-            session.execute(delete(Occupancy).where(Occupancy.booking_id == booking.id))
-            booking.status = "expired"
-            session.add(Audit(booking_id=booking.id, actor_id=0, action="expired"))
-            return "expired"
         if action not in TRANSITIONS.get(booking.status, set()):
             raise Conflict("Недопустимое изменение статуса")
         if customer_id is None:

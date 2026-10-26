@@ -154,6 +154,9 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .admin-card { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 15px; }
 .admin-card .action-row { gap: 6px; margin: 10px 0; }
 .admin-card .action-row > .button { min-height: 36px; padding: 7px 11px; font-size: 14px; }
+.admin-card .action-row > .workflow-next { display: flex; align-items: center; justify-content: space-between; flex: 1 1 100%; width: 100%; min-height: 56px; margin: 12px 0 4px; padding: 13px 17px; border: 2px solid var(--accent); font-size: 16px; text-align: left; box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 26%, transparent); }
+.admin-card .action-row > .workflow-next::after { content: "→"; margin-left: 14px; font-size: 22px; line-height: 1; }
+.admin-card .action-row > .workflow-next:disabled { box-shadow: none; }
 .calendar-sync { margin: 4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
 .calendar-sync > summary { color: var(--accent); font-weight: 750; cursor: pointer; }
 .calendar-sync > p { margin: 8px 0; color: var(--muted); font-size: 14px; }
@@ -161,6 +164,12 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .calendar-sync input { width: 100%; min-height: 40px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
 .calendar-sync input[hidden] { display: none; }
 .calendar-sync-status { overflow-wrap: anywhere; }
+.catalog-import { margin: 12px 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.catalog-import summary { color: var(--accent); font-weight: 750; cursor: pointer; }
+.catalog-import p { margin: 12px 0; color: var(--muted); font-size: 14px; }
+.catalog-import a { color: var(--accent); font-weight: 700; }
+.catalog-import-form { margin-top: 14px; }
+.catalog-import-form .field { margin-bottom: 10px; }
 .admin-card h3 { margin: 0 0 8px; }
 .admin-card p { margin: 6px 0; color: var(--muted); }
 .booking-maintenance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
