@@ -21,15 +21,17 @@ jobs:
   deploy:
     name: Deploy production
     needs: test
-    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    # Production credentials are repository secrets. A successful push to main
+    # is the deliberate deployment trigger.
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Windows, PolyRental]
     environment: production
     steps:
       - name: Update and restart the production services locally
         shell: pwsh
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
-          if (-not $env:DEPLOY_PATH) { throw 'GitHub Actions variable DEPLOY_PATH is not configured' }
+          if (-not $env:DEPLOY_PATH) { throw 'GitHub Actions secret DEPLOY_PATH is not configured' }
           & (Join-Path $env:DEPLOY_PATH 'scripts\deploy.ps1') -ExpectedCommit $env:EXPECTED_COMMIT
