@@ -1065,7 +1065,14 @@
     const controls = document.createElement("div"); controls.className = "catalog-controls";
     controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
     const [search, status] = controls.querySelectorAll("input, select"); status.value = catalogView.status;
-    search.addEventListener("input", () => { catalogView.query = search.value; renderAdminCatalog(result, editor); });
+    search.addEventListener("input", () => {
+      const selection = { start: search.selectionStart, end: search.selectionEnd, direction: search.selectionDirection };
+      catalogView.query = search.value;
+      renderAdminCatalog(result, editor);
+      const refreshedSearch = $("admin-content").querySelector(".catalog-controls input");
+      refreshedSearch?.focus({ preventScroll: true });
+      if (selection.start != null && selection.end != null) refreshedSearch?.setSelectionRange(selection.start, selection.end, selection.direction || "none");
+    });
     status.addEventListener("change", () => { catalogView.status = status.value; renderAdminCatalog(result, editor); });
     content.append(controls);
     const importer = document.createElement("details"); importer.className = "catalog-import";
