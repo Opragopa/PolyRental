@@ -22,7 +22,7 @@ jobs:
     name: Deploy production
     needs: test
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
-    runs-on: [self-hosted, Windows, polyrental-production]
+    runs-on: [self-hosted, Windows, PolyRental]
     environment: production
     steps:
       - name: Update and restart the production services locally
