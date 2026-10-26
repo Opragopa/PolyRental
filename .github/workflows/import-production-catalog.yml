@@ -1,0 +1,29 @@
+name: Import production catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type IMPORT_PRODUCTION_CATALOG to import the staged CSV into the empty production catalog
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    if: github.event.inputs.confirmation == 'IMPORT_PRODUCTION_CATALOG'
+    runs-on: [self-hosted, Windows, PolyRental]
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: Import catalog from the temporary encrypted GitHub secret
+        shell: powershell
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          CATALOG_IMPORT_CSV_B64: ${{ secrets.CATALOG_IMPORT_CSV_B64 }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          if (-not $env:DEPLOY_PATH) { throw 'DEPLOY_PATH is not configured' }
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts\import_production_catalog.ps1') -ExpectedCommit $env:EXPECTED_COMMIT -ProjectRoot $env:DEPLOY_PATH

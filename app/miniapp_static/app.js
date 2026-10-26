@@ -33,6 +33,13 @@
     battery: ["Питание", "▰"], accessory: ["Аксессуар", "◆"], generic: ["Оборудование", "▣"],
   };
   function categoryLabel(category) { return categoryMeta[category]?.[0] || categoryMeta.generic[0]; }
+  function catalogType(item) {
+    return item.category && item.category !== "generic" ? categoryLabel(item.category) : (item.description || categoryLabel(item.category));
+  }
+  function catalogTitle(item) {
+    const type = catalogType(item);
+    return type && item.name ? `${type} — ${item.name}` : (item.name || type);
+  }
   function catalogMedia(item, className) {
     if (item.image_url && /^https:\/\//i.test(item.image_url)) return `<img class="${className}-photo" src="${escapeHtml(item.image_url)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">`;
     const meta = categoryMeta[item.category] || categoryMeta.generic;
@@ -445,7 +452,8 @@
       const card = document.createElement("article");
       card.className = `item-card${selected ? " selected" : ""}`;
       const media = catalogMedia(item, "item");
-      card.innerHTML = `${media}<span class="item-top"><span><span class="item-type">${escapeHtml(item.description || categoryLabel(item.category))}</span><span class="item-name">${escapeHtml(item.name)}</span><span class="available-badge">Доступно: ${item.available_quantity} шт.</span></span></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
+      const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
+      card.innerHTML = `${media}<span class="item-top"><span>${typeNote}<span class="item-name">${escapeHtml(catalogTitle(item))}</span><span class="available-badge">Доступно: ${item.available_quantity} шт.</span></span></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
       card.querySelector(".quantity-minus").disabled = quantity === 0;
       card.querySelector(".quantity-plus").disabled = quantity >= Math.min(30, item.available_quantity);
       card.querySelector(".quantity-minus").addEventListener("click", () => { if (quantity <= 1) state.quantities.delete(item.id); else state.quantities.set(item.id, quantity - 1); state.requestId = null; renderItems(); saveDraft(); });
@@ -458,7 +466,7 @@
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
     const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
-    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li><span>${escapeHtml(item.name)}</span><strong>${state.quantities.get(item.id)} шт.</strong></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
+    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li><span>${escapeHtml(catalogTitle(item))}</span><strong>${state.quantities.get(item.id)} шт.</strong></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
   }
 
   async function next() {

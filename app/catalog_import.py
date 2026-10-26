@@ -27,6 +27,21 @@ PROFILES = {"generic", "camera", "optics", "light", "battery"}
 CONDITIONS = {"available", "maintenance", "retired"}
 
 
+def _inventory_category(kind):
+    normalized = " ".join(kind.casefold().split())
+    if "камера" in normalized:
+        return "camera"
+    if "объектив" in normalized or "линза" in normalized:
+        return "optics"
+    if "аккумулятор" in normalized or "батаре" in normalized:
+        return "battery"
+    if any(word in normalized for word in ("свет", "лампа", "осветител", "прожектор")):
+        return "light"
+    if any(word in normalized for word in ("адаптер", "кабель", "штатив", "креплен", "микрофон", "наушник")):
+        return "accessory"
+    return "generic"
+
+
 def _text(value, label, limit, line, required=False):
     result = (value or "").strip()
     if required and not result:
@@ -61,7 +76,9 @@ def _parse_inventory_csv(source):
         kind = _text(row.get("Наименование"), "Наименование", 200, line, True)
         model_name = _text(row.get("Модель"), "Модель", 200, line) or kind
         sku = _source_sku(kind, model_name)
-        model = models.setdefault(sku, {"name": model_name, "fields": {"description": kind}, "line": line})
+        model = models.setdefault(sku, {"name": model_name, "fields": {
+            "description": kind, "category": _inventory_category(kind),
+        }, "line": line})
         if model["name"] != model_name or model["fields"]["description"] != kind:
             raise ValueError(f"Строка {line}: у модели разные типы оборудования")
         assets.append({"line": line, "sku": sku, "serial": _optional_identifier(row.get("S/N")),
