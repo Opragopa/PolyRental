@@ -21,6 +21,7 @@ from .db import Session, init_db
 from .documents import ensure_templates, render_document
 from .miniapp import STATIC_DIR, router as miniapp_router
 from .rental import TRANSITIONS
+from .roles import is_staff, audit_admin_access, validate_role_config
 from .service import Conflict, expire_holds, list_bookings, list_equipment, save_equipment, transition
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -33,10 +34,6 @@ async def expiry_loop():
             with Session.begin() as session:
                 expire_holds(session)
         await asyncio.to_thread(expire)
-
-
-def admin_ids():
-    return {int(value.strip()) for value in os.getenv("ADMIN_IDS", "").split(",") if value.strip().isdigit()}
 
 
 def verify_telegram(data):
@@ -56,6 +53,7 @@ def verify_telegram(data):
 
 @asynccontextmanager
 async def lifespan(app):
+    validate_role_config()
     init_db()
     ensure_templates()
     task = asyncio.create_task(expiry_loop())
@@ -71,8 +69,9 @@ app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-st
 
 def require_admin(request):
     admin = request.session.get("admin_id")
-    if admin not in admin_ids():
+    if not is_staff(admin):
         raise HTTPException(403, "Войдите через Telegram как менеджер")
+    audit_admin_access(admin, "web")
     return admin
 
 
@@ -99,7 +98,7 @@ def login():
 @app.get("/auth/telegram")
 def auth_telegram(request: Request):
     data = dict(request.query_params)
-    if not verify_telegram(data) or int(data["id"]) not in admin_ids():
+    if not verify_telegram(data) or not is_staff(int(data["id"])):
         raise HTTPException(403, "Telegram ID не разрешен или подпись неверна")
     request.session["admin_id"] = int(data["id"])
     return RedirectResponse("/admin", status_code=303)

@@ -13,6 +13,7 @@ from .miniapp import STATIC_DIR, router
 from .documents import archive_completed_documents
 from .notification_outbox import retry_pending_notifications
 from .pii import purge_expired_identities
+from .roles import validate_role_config
 
 
 async def retention_loop():
@@ -27,6 +28,7 @@ async def retention_loop():
 
 @asynccontextmanager
 async def lifespan(_app):
+    validate_role_config()
     await asyncio.to_thread(init_db)
     await asyncio.to_thread(archive_completed_documents)
     await asyncio.to_thread(purge_expired_identities)

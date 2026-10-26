@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+from dataclasses import asdict
 from datetime import date, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -19,6 +20,8 @@ from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyC
                  RepairTicket, Session)
 from .rental import Conflict, now
 from .universities import UNIVERSITY_SET
+from .roles import configured_ids
+from .document_check import check_documents, Verdict
 
 
 DOCUMENT_KINDS = {"passport_main", "passport_registration", "student_front"}
@@ -87,8 +90,7 @@ def validate_identity_payload(payload, legacy_institution=None):
 
 
 def pii_admin_ids():
-    return {int(value.strip()) for value in os.getenv("PII_ADMIN_IDS", "").split(",")
-            if value.strip().isdigit()}
+    return configured_ids("PII_ADMIN_IDS")
 
 
 def operator_ready():
@@ -113,7 +115,8 @@ def consent_text():
         "разворота паспорта с фотографией, страницы регистрации и лицевой стороны студенческого билета.\n\n"
         "Оператор выполняет сбор, запись, систематизацию, хранение, уточнение, извлечение, использование, "
         "предоставление допущенным сотрудникам, блокирование и уничтожение данных. Фотографии проверяются "
-        "сотрудником без OCR; перед сохранением изображения декодируются, пересохраняются без EXIF и шифруются. "
+        "локально для предварительного определения типа документа, затем сотрудником. Распознанный текст не сохраняется; "
+        "изображения не передаются внешним сервисам, пересохраняются без EXIF и шифруются. "
         "Реквизиты и фотографии не передаются в сообщения Telegram и не используются для рекламы.\n\n"
         "Полные данные доступны только сотрудникам, включённым в закрытый список проверки документов. "
         "Анкета и фотографии хранятся во время оформления и исполнения аренды, затем удаляются через 90 дней после возврата оборудования; "
@@ -257,6 +260,7 @@ def reusable_identity_document(booking_id, customer_id, kind):
 
 
 def submit_identity(booking_id, customer_id, payload, documents, policy_version="", text_hash=""):
+    checks = check_documents(documents)
     if not isinstance(payload, dict):
         raise ValueError("Неверный формат анкеты")
     with Session() as lookup:
@@ -290,15 +294,18 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         if booking.identity_status not in {"required", "needs_changes"}:
             raise Conflict("Отправка документов недоступна в текущем состоянии")
         old_documents = {}
+        old_checks = {}
         if identity and identity.status == "needs_changes":
             required_images = set(json.loads(identity.review_fields or "[]")) & DOCUMENT_KINDS
             if not required_images.issubset(documents):
                 raise ValueError("Загрузите фотографии, для которых оператор запросил исправления")
             _, old_dek = _decrypt_payload(identity)
             for document in identity.documents:
+                old_checks[document.kind] = _document_check(document, old_dek, booking.id)
                 old_documents[document.kind] = (AESGCM(old_dek).decrypt(document.nonce, document.encrypted_data,
                     f"{booking.id}:{document.kind}".encode()), document.media_type)
         documents = {**old_documents, **documents}
+        checks = {**old_checks, **checks}
         if set(documents) != DOCUMENT_KINDS:
             raise ValueError("Нужны три изображения документов")
         dek = AESGCM.generate_key(bit_length=256)
@@ -319,8 +326,13 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         for kind, (data, media_type) in documents.items():
             nonce = os.urandom(12)
             encrypted = AESGCM(dek).encrypt(nonce, data, f"{booking.id}:{kind}".encode())
+            check_nonce = os.urandom(12)
+            encrypted_check = AESGCM(dek).encrypt(check_nonce,
+                json.dumps(checks.get(kind, asdict(Verdict()))).encode(),
+                f"{booking.id}:{kind}:check-v1".encode())
             session.add(IdentityDocument(identity_id=identity.id, kind=kind, media_type=media_type,
-                                         encrypted_data=encrypted, nonce=nonce, size=len(data)))
+                                         encrypted_data=encrypted, nonce=nonce, size=len(data),
+                                         encrypted_check=encrypted_check, check_nonce=check_nonce))
         consent = session.scalar(select(PrivacyConsent).where(PrivacyConsent.booking_id == booking.id))
         if consent is None:
             session.add(PrivacyConsent(booking_id=booking.id, customer_id=customer_id,
@@ -331,12 +343,19 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         session.add(PIIAudit(booking_id=booking.id, actor_id=customer_id, action="submitted"))
 
 
+def _document_check(document, dek, booking_id):
+    if not document.encrypted_check or not document.check_nonce:
+        return asdict(Verdict())
+    return json.loads(AESGCM(dek).decrypt(document.check_nonce, document.encrypted_check,
+                      f"{booking_id}:{document.kind}:check-v1".encode()))
+
+
 def masked_identity(booking_id, actor_id):
     with Session.begin() as session:
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not identity:
             raise ValueError("Анкета не найдена")
-        payload, _ = _decrypt_payload(identity)
+        payload, dek = _decrypt_payload(identity)
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id, action="view_masked"))
         return {
             "status": identity.status, "full_name": payload.get("full_name", ""),
@@ -345,6 +364,8 @@ def masked_identity(booking_id, actor_id):
             "review_comment": identity.review_comment,
             "review_fields": json.loads(identity.review_fields or "[]"),
             "documents": [document.kind for document in identity.documents],
+            "document_checks": {document.kind: _document_check(document, dek, booking_id)
+                                for document in identity.documents},
         }
 
 
