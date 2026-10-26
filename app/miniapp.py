@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from .documents import archived_document, operator_document
+from .booking_messages import booking_status_text
 from . import __version__
 from .db import BookingDocument, Inspection, Session
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
@@ -232,21 +233,15 @@ async def notify_cancelled_booking(booking_id: int):
         pass
 
 
-async def notify_booking_status(booking_id: int, customer_id: int, status: str):
+async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
     token = os.getenv("BOT_TOKEN", "")
     if not token:
         return
-    labels = {"confirmed": "подтверждён — заполните документы в Mini App",
-              "preparing": "передан в подготовку", "ready": "готов к выдаче",
-              "issued": "выдан", "return_inspection": "принят на проверку",
-              "returned": "возврат завершён", "cancelled": "отменён"}
     from .bot import make_bot
     try:
         async with make_bot(token) as bot:
-            formatted_status = html.escape(labels.get(status, status))
-            if status == "cancelled":
-                formatted_status = f"<s>{formatted_status}</s>"
-            await bot.send_message(customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {formatted_status}.", parse_mode=ParseMode.HTML)
+            await bot.send_message(customer_id, booking_status_text(booking_id, status, operator),
+                                   parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -720,7 +715,8 @@ async def admin_transition(booking_id: int, payload: TransitionRequest,
         status = await asyncio.to_thread(transition, booking_id, payload.action, user["id"],
                                          actor_name=operator_name(user))
         booking = await asyncio.to_thread(get_booking, booking_id)
-        background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id, status)
+        background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id, status,
+                                  operator_name(user))
         return admin_booking_view(booking) | {"status": status}
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -838,9 +834,9 @@ async def admin_identity_review(booking_id: int, payload: IdentityReviewRequest,
         claimed = True
         await asyncio.to_thread(review_identity, booking_id, user["id"], payload.approved, payload.comment, payload.fields)
         booking = await asyncio.to_thread(get_booking, booking_id)
-        if not payload.approved:
-            background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id,
-                                      "документы требуют исправления — откройте Mini App")
+        background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id,
+                                  "identity_verified" if payload.approved else "identity_needs_changes",
+                                  operator_name(user))
         return {"status": "verified" if payload.approved else "needs_changes"}
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc

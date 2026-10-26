@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy.exc import IntegrityError
 
 from .db import init_db
+from .booking_messages import booking_status_text
 from .miniapp import BookingRequest
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 
@@ -503,13 +504,13 @@ async def change(message: Message, bot: Bot):
         status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id)
         if status == "expired":
             return await message.answer("Удержание истекло; создайте новую заявку")
-        labels = {"confirmed": "подтверждена", "preparing": "комплектуется", "ready": "готова к выдаче", "issued": "выдана", "return_inspection": "проверяется при возврате", "returned": "возвращена", "cancelled": "отменена"}
-        formatted_status = html.escape(labels.get(status, status))
-        if status == "cancelled":
-            formatted_status = f"<s>{formatted_status}</s>"
-        await message.answer(f"<b>Заявка №{booking_id}</b> · {formatted_status}", parse_mode=ParseMode.HTML)
+        operator = (getattr(message.from_user, "full_name", "") or "").strip()
+        operator = operator or (f"@{message.from_user.username}" if getattr(message.from_user, "username", None)
+                                else f"оператор {message.from_user.id}")
+        update_text = booking_status_text(booking_id, status, operator)
+        await message.answer(update_text, parse_mode=ParseMode.HTML)
         booking = await asyncio.to_thread(get_booking, booking_id)
-        await bot.send_message(booking.customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {formatted_status}", parse_mode=ParseMode.HTML)
+        await bot.send_message(booking.customer_id, update_text, parse_mode=ParseMode.HTML)
     except (ValueError, Conflict) as exc:
         await message.answer(f"Ошибка: {exc}. Формат: {command} НОМЕР")
 
