@@ -1085,6 +1085,29 @@
     return Promise.resolve(window.confirm(`Удалить заявку №${id} полностью? Это действие нельзя отменить.`));
   }
 
+  $("calendar-feed-load").addEventListener("click", async (event) => {
+    const button = event.currentTarget; button.disabled = true;
+    const status = $("calendar-feed-status"); status.textContent = "Формируем защищённую ссылку…";
+    try {
+      const result = await api("/api/miniapp/admin/calendar-feed");
+      const input = $("calendar-feed-url"); input.value = result.url; $("calendar-feed-field").hidden = false;
+      $("calendar-feed-copy").hidden = false;
+      status.textContent = "Вставьте эту ссылку в Google Calendar: Другие календари → Добавить по URL. Ссылка даёт доступ к расписанию; не пересылайте её посторонним.";
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+
+  $("calendar-feed-copy").addEventListener("click", async () => {
+    const input = $("calendar-feed-url");
+    try {
+      await navigator.clipboard.writeText(input.value);
+      $("calendar-feed-status").textContent = "Ссылка скопирована. Добавьте её в Google Calendar через «Другие календари → Добавить по URL».";
+    } catch (_) {
+      input.focus(); input.select();
+      $("calendar-feed-status").textContent = "Ссылка выделена. Скопируйте её и вставьте в Google Calendar через «Другие календари → Добавить по URL».";
+    }
+  });
+
   $("main-button").addEventListener("click", next);
   $("retry-items").addEventListener("click", loadItems);
   $("back-button").addEventListener("click", back);

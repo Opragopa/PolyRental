@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 from uuid import UUID
 
 import httpx
@@ -277,16 +277,20 @@ def calendar_feed(token: str):
     calendar = Calendar()
     calendar.add("prodid", "-//PolyRental//Calendar//RU")
     calendar.add("version", "2.0")
+    status_labels = {"confirmed": "подтверждена", "preparing": "комплектуется", "ready": "готова к выдаче",
+                     "issued": "в аренде", "return_inspection": "приёмка", "returned": "возвращена", "cancelled": "отменена"}
     for booking in list_bookings(limit=None):
-        if booking.status not in {"confirmed", "preparing", "ready", "issued", "return_inspection"}:
+        if booking.status not in status_labels:
             continue
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
         equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
-        event.add("summary", f"Аренда №{booking.id}: {equipment or 'оборудование'}")
-        event.add("description", f"PolyRental · статус: {booking.status}")
+        event.add("summary", f"Аренда №{booking.id} · {equipment or 'оборудование'}")
+        event.add("description", f"Политех.АРЕНДА · {status_labels[booking.status]}")
         event.add("dtstart", booking.starts_at)
-        event.add("dtend", booking.ends_at)
+        event.add("dtend", booking.returned_at if booking.returned_at and booking.status in {"returned", "cancelled"} else booking.ends_at)
+        if booking.status == "cancelled":
+            event.add("status", "CANCELLED")
         calendar.add_component(event)
     return Response(calendar.to_ical(), media_type="text/calendar")
 
@@ -538,6 +542,15 @@ def admin_booking_view(booking):
 @router.get("/api/miniapp/admin/bookings")
 async def admin_bookings(user=Depends(require_admin)):
     return {"items": [admin_booking_view(booking) for booking in await asyncio.to_thread(list_bookings)]}
+
+
+@router.get("/api/miniapp/admin/calendar-feed")
+async def admin_calendar_feed(user=Depends(require_admin)):
+    public_url = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    token = os.getenv("ICAL_TOKEN", "").strip()
+    if not public_url.startswith("https://") or not token:
+        raise HTTPException(503, "Подписка календаря не настроена")
+    return {"url": f"{public_url}/calendar/{quote(token, safe='')}.ics"}
 
 
 @router.delete("/api/miniapp/admin/bookings/{booking_id}")

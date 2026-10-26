@@ -148,6 +148,13 @@
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
           <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button>
         </div>
+        <details class="calendar-sync">
+          <summary>Подписка Google Calendar</summary>
+          <p>Добавьте ленту в Google Calendar через «Другие календари → Добавить по URL». Будут отображаться подтверждённые аренды, выдачи и возвраты. Google обновляет подписку с задержкой.</p>
+          <div class="action-row"><button id="calendar-feed-load" class="button secondary compact" type="button">Показать ссылку</button><button id="calendar-feed-copy" class="button ghost compact" type="button" hidden>Скопировать</button></div>
+          <label id="calendar-feed-field" class="field wide" hidden><span>Ссылка подписки — доступна операторам</span><input id="calendar-feed-url" type="url" readonly></label>
+          <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
+        </details>
         <div id="admin-content" role="status"></div>
       </section>
     </main>
