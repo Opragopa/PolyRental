@@ -35,14 +35,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Database migrations did not apply' }
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start production services' }
 
 for ($attempt = 1; $attempt -le 12; $attempt++) {
-    try {
-        $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/health' -TimeoutSec 5
-        if ($health.status -eq 'ok') {
-            Write-Output "Deployment complete: version $($health.version)"
-            exit 0
-        }
-    } catch {
-        if ($attempt -eq 12) { throw 'Mini App did not pass the /health check after deployment' }
-        Start-Sleep -Seconds 5
-    }
+    & docker @compose exec -T miniapp python -c "from urllib.request import urlopen; import json; health=json.load(urlopen('http://127.0.0.1:8000/health', timeout=5)); assert health['status'] == 'ok'; print('Deployment complete: version ' + health['version'])"
+    if ($LASTEXITCODE -eq 0) { exit 0 }
+    if ($attempt -lt 12) { Start-Sleep -Seconds 5 }
 }
+& docker @compose logs --tail 100 miniapp
+throw 'Mini App did not pass the /health check after deployment'
