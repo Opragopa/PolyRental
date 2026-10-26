@@ -106,6 +106,10 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .item-check { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; border: 1px solid var(--line); border-radius: 7px; font-size: 15px; }
 .item-card.selected .item-check { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .item-photo { display: block; width: 100%; height: 150px; object-fit: cover; border-radius: 9px; margin-bottom: 12px; background: var(--soft); }
+.item-placeholder, .article-placeholder { display: grid; place-items: center; gap: 4px; background: linear-gradient(135deg, var(--soft), color-mix(in srgb, var(--accent) 18%, var(--surface))); color: var(--accent); }
+.item-placeholder { width: 100%; height: 150px; margin-bottom: 12px; border-radius: 9px; }
+.item-placeholder span { font-size: 44px; }.item-placeholder small { font-weight: 750; }
+.item-type, .article-type { display: block; color: var(--muted); font-size: 12px; font-weight: 750; }
 .item-bottom { align-items: flex-end; gap: 8px; }
 .item-bottom small { color: var(--muted); }
 .item-bottom strong { font-size: 20px; letter-spacing: -.04em; }
@@ -203,12 +207,23 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .field.needs-fix > span { color: var(--danger); }
 .field.needs-fix input, .field.needs-fix select, .field.needs-fix textarea { border: 2px solid var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 .admin-card.inactive { opacity: .72; border-style: dashed; }
+.catalog-controls { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 8px; margin: 12px 0; }
+.catalog-controls input, .catalog-controls select { width: 100%; min-height: 42px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); color: var(--text); }
+.catalog-summary { margin: 10px 0 2px; color: var(--muted); font-size: 13px; }
+.article-card { overflow: hidden; }.article-card-head { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 13px; align-items: center; }
+.article-photo, .article-placeholder { width: 76px; height: 76px; border-radius: 15px; object-fit: cover; }.article-placeholder span { font-size: 28px; }.article-placeholder small { font-size: 10px; font-weight: 750; }
+.article-main h3 { margin: 2px 0 3px; }.article-main .order-head { align-items: flex-start; }.article-meta { margin: 0 !important; font-size: 13px; }
+.article-details { margin-top: 12px; padding: 10px 12px; border-radius: 11px; background: var(--soft); }.article-details summary { color: var(--accent); font-weight: 750; cursor: pointer; }.article-details p { font-size: 13px; }
 .editor-card { border: 2px solid var(--accent); background: var(--soft); }
 .catalog-form { margin-top: 18px; }
 .equipment-list { display: grid; gap: 8px; margin-top: 14px; }
 .equipment-row, .dependency-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
-.equipment-row span { display: grid; gap: 2px; }
+.equipment-row span { display: grid; gap: 4px; }
 .equipment-row small { color: var(--muted); }
+.condition-pill { width: max-content; padding: 2px 7px; border-radius: 999px; background: var(--soft); color: var(--accent); font-size: 11px; font-weight: 800; }
+.condition-maintenance .condition-pill { background: color-mix(in srgb, #d88000 14%, var(--surface)); color: #9a5c00; }.condition-retired .condition-pill { background: color-mix(in srgb, var(--danger) 11%, var(--surface)); color: var(--danger); }
+.catalog-more { margin-top: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .dependency-list { margin-top: 10px; }
 .inspection-editor { border: 2px solid var(--accent); background: var(--soft); }
 .inspection-editor .check-row { margin: 4px 0; font-weight: 600; }
@@ -252,6 +267,7 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
   .step-button { justify-content: center; }
   .steps li b { display: none; }
   .date-grid, .items-grid, .form-grid { grid-template-columns: 1fr; }
+  .catalog-controls { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
   .panel { border-radius: 18px; }
   .item-card { min-height: 140px; }

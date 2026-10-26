@@ -11,6 +11,7 @@
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
+  const catalogView = { query: "", status: "all", expanded: new Set() };
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
@@ -27,6 +28,17 @@
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
+  const categoryMeta = {
+    camera: ["Камера", "◉"], optics: ["Оптика", "◌"], light: ["Свет", "✦"],
+    battery: ["Питание", "▰"], accessory: ["Аксессуар", "◆"], generic: ["Оборудование", "▣"],
+  };
+  function categoryLabel(category) { return categoryMeta[category]?.[0] || categoryMeta.generic[0]; }
+  function catalogMedia(item, className) {
+    if (item.image_url && /^https:\/\//i.test(item.image_url)) return `<img class="${className}-photo" src="${escapeHtml(item.image_url)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">`;
+    const meta = categoryMeta[item.category] || categoryMeta.generic;
+    return `<div class="${className}-placeholder" aria-label="${escapeHtml(meta[0])}"><span aria-hidden="true">${meta[1]}</span><small>${escapeHtml(meta[0])}</small></div>`;
+  }
+  function conditionLabel(condition) { return ({ available: "Доступен", maintenance: "На ремонте", retired: "Выведен из эксплуатации" })[condition] || condition; }
   function minutes() { return Math.round((new Date(toIso($("end").value)) - new Date(toIso($("start").value))) / 60000); }
   function toIso(value) {
     const text = String(value || "").trim();
@@ -432,8 +444,8 @@
       const selected = quantity > 0;
       const card = document.createElement("article");
       card.className = `item-card${selected ? " selected" : ""}`;
-      const safeImage = item.image_url && /^https:\/\//i.test(item.image_url) ? `<img class="item-photo" src="${escapeHtml(item.image_url)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">` : "";
-      card.innerHTML = `<span>${safeImage}<span class="item-top"><span><span class="item-name">${escapeHtml(item.name)}</span><span class="item-number">Артикул ${escapeHtml(item.sku)}</span><span class="available-badge">Свободно: ${item.available_quantity}</span>${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}</span></span></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
+      const media = catalogMedia(item, "item");
+      card.innerHTML = `${media}<span class="item-top"><span><span class="item-type">${escapeHtml(item.description || categoryLabel(item.category))}</span><span class="item-name">${escapeHtml(item.name)}</span><span class="available-badge">Доступно: ${item.available_quantity} шт.</span></span></span><span class="quantity-control"><button type="button" class="button ghost quantity-minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary quantity-plus" aria-label="Увеличить количество" ${quantity >= item.available_quantity ? "disabled" : ""}>+</button></span>`;
       card.querySelector(".quantity-minus").disabled = quantity === 0;
       card.querySelector(".quantity-plus").disabled = quantity >= Math.min(30, item.available_quantity);
       card.querySelector(".quantity-minus").addEventListener("click", () => { if (quantity <= 1) state.quantities.delete(item.id); else state.quantities.set(item.id, quantity - 1); state.requestId = null; renderItems(); saveDraft(); });
@@ -1042,6 +1054,12 @@
       button.addEventListener("click", () => renderAdminCatalog(result, { type })); toolbar.append(button);
     }
     content.append(toolbar);
+    const controls = document.createElement("div"); controls.className = "catalog-controls";
+    controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
+    const [search, status] = controls.querySelectorAll("input, select"); status.value = catalogView.status;
+    search.addEventListener("input", () => { catalogView.query = search.value; renderAdminCatalog(result, editor); });
+    status.addEventListener("change", () => { catalogView.status = status.value; renderAdminCatalog(result, editor); });
+    content.append(controls);
     const importer = document.createElement("details"); importer.className = "catalog-import";
     importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>Поддерживаются технический CSV в UTF-8 (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
     importer.querySelector(".catalog-template-download").addEventListener("click", async (event) => {
@@ -1078,9 +1096,16 @@
       content.append(dependencies);
     }
 
-    for (const article of result.articles) {
-      const card = document.createElement("article"); card.className = `admin-card${article.active ? "" : " inactive"}`;
-      card.innerHTML = `<div class="order-head"><h3>${escapeHtml(article.name)}</h3><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p>${escapeHtml(article.sku)} · буфер ${article.buffer_hours} ч · профиль ${escapeHtml(article.inspection_profile)}</p><p>${escapeHtml(article.description || "Без описания")}</p><p><strong>Комплектация для расписки:</strong> ${escapeHtml(article.composition || "не указана")}</p><div class="equipment-list"></div>`;
+    const query = catalogView.query.trim().toLocaleLowerCase("ru-RU");
+    const visibleArticles = result.articles.filter((article) => {
+      const searchText = [article.name, article.description, article.sku, ...article.equipment.flatMap((asset) => [asset.serial, asset.inventory_code, asset.asset_code, asset.location])].join(" ").toLocaleLowerCase("ru-RU");
+      return (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
+    });
+    const summary = document.createElement("p"); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.articles.length}`; content.append(summary);
+    for (const article of visibleArticles) {
+      const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
+      const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
+      card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><div class="order-head"><div><p class="article-type">${escapeHtml(article.description || categoryLabel(article.category))}</p><h3>${escapeHtml(article.name)}</h3></div><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p class="article-meta">${escapeHtml(article.sku)} · ${article.equipment.length} шт. · доступно ${availableCount}</p></div></div><details class="article-details"><summary>Параметры модели и комплектация</summary><p>Буфер: ${article.buffer_hours} ч · профиль проверки: ${escapeHtml(article.inspection_profile)}</p><p><strong>Комплектация для расписки:</strong> ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div>`;
       const cardActions = document.createElement("div"); cardActions.className = "action-row";
       const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact"; editArticle.textContent = "Изменить артикул";
       editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
@@ -1088,17 +1113,25 @@
       addAsset.addEventListener("click", () => renderAdminCatalog(result, { type: "equipment", value: { article_id: article.id, condition: "available" } }));
       cardActions.append(editArticle, addAsset); card.append(cardActions);
       const equipmentList = card.querySelector(".equipment-list");
-      if (!article.equipment.length) equipmentList.textContent = "Экземпляров пока нет.";
-      for (const asset of article.equipment) {
-        const row = document.createElement("div"); row.className = "equipment-row";
+      const matchingAssets = catalogView.status === "all" ? article.equipment : article.equipment.filter((asset) => asset.condition === catalogView.status);
+      const expanded = catalogView.expanded.has(article.id); const shownAssets = expanded ? matchingAssets : matchingAssets.slice(0, 3);
+      if (!matchingAssets.length) equipmentList.textContent = "Нет экземпляров с выбранным состоянием.";
+      for (const asset of shownAssets) {
+        const row = document.createElement("div"); row.className = `equipment-row condition-${asset.condition}`;
         const battery = asset.health != null || asset.charge != null ? ` · здоровье ${asset.health ?? "—"}% · заряд ${asset.charge ?? "—"}%` : "";
         const identifiers = [asset.serial ? `S/N ${asset.serial}` : "", asset.inventory_code ? `Инв. ${asset.inventory_code}` : "", `Код ${asset.asset_code}`].filter(Boolean).join(" · ");
-        row.innerHTML = `<span><strong>${escapeHtml(identifiers)}</strong><small>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.condition)}${battery}</small></span>`;
+        row.innerHTML = `<span><span class="condition-pill">${escapeHtml(conditionLabel(asset.condition))}</span><strong>${escapeHtml(identifiers)}</strong><small>${escapeHtml(asset.location || "Без ячейки")}${battery}</small></span>`;
         const edit = document.createElement("button"); edit.type = "button"; edit.className = "button ghost compact"; edit.textContent = "Изменить";
         edit.addEventListener("click", () => renderAdminCatalog(result, { type: "equipment", value: { ...asset, article_id: article.id } }));
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost compact danger"; remove.textContent = "Удалить";
         remove.addEventListener("click", async () => { if (!window.confirm("Удалить этот экземпляр? Если он последний и не имеет истории, артикул также будет удалён.")) return; try { await api(`/api/miniapp/admin/catalog/equipment/${asset.id}`, { method: "DELETE" }); await showAdmin("catalog"); } catch (error) { showError(error.message); } });
         row.append(edit, remove); equipmentList.append(row);
+      }
+      if (matchingAssets.length > 3) {
+        const more = document.createElement("button"); more.type = "button"; more.className = "button ghost compact catalog-more";
+        more.textContent = expanded ? "Скрыть экземпляры" : `Показать ещё ${matchingAssets.length - 3}`;
+        more.addEventListener("click", () => { if (expanded) catalogView.expanded.delete(article.id); else catalogView.expanded.add(article.id); renderAdminCatalog(result); });
+        equipmentList.append(more);
       }
       content.append(card);
     }

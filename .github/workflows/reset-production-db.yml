@@ -1,0 +1,29 @@
+name: Reset production database
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RESET_PRODUCTION_DATABASE to confirm the irreversible database reset
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reset:
+    if: github.event.inputs.confirmation == 'RESET_PRODUCTION_DATABASE'
+    runs-on: [self-hosted, Windows, PolyRental]
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: Back up, verify, and reset the production PostgreSQL volume
+        shell: powershell
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BACKUP_MASTER_KEY: ${{ secrets.BACKUP_MASTER_KEY }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          if (-not $env:DEPLOY_PATH) { throw 'DEPLOY_PATH is not configured' }
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts\reset_production_db.ps1') -ExpectedCommit $env:EXPECTED_COMMIT -ProjectRoot $env:DEPLOY_PATH -BackupDirectory 'D:\PolyRentalBackups'
