@@ -20,13 +20,7 @@ jobs:
   deploy:
     name: Deploy production
     needs: test
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      secrets.DEPLOY_HOST != '' &&
-      secrets.DEPLOY_USER != '' &&
-      secrets.DEPLOY_SSH_KEY != '' &&
-      secrets.DEPLOY_KNOWN_HOSTS != '' &&
-      secrets.DEPLOY_PATH != ''
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
     steps:
