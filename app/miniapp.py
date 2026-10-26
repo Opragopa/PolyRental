@@ -42,7 +42,7 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identit
                   validate_identity_payload)
 from .rental import (Conflict, active_operation_leases, assign_booking_assets, availability,
                      claim_booking_operation, create_booking,
-                     close_repair, delete_booking, delete_dependency, get_booking,
+                     close_repair, delete_booking, delete_dependency, delete_equipment, get_booking,
                      list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, release_booking_operation, save_article, save_dependency, save_equipment,
@@ -581,7 +581,9 @@ async def admin_catalog(user=Depends(require_admin)):
                            "image_url": article.image_url,
                            "active": article.is_active,
                            "buffer_hours": article.buffer_hours,
-                           "equipment": [{"id": asset.id, "serial": asset.inventory_number,
+                           "equipment": [{"id": asset.id, "serial": asset.serial_number or "",
+                                          "asset_code": asset.inventory_number,
+                                          "inventory_code": asset.asset_inventory_code or "",
                                           "condition": asset.condition, "location": asset.storage_location,
                                           "health": asset.health_percent, "charge": asset.charge_percent}
                                          for asset in article.equipment]}
@@ -635,7 +637,8 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
 class EquipmentRequest(BaseModel):
     id: int | None = None
     article_id: int
-    serial: str = Field(min_length=1, max_length=80)
+    serial: str = Field(default="", max_length=80)
+    inventory_code: str = Field(default="", max_length=80)
     condition: str = "available"
     location: str = Field(default="", max_length=120)
     health: int | None = Field(default=None, ge=0, le=100)
@@ -646,13 +649,24 @@ class EquipmentRequest(BaseModel):
 async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_admin)):
     try:
         equipment_id = await asyncio.to_thread(
-            save_equipment, payload.serial, "", "", 0, payload.condition, payload.id,
-            None, payload.article_id, payload.location, payload.health, payload.charge)
+            save_equipment, "", "", "", 0, payload.condition, payload.id,
+            None, payload.article_id, payload.location, payload.health, payload.charge,
+            payload.serial, payload.inventory_code)
         return {"id": equipment_id}
     except IntegrityError as exc:
-        raise HTTPException(422, "Экземпляр с таким серийным номером уже существует") from exc
+        raise HTTPException(422, "Экземпляр с таким инвентарным кодом уже существует") from exc
     except (ValueError, Conflict) as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/api/miniapp/admin/catalog/equipment/{equipment_id}")
+async def admin_delete_equipment(equipment_id: int, user=Depends(require_admin)):
+    try:
+        return await asyncio.to_thread(delete_equipment, equipment_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 class DependencyRequest(BaseModel):

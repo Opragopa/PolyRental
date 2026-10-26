@@ -1,1 +1,1 @@
-sku;name;serial;location;condition;description;composition;category;inspection_profile;buffer_hours;image_url;active;health;charge
+sku;name;serial;inventory_code;location;condition;description;composition;category;inspection_profile;buffer_hours;image_url;active;health;charge

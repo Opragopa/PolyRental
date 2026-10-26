@@ -1,11 +1,13 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string]$ExpectedCommit
+    [string]$ExpectedCommit,
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$projectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 Set-Location -LiteralPath $projectRoot
 
 if (-not (Test-Path -LiteralPath '.env')) { throw '.env is missing; deployment will not overwrite production settings' }

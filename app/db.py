@@ -43,7 +43,11 @@ class ArticleDependency(Base):
 class Equipment(Base):
     __tablename__ = "equipment"
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Stable internal asset code. It remains unique even when a manufacturer
+    # serial number or institutional inventory code is missing or repeated.
     inventory_number: Mapped[str] = mapped_column(String(80), unique=True)
+    serial_number: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    asset_inventory_code: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True)
     # Legacy snapshot fields remain for rollback and old bot commands.
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")

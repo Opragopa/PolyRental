@@ -647,11 +647,15 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
         return article.id
 
 
+def _optional_identifier(value):
+    value = (value or "").strip()
+    return None if not value or value in {"-", "—"} else value
+
+
 def save_equipment(number, name, description, rate, condition, equipment_id=None, image_url=None,
-                   article_id=None, storage_location="", health_percent=None, charge_percent=None):
+                   article_id=None, storage_location="", health_percent=None, charge_percent=None,
+                   serial_number=None, asset_inventory_code=None):
     rate = validated_rate(rate)
-    if not number.strip():
-        raise ValueError("Укажите серийный номер")
     if condition not in {"available", "maintenance", "retired"} or Decimal(str(rate)) < 0:
         raise ValueError("Неверное состояние или ставка")
     if image_url and (len(image_url) > 500 or urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):
@@ -681,7 +685,14 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
                 Booking.status.in_(ACTIVE_STATUSES - {"returned"})))
             if active:
                 raise Conflict("Сначала завершите или отмените действующий заказ")
-        item.inventory_number, item.name = number.strip(), article.name
+        internal_code = (number or "").strip()
+        if internal_code:
+            item.inventory_number = internal_code
+        elif not item.id:
+            item.inventory_number = f"ASSET-{uuid4().hex[:12].upper()}"
+        item.serial_number = _optional_identifier(serial_number if serial_number is not None else number)
+        item.asset_inventory_code = _optional_identifier(asset_inventory_code)
+        item.name = article.name
         item.description, item.hourly_rate = article.description, article.hourly_rate
         item.image_url, item.article_id, item.condition = article.image_url, article.id, condition
         item.storage_location = storage_location.strip()
@@ -689,6 +700,36 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
         session.add(item)
         session.flush()
         return item.id
+
+
+def delete_equipment(equipment_id):
+    """Delete a test/catalog asset only when it has no operational history."""
+    with Session.begin() as session:
+        item = session.get(Equipment, equipment_id)
+        if item is None:
+            raise ValueError("Экземпляр не найден")
+        references = (
+            session.scalar(select(func.count()).select_from(BookingItem).where(BookingItem.equipment_id == equipment_id))
+            + session.scalar(select(func.count()).select_from(BookingAsset).where(BookingAsset.equipment_id == equipment_id))
+            + session.scalar(select(func.count()).select_from(Occupancy).where(Occupancy.equipment_id == equipment_id))
+            + session.scalar(select(func.count()).select_from(Inspection).where(Inspection.equipment_id == equipment_id))
+            + session.scalar(select(func.count()).select_from(RepairTicket).where(RepairTicket.equipment_id == equipment_id))
+        )
+        if references:
+            raise Conflict("Экземпляр участвует в истории аренды, проверках или ремонте; удаление запрещено")
+        article_id = item.article_id
+        session.delete(item)
+        session.flush()
+        article = session.get(Article, article_id) if article_id else None
+        if article and not session.scalar(select(Equipment.id).where(Equipment.article_id == article_id).limit(1)):
+            used = session.scalar(select(BookingLine.id).where(BookingLine.article_id == article_id).limit(1))
+            dependency = session.scalar(select(ArticleDependency.parent_article_id).where(
+                (ArticleDependency.parent_article_id == article_id) | (ArticleDependency.child_article_id == article_id)
+            ).limit(1))
+            if not used and not dependency:
+                session.delete(article)
+                return {"deleted": equipment_id, "article_deleted": article_id}
+        return {"deleted": equipment_id, "article_deleted": None}
 
 
 def list_repairs():

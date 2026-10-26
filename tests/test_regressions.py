@@ -4,9 +4,9 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app.db import Booking, Equipment, PrivacyConsent, Session
+from app.db import Booking, Equipment, PrivacyConsent, RepairTicket, Session
 from app.rental import (Conflict, assign_booking_assets, availability, create_booking,
-                        get_booking, record_inspection, save_article, save_equipment,
+                        delete_equipment, get_booking, record_inspection, save_article, save_equipment,
                         transition)
 from tests.test_integration import article_with_assets
 
@@ -75,6 +75,27 @@ def test_article_rejects_whitespace(field):
     values[field] = "   "
     with pytest.raises(ValueError):
         save_article(**values)
+
+
+def test_operator_can_delete_last_unused_asset_and_article():
+    article_id = save_article("DELETE-ME", "Удаляемая модель", "Тип", 0)
+    asset_id = save_equipment("", "", "", 0, "available", article_id=article_id,
+                              serial_number="SAME-SERIAL", asset_inventory_code="OS-DELETE")
+    result = delete_equipment(asset_id)
+    assert result == {"deleted": asset_id, "article_deleted": article_id}
+    with Session() as session:
+        assert session.get(Equipment, asset_id) is None
+        from app.db import Article
+        assert session.get(Article, article_id) is None
+
+
+def test_operator_cannot_delete_asset_with_repair_history():
+    article_id = save_article("KEEP-ME", "Историческая модель", "Тип", 0)
+    asset_id = save_equipment("", "", "", 0, "available", article_id=article_id)
+    with Session.begin() as session:
+        session.add(RepairTicket(equipment_id=asset_id, defect="След ремонта"))
+    with pytest.raises(Conflict, match="истории"):
+        delete_equipment(asset_id)
 
 
 def test_quantity_limit_cannot_be_bypassed_with_duplicate_lines():
@@ -291,18 +312,36 @@ def test_admin_catalog_crud_and_validation(monkeypatch):
     assert "INSERT" not in duplicate.text
     for invalid in ({"name":"   "}, {"rate":"1.001"}, {"rate":"10000000000"}, {"image_url":"javascript:alert(1)"}):
         assert client.post("/api/miniapp/admin/catalog/articles", json={**article, **invalid}, headers=headers).status_code == 422
-    asset = {"article_id":article_id, "serial":"QA-SERIAL", "location":"A-01"}
+    asset = {"article_id":article_id, "serial":"QA-SERIAL", "inventory_code":"OS-QA-01", "location":"A-01"}
     response = client.post("/api/miniapp/admin/catalog/equipment", json=asset, headers=headers)
     assert response.status_code == 200
     asset_id = response.json()["id"]
+    second_asset_id = client.post("/api/miniapp/admin/catalog/equipment", json={**asset, "inventory_code":"OS-QA-02"}, headers=headers).json()["id"]
     assert client.post("/api/miniapp/admin/catalog/equipment", json=asset, headers=headers).status_code == 422
     assert client.post("/api/miniapp/admin/catalog/equipment", json={**asset, "id":asset_id, "condition":"retired"}, headers=headers).status_code == 200
+    assert client.post("/api/miniapp/admin/catalog/equipment", json={**asset, "id":second_asset_id, "inventory_code":"OS-QA-02", "condition":"retired"}, headers=headers).status_code == 200
     catalog = client.get("/api/miniapp/admin/catalog", headers=headers).json()
     assert catalog["articles"][0]["equipment"][0]["condition"] == "retired"
     start, end = now_interval()
     public = client.get("/api/miniapp/availability", params={"start":start.isoformat(), "end":end.isoformat()}).json()
     assert public["items"] == [] and public["unavailable_count"] == 1
     assert "QA-SERIAL" not in json_text(public)
+
+
+def test_admin_api_deletes_last_unused_asset_and_article(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.miniapp_server import app
+    from tests.test_miniapp import configure, signed_init_data
+    configure(monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data(100)}
+    with TestClient(app) as client:
+        article_id = client.post("/api/miniapp/admin/catalog/articles", json={
+            "sku": "DELETE-API", "name": "Удаление API", "description": "Тип"}, headers=headers).json()["id"]
+        asset_id = client.post("/api/miniapp/admin/catalog/equipment", json={
+            "article_id": article_id, "serial": "-", "inventory_code": "OS-DELETE-API"}, headers=headers).json()["id"]
+        deleted = client.delete(f"/api/miniapp/admin/catalog/equipment/{asset_id}", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": asset_id, "article_deleted": article_id}
 
 
 def json_text(value):

@@ -27,6 +27,7 @@ jobs:
     runs-on: [self-hosted, Windows, PolyRental]
     environment: production
     steps:
+      - uses: actions/checkout@v5
       - name: Update and restart the production services locally
         shell: powershell
         env:
@@ -34,4 +35,4 @@ jobs:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           if (-not $env:DEPLOY_PATH) { throw 'GitHub Actions secret DEPLOY_PATH is not configured' }
-          & (Join-Path $env:DEPLOY_PATH 'scripts\deploy.ps1') -ExpectedCommit $env:EXPECTED_COMMIT
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts\deploy.ps1') -ExpectedCommit $env:EXPECTED_COMMIT -ProjectRoot $env:DEPLOY_PATH

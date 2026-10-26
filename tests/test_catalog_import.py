@@ -29,12 +29,32 @@ def test_csv_import_creates_models_and_equipment_atomically(monkeypatch):
         article = next(item for item in catalog["articles"] if item["sku"] == "CSV-CAM")
         assert {item["serial"] for item in article["equipment"]} == {"CSV-001", "CSV-002", "CSV-003"}
 
-        failed = _upload(client, admin, (header +
-            "CSV-OTHER;Другая модель;CSV-004;A-04;available;;;\n"
-            "CSV-OTHER;Другая модель;CSV-001;A-05;available;;;\n").encode())
+        failed = _upload(client, admin, (header.replace("serial;", "serial;inventory_code;") +
+            "CSV-OTHER;Другая модель;CSV-004;A-04;A-04;available;;;\n"
+            "CSV-OTHER;Другая модель;CSV-001;A-04;A-05;available;;;\n").encode())
         assert failed.status_code == 422
         catalog = client.get("/api/miniapp/admin/catalog", headers=admin).json()
         assert not any(item["sku"] == "CSV-OTHER" for item in catalog["articles"])
+
+
+def test_inventory_csv_allows_empty_and_duplicate_serials(monkeypatch):
+    configure(monkeypatch)
+    admin = {"X-Telegram-Init-Data": signed_init_data(100)}
+    inventory = (
+        "№,Наименование,Модель,S/N,Оценочная стоимость,Инвентаризационный номер/ Код ОС\n"
+        "1,Наушники,Sony MDR,-,1000,OS-001\n"
+        "2,Наушники,Sony MDR,-,1000,OS-002\n"
+        "3,,,,,\n"
+    ).encode()
+    with TestClient(app) as client:
+        imported = _upload(client, admin, inventory)
+        assert imported.status_code == 200, imported.text
+        assert imported.json() == {"articles_created": 1, "equipment_created": 2}
+        catalog = client.get("/api/miniapp/admin/catalog", headers=admin).json()
+        article = next(item for item in catalog["articles"] if item["name"] == "Sony MDR")
+        assert article["description"] == "Наушники"
+        assert {item["serial"] for item in article["equipment"]} == {""}
+        assert {item["inventory_code"] for item in article["equipment"]} == {"OS-001", "OS-002"}
 
 
 def test_csv_import_rejects_invalid_file_without_writes(monkeypatch):

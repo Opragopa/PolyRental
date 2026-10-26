@@ -1,9 +1,11 @@
 """Atomic import of catalog models and concrete equipment from CSV."""
 
 import csv
+import hashlib
 import io
 from decimal import Decimal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -12,9 +14,10 @@ from .db import Article, Equipment, Session
 
 MAX_CSV_BYTES = 1024 * 1024
 MAX_ROWS = 500
-REQUIRED = {"sku", "name", "serial"}
+REQUIRED = {"sku", "name"}
 OPTIONAL = {"location", "condition", "description", "composition", "category",
-            "inspection_profile", "buffer_hours", "image_url", "active", "health", "charge"}
+            "inspection_profile", "buffer_hours", "image_url", "active", "health", "charge",
+            "serial", "inventory_code"}
 MODEL_FIELDS = {"description", "composition", "category", "inspection_profile", "buffer_hours",
                 "image_url", "active"}
 DEFAULTS = {"description": "", "composition": "", "category": "generic",
@@ -31,6 +34,44 @@ def _text(value, label, limit, line, required=False):
     if len(result) > limit or "\x00" in result:
         raise ValueError(f"Строка {line}: неверное значение {label}")
     return result
+
+
+def _optional_identifier(value):
+    value = (value or "").strip()
+    return "" if value in {"", "-", "—"} else value
+
+
+def _source_sku(kind, model):
+    normalized = " ".join(f"{kind} {model}".casefold().split())
+    return f"SOURCE-{hashlib.sha256(normalized.encode()).hexdigest()[:16].upper()}"
+
+
+def _parse_inventory_csv(source):
+    reader = csv.DictReader(io.StringIO(source, newline=""), strict=True)
+    required = {"Наименование", "Модель", "S/N", "Инвентаризационный номер/ Код ОС"}
+    if not required <= set(reader.fieldnames or []):
+        raise ValueError("Опись должна содержать Наименование, Модель, S/N и Инвентаризационный номер/ Код ОС")
+    models, assets = {}, []
+    for row in reader:
+        line = reader.line_num
+        if None in row:
+            raise ValueError(f"Строка {line}: слишком много значений")
+        if not any((value or "").strip() for key, value in row.items() if key != "№"):
+            continue
+        kind = _text(row.get("Наименование"), "Наименование", 200, line, True)
+        model_name = _text(row.get("Модель"), "Модель", 200, line) or kind
+        sku = _source_sku(kind, model_name)
+        model = models.setdefault(sku, {"name": model_name, "fields": {"description": kind}, "line": line})
+        if model["name"] != model_name or model["fields"]["description"] != kind:
+            raise ValueError(f"Строка {line}: у модели разные типы оборудования")
+        assets.append({"line": line, "sku": sku, "serial": _optional_identifier(row.get("S/N")),
+                       "inventory_code": _optional_identifier(row.get("Инвентаризационный номер/ Код ОС")),
+                       "location": "", "condition": "available", "health": None, "charge": None})
+        if len(assets) > MAX_ROWS:
+            raise ValueError(f"CSV-файл может содержать не больше {MAX_ROWS} экземпляров")
+    if not assets:
+        raise ValueError("CSV-файл не содержит оборудования")
+    return models, assets
 
 
 def _percentage(value, label, line):
@@ -84,15 +125,16 @@ def parse_catalog_csv(data: bytes):
     except UnicodeDecodeError as exc:
         raise ValueError("Сохраните CSV-файл в кодировке UTF-8") from exc
     first_line = source.splitlines()[0] if source.splitlines() else ""
+    if "Наименование" in first_line and "Инвентаризационный номер/ Код ОС" in first_line:
+        return _parse_inventory_csv(source)
     delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
     reader = csv.DictReader(io.StringIO(source, newline=""), delimiter=delimiter, strict=True)
     headers = [header.strip().lower() for header in (reader.fieldnames or [])]
     if len(headers) != len(set(headers)) or not REQUIRED <= set(headers) or set(headers) - REQUIRED - OPTIONAL:
-        raise ValueError("CSV должен содержать колонки sku, name, serial; проверьте названия остальных колонок")
+        raise ValueError("CSV должен содержать колонки sku и name; serial и inventory_code необязательны")
     reader.fieldnames = headers
     models = {}
     assets = []
-    serials = set()
     try:
         for row in reader:
             line = reader.line_num
@@ -104,10 +146,8 @@ def parse_catalog_csv(data: bytes):
                 raise ValueError(f"CSV-файл может содержать не больше {MAX_ROWS} экземпляров")
             sku = _text(row["sku"], "sku", 80, line, True)
             name = _text(row["name"], "name", 200, line, True)
-            serial = _text(row["serial"], "serial", 80, line, True)
-            if serial in serials:
-                raise ValueError(f"Строка {line}: серийный номер {serial} повторяется в файле")
-            serials.add(serial)
+            serial = _optional_identifier(_text(row.get("serial"), "serial", 80, line))
+            inventory_code = _optional_identifier(_text(row.get("inventory_code"), "inventory_code", 80, line))
             model = models.setdefault(sku, {"name": name, "fields": {}, "line": line})
             if model["name"] != name:
                 raise ValueError(f"Строка {line}: у артикула {sku} разные названия")
@@ -122,7 +162,7 @@ def parse_catalog_csv(data: bytes):
             condition = _text(row.get("condition"), "condition", 30, line) or "available"
             if condition not in CONDITIONS:
                 raise ValueError(f"Строка {line}: неизвестное состояние {condition}")
-            assets.append({"line": line, "sku": sku, "serial": serial,
+            assets.append({"line": line, "sku": sku, "serial": serial, "inventory_code": inventory_code,
                            "location": _text(row.get("location"), "location", 120, line),
                            "condition": condition,
                            "health": _percentage((row.get("health") or "").strip(), "health", line),
@@ -139,10 +179,14 @@ def import_catalog_csv(data: bytes):
     with Session.begin() as session:
         existing_articles = {article.sku: article for article in session.scalars(
             select(Article).where(Article.sku.in_(models))).all()}
-        existing_serials = set(session.scalars(select(Equipment.inventory_number).where(
-            Equipment.inventory_number.in_([asset["serial"] for asset in assets]))).all())
-        if existing_serials:
-            raise ValueError(f"Серийный номер уже есть в каталоге: {sorted(existing_serials)[0]}")
+        inventory_codes = [asset["inventory_code"] for asset in assets if asset["inventory_code"]]
+        duplicate_codes = {code for code in inventory_codes if inventory_codes.count(code) > 1}
+        if duplicate_codes:
+            raise ValueError(f"Инвентарный код повторяется в файле: {sorted(duplicate_codes)[0]}")
+        existing_codes = set(session.scalars(select(Equipment.asset_inventory_code).where(
+            Equipment.asset_inventory_code.in_(inventory_codes))).all()) if inventory_codes else set()
+        if existing_codes:
+            raise ValueError(f"Инвентарный код уже есть в каталоге: {sorted(existing_codes)[0]}")
         created_articles = 0
         for sku, model in models.items():
             article = existing_articles.get(sku)
@@ -166,7 +210,9 @@ def import_catalog_csv(data: bytes):
                 created_articles += 1
         for asset in assets:
             article = existing_articles[asset["sku"]]
-            session.add(Equipment(inventory_number=asset["serial"], name=article.name,
+            session.add(Equipment(inventory_number=f"ASSET-{uuid4().hex[:12].upper()}",
+                                  serial_number=asset["serial"] or None,
+                                  asset_inventory_code=asset["inventory_code"] or None, name=article.name,
                                   description=article.description, image_url=article.image_url,
                                   hourly_rate=article.hourly_rate, article_id=article.id,
                                   condition=asset["condition"], storage_location=asset["location"],
