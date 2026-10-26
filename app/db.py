@@ -20,6 +20,7 @@ class Article(Base):
     sku: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    composition: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str] = mapped_column(String(40), default="generic")
     inspection_profile: Mapped[str] = mapped_column(String(30), default="generic")
     image_url: Mapped[str] = mapped_column(String(500), default="")
@@ -150,6 +151,9 @@ class Inspection(Base):
     defect: Mapped[str] = mapped_column(Text, default="")
     estimated_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     charge_customer: Mapped[bool] = mapped_column(Boolean, default=False)
+    encrypted_photo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    photo_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    photo_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     actor_id: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     __table_args__ = (UniqueConstraint("booking_id", "equipment_id", "stage", name="inspection_asset_stage_unique"),)
@@ -294,6 +298,16 @@ def init_db():
             for name, ddl in additions.items():
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE equipment ADD COLUMN {name} {ddl}"))
+        if "articles" in tables:
+            columns = _columns(connection, "articles")
+            if "composition" not in columns:
+                connection.execute(text("ALTER TABLE articles ADD COLUMN composition TEXT NOT NULL DEFAULT ''"))
+        if "inspections" in tables:
+            columns = _columns(connection, "inspections")
+            additions = {"encrypted_photo": "BYTEA", "photo_nonce": "BYTEA", "photo_sha256": "VARCHAR(64)"}
+            for name, ddl in additions.items():
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE inspections ADD COLUMN {name} {ddl}"))
         if "bookings" in tables:
             columns = _columns(connection, "bookings")
             additions = {

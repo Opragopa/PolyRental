@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from docx import Document
+from docx.shared import Mm
 from docxtpl import DocxTemplate
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select
@@ -121,6 +122,28 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
                 # keeps common IDs in the requested six-digit YYNNNN format.
                 row.receipt_number = f"ТС-{receipt_moment.year % 100:02d}{row.id:04d}"
             receipt_number = row.receipt_number
+        grouped_assets = {}
+        for line in booking.lines:
+            assets = [assignment.equipment for assignment in line.assets]
+            grouped_assets[line.id] = (line.article.name, line.article.composition or "", assets)
+        # Legacy bookings may have concrete assignments without booking lines.
+        if not grouped_assets:
+            for asset in booking.assets:
+                article = asset.equipment.article
+                key = article.id if article else asset.equipment.name
+                grouped_assets.setdefault(key, (article.name if article else asset.equipment.name,
+                                                article.composition if article else "", []))[2].append(asset.equipment)
+        item_rows = list(grouped_assets.values())
+        damaged_photos = []
+        with Session() as session:
+            inspection_rows = session.scalars(select(Inspection).where(
+                Inspection.booking_id == booking.id, Inspection.stage == "check_in",
+                Inspection.result == "fail", Inspection.encrypted_photo.is_not(None))).all()
+            for inspection in inspection_rows:
+                aad = f"{booking.id}:{inspection.equipment_id}:damage-photo-v1".encode()
+                photo = AESGCM(_master_key()).decrypt(inspection.photo_nonce, inspection.encrypted_photo, aad)
+                asset = next((row.equipment for row in booking.assets if row.equipment_id == inspection.equipment_id), None)
+                damaged_photos.append((asset.inventory_number if asset else str(inspection.equipment_id), photo))
         context.update({
             "date": receipt_moment.strftime("%d.%m.%Y"),
             "time": receipt_moment.strftime("%H:%M"),
@@ -132,11 +155,10 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
             "full_name": identity_payload["full_name"],
             "phone": booking.customer_contact,
             "email": "",
-            "equipment_name": "\n".join(asset.equipment.article.name if asset.equipment.article else asset.equipment.name for asset in booking.assets),
-            "equipment_configuration": "\n".join((asset.equipment.article.sku if asset.equipment.article else asset.equipment.name) for asset in booking.assets),
-            "serial_number": "\n".join(asset.equipment.inventory_number for asset in booking.assets),
-            "quantity": "\n".join("1" for _ in booking.assets),
-            "documents_note": "Документы получателя проверены сотрудником организации и хранятся в защищённом контуре.",
+            "equipment_name": "\n".join(name for name, _, _ in item_rows),
+            "equipment_configuration": "\n".join(composition for _, composition, _ in item_rows),
+            "serial_number": "\n".join("\n".join(asset.inventory_number for asset in assets) for _, _, assets in item_rows),
+            "quantity": "\n".join(str(len(assets)) for _, _, assets in item_rows),
         })
     template = DocxTemplate(template_path if kind == "receipt" else TEMPLATE_DIR / f"{kind}.docx")
     # Older default templates are upgraded in memory; user-edited files remain untouched.
@@ -145,7 +167,19 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
     template.render(context)
     output = io.BytesIO()
     template.save(output)
-    return output.getvalue()
+    body = output.getvalue()
+    if kind == "receipt" and damaged_photos:
+        document = Document(io.BytesIO(body))
+        document.add_page_break()
+        document.add_heading("Приложение к сохранной расписке. Повреждения", level=1)
+        document.add_paragraph(f"Расписка № ТС-{receipt_number}")
+        for serial, photo in damaged_photos:
+            document.add_heading(f"Экземпляр {serial}", level=2)
+            document.add_picture(io.BytesIO(photo), width=Mm(150))
+        output = io.BytesIO()
+        document.save(output)
+        body = output.getvalue()
+    return body
 
 
 def _decrypt_archived_document(document):
@@ -153,13 +187,13 @@ def _decrypt_archived_document(document):
     return AESGCM(_master_key()).decrypt(document.nonce, document.encrypted_data, aad)
 
 
-def archived_document(booking_id, kind, actor_id):
+def archived_document(booking_id, kind, actor_id, refresh=False):
     """Return an archived DOCX, creating the durable archive on first access."""
     if kind not in {"issue", "receipt"}:
         raise ValueError("Неизвестный документ")
     with Session() as session:
         saved = session.get(BookingDocument, (booking_id, kind))
-        if saved is not None:
+        if saved is not None and not refresh:
             body = _decrypt_archived_document(saved)
             with Session.begin() as audit_session:
                 audit_session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
@@ -173,12 +207,15 @@ def archived_document(booking_id, kind, actor_id):
     encrypted = AESGCM(_master_key()).encrypt(nonce, body, aad)
     try:
         with Session.begin() as session:
-            session.add(BookingDocument(booking_id=booking_id, kind=kind, filename=filename,
-                                       media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                       encrypted_data=encrypted, nonce=nonce,
-                                       sha256=hashlib.sha256(body).hexdigest()))
+            saved = session.get(BookingDocument, (booking_id, kind), with_for_update=True)
+            if saved is None:
+                saved = BookingDocument(booking_id=booking_id, kind=kind, filename=filename)
+            saved.media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            saved.encrypted_data, saved.nonce = encrypted, nonce
+            saved.sha256 = hashlib.sha256(body).hexdigest()
+            session.add(saved)
             session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
-                                 action="document_archived"))
+                                 action="document_replaced" if refresh else "document_archived"))
     except IntegrityError:
         # A simultaneous request may have won the unique booking/kind insert.
         pass
@@ -197,6 +234,13 @@ def operator_document(booking_id, kind, actor_id):
     if booking.status in {"confirmed", "preparing"} or (booking.status == "ready" and not booking.act_signed_at):
         return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
             f"{'act' if kind == 'issue' else kind}-{booking_id}.docx"
+    if kind == "receipt":
+        with Session() as session:
+            damaged_photo = session.scalar(select(Inspection.id).where(
+                Inspection.booking_id == booking_id, Inspection.stage == "check_in",
+                Inspection.result == "fail", Inspection.encrypted_photo.is_not(None)).limit(1))
+        if damaged_photo:
+            return archived_document(booking_id, kind, actor_id, refresh=True)
     return archived_document(booking_id, kind, actor_id)
 
 

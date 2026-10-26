@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import os
 from datetime import datetime
@@ -6,6 +7,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ParseMode
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command, CommandStart
@@ -104,7 +106,7 @@ async def notify_managers(bot, booking_id):
     for admin_id in os.getenv("ADMIN_IDS", "").split(","):
         if admin_id.strip().isdigit():
             try:
-                await bot.send_message(int(admin_id), f"Новая заявка №{booking_id} от {label}. /confirm {booking_id} или /cancel {booking_id}")
+                await bot.send_message(int(admin_id), f"<b>Новая заявка №{booking_id}</b>\nКлиент: {html.escape(label)}\n<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>", parse_mode=ParseMode.HTML)
             except Exception:
                 pass
 
@@ -140,25 +142,26 @@ async def show_review(message, state):
         await message.answer("Выбранное оборудование уже занято. Выберите другое или измените сроки.", reply_markup=flow_keyboard())
         return await show_equipment(message, state)
     await state.update_data(expected_total=None, editing=None)
-    text = (f"Проверьте заявку:\n{start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
-            f"Оборудование: {', '.join(item['name'] for item in chosen)}\nИмя: {data['name']}\nКонтакт: {data['contact']}\n"
-            f"Удержание начнётся после подтверждения и продлится 30 минут.")
+    items_text = "\n".join(f"• {html.escape(item['name'])}" for item in chosen)
+    text = (f"<b>Проверьте заявку</b>\n\n<b>Период:</b> {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
+            f"<b>Оборудование</b>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> {html.escape(data['contact'])}\n\n"
+            "Удержание начнётся после подтверждения и продлится 30 минут.")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Подтвердить бронирование", callback_data="rent:confirm")],
         [InlineKeyboardButton(text="Изменить сроки", callback_data="rent:edit:start"), InlineKeyboardButton(text="Изменить оборудование", callback_data="rent:edit:equipment")],
         [InlineKeyboardButton(text="Изменить имя", callback_data="rent:edit:name"), InlineKeyboardButton(text="Изменить контакт", callback_data="rent:edit:contact")],
         [InlineKeyboardButton(text="Отмена", callback_data="rent:cancel")],
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    text = "PolyRental. Нажмите «Забронировать», чтобы выбрать сроки и оборудование."
+    text = "<b>PolyRental</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
     if not miniapp_url():
         text += " Пока PUBLIC_URL не указывает на HTTPS, бронирование доступно в чате."
-    await message.answer(text, reply_markup=main_keyboard())
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
 @router.message(Command("book"))
@@ -393,7 +396,7 @@ async def my_bookings(message: Message):
     lines = []
     for booking in bookings[:10]:
         lines.append(f"№{booking.id} · {names.get(booking.status, booking.status)} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
-    await message.answer("Ваши заявки:\n" + "\n".join(lines), reply_markup=main_keyboard())
+    await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(f"• {html.escape(line)}" for line in lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
 @router.message(F.text == "Связаться с менеджером")
@@ -486,9 +489,10 @@ async def change(message: Message, bot: Bot):
         status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id)
         if status == "expired":
             return await message.answer("Удержание истекло; создайте новую заявку")
-        await message.answer(f"Заявка #{booking_id}: {status}")
+        labels = {"confirmed": "подтверждена", "preparing": "комплектуется", "ready": "готова к выдаче", "issued": "выдана", "return_inspection": "проверяется при возврате", "returned": "возвращена", "cancelled": "отменена"}
+        await message.answer(f"<b>Заявка №{booking_id}</b> · {labels.get(status, html.escape(status))}", parse_mode=ParseMode.HTML)
         booking = await asyncio.to_thread(get_booking, booking_id)
-        await bot.send_message(booking.customer_id, f"Статус заявки №{booking_id}: {status}")
+        await bot.send_message(booking.customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {labels.get(status, html.escape(status))}", parse_mode=ParseMode.HTML)
     except (ValueError, Conflict) as exc:
         await message.answer(f"Ошибка: {exc}. Формат: {command} НОМЕР")
 

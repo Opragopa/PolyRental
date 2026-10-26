@@ -227,6 +227,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
 def _booking_query():
     return select(Booking).options(
         selectinload(Booking.lines).selectinload(BookingLine.article),
+        selectinload(Booking.lines).selectinload(BookingLine.assets).selectinload(BookingAsset.equipment).selectinload(Equipment.article),
         selectinload(Booking.assets).selectinload(BookingAsset.equipment).selectinload(Equipment.article),
         selectinload(Booking.items).selectinload(BookingItem.equipment),
         selectinload(Booking.inspections),
@@ -557,7 +558,7 @@ def delete_dependency(parent_article_id, child_article_id):
 
 
 def save_article(sku, name, description, rate, category="generic", profile="generic",
-                 buffer_hours=24, image_url="", article_id=None, active=True):
+                 buffer_hours=24, image_url="", article_id=None, active=True, composition=""):
     rate = validated_rate(rate)
     if not sku.strip() or not name.strip():
         raise ValueError("Укажите артикул и название модели")
@@ -573,6 +574,7 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
             raise ValueError("Артикул не найден")
         article.sku, article.name = sku.strip(), name.strip()
         article.description, article.hourly_rate = description.strip(), Decimal(str(rate))
+        article.composition = (composition or "").strip()[:4000]
         article.category, article.inspection_profile = category, profile
         article.buffer_hours, article.image_url, article.is_active = int(buffer_hours), image_url.strip(), bool(active)
         session.add(article)

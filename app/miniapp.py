@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -16,10 +17,12 @@ from urllib.parse import parse_qsl
 from uuid import UUID
 
 import httpx
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
 from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
+from aiogram.enums import ParseMode
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
@@ -27,8 +30,8 @@ from sqlalchemy import select
 
 from .documents import archived_document, operator_document
 from . import __version__
-from .db import BookingDocument, Session
-from .pii import (DOCUMENT_KINDS, IdentityFieldError, block_identity, consent_text, delete_identity,
+from .db import BookingDocument, Inspection, Session
+from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reusable_identity_fields,
                   reusable_identity_document,
@@ -195,7 +198,7 @@ async def notify_new_booking(booking_id: int, customer_id: int):
     try:
         async with make_bot(token) as bot:
             await notify_managers(bot, booking_id)
-            await bot.send_message(customer_id, f"Заявка №{booking_id} создана. Оборудование удерживается 30 минут, ожидайте подтверждения менеджера.")
+            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\nОборудование удерживается 30 минут. Ожидайте подтверждения менеджера.", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -213,7 +216,7 @@ async def notify_cancelled_booking(booking_id: int):
             for admin_id in os.getenv("ADMIN_IDS", "").split(","):
                 if admin_id.strip().isdigit():
                     try:
-                        await bot.send_message(int(admin_id), f"{label} отменил заявку №{booking_id}.")
+                        await bot.send_message(int(admin_id), f"<b>{html.escape(label)}</b> отменил заявку №{booking_id}.", parse_mode=ParseMode.HTML)
                     except Exception:
                         pass
     except Exception:
@@ -231,7 +234,7 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str):
     from .bot import make_bot
     try:
         async with make_bot(token) as bot:
-            await bot.send_message(customer_id, f"Заказ №{booking_id}: {labels.get(status, status)}.")
+            await bot.send_message(customer_id, f"<b>Обновление по заявке №{booking_id}</b>\nСтатус: {html.escape(labels.get(status, status))}.", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -250,7 +253,7 @@ async def notify_identity_submitted(booking_id: int):
             for recipient_id in recipient_ids:
                 try:
                     await bot.send_message(recipient_id,
-                        f"Клиент отправил анкету или исправления по заявке №{booking_id}. Проверьте документы в Mini App.")
+                        f"<b>Анкета обновлена · заявка №{booking_id}</b>\nПроверьте документы клиента в Mini App.", parse_mode=ParseMode.HTML)
                 except Exception:
                     pass
     except Exception:
@@ -556,6 +559,7 @@ async def admin_catalog(user=Depends(require_admin)):
     return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
                            "category": article.category,
                            "description": article.description,
+                           "composition": article.composition or "",
                            "inspection_profile": article.inspection_profile,
                            "image_url": article.image_url,
                            "active": article.is_active,
@@ -576,6 +580,7 @@ class ArticleRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
+    composition: str = Field(default="", max_length=4000)
     rate: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     category: str = Field(default="generic", max_length=40)
     inspection_profile: str = Field(default="generic", max_length=30)
@@ -590,7 +595,7 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
         article_id = await asyncio.to_thread(
             save_article, payload.sku, payload.name, payload.description, Decimal("0"),
             payload.category, payload.inspection_profile, payload.buffer_hours,
-            payload.image_url, payload.id, payload.active)
+            payload.image_url, payload.id, payload.active, payload.composition)
         return {"id": article_id}
     except IntegrityError as exc:
         raise HTTPException(422, "Артикул с таким SKU уже существует") from exc
@@ -695,6 +700,28 @@ async def admin_inspection(booking_id: int, payload: InspectionRequest, user=Dep
         return {"status": "saved"}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/inspection-photo")
+async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
+                                photo: UploadFile = File(...), user=Depends(require_admin)):
+    raw = await photo.read(8 * 1024 * 1024 + 1)
+    try:
+        normalized, _ = sanitize_image(raw, photo.content_type or "")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    with Session.begin() as session:
+        record = session.scalar(select(Inspection).where(
+            Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
+            Inspection.stage == "check_in", Inspection.result == "fail").with_for_update())
+        if record is None:
+            raise HTTPException(409, "Сначала зафиксируйте неисправность при возврате")
+        nonce = os.urandom(12)
+        aad = f"{booking_id}:{equipment_id}:damage-photo-v1".encode()
+        record.encrypted_photo = AESGCM(_master_key()).encrypt(nonce, normalized, aad)
+        record.photo_nonce = nonce
+        record.photo_sha256 = hashlib.sha256(normalized).hexdigest()
+    return {"status": "saved"}
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/act-signed")
