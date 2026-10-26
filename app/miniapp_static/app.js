@@ -931,6 +931,24 @@
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  async function downloadCatalogTemplate() {
+    const path = "/miniapp/static/equipment-import-template.csv";
+    const filename = "equipment-import-template.csv";
+    const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+    const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
+    if (supportsNativeDownload) {
+      try {
+        tg.downloadFile({ url: new URL(path, location.origin).href, file_name: filename });
+        return;
+      } catch (_) { /* Fall back to a browser download below. */ }
+    }
+    const response = await fetch(path, { cache: "no-store" });
+    if (!response.ok) throw new Error("Не удалось скачать шаблон CSV");
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a");
+    link.href = url; link.download = filename; link.style.display = "none"; document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   let documentViewerUrl = "";
   let documentViewerItems = [];
   let documentViewerIndex = 0;
@@ -968,7 +986,11 @@
     }
     content.append(toolbar);
     const importer = document.createElement("details"); importer.className = "catalog-import";
-    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>CSV в UTF-8 с разделителем «;» или «,». Обязательные колонки: <code>sku</code>, <code>name</code>, <code>serial</code>. Для существующего артикула можно добавить новые экземпляры; серийные номера не должны повторяться. Файл импортируется целиком или не импортируется вовсе.</p><a href="/miniapp/static/equipment-import-template.csv" download="equipment-import-template.csv">Скачать шаблон CSV</a><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
+    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>CSV в UTF-8 с разделителем «;» или «,». Обязательные колонки: <code>sku</code>, <code>name</code>, <code>serial</code>. Для существующего артикула можно добавить новые экземпляры; серийные номера не должны повторяться. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
+    importer.querySelector(".catalog-template-download").addEventListener("click", async (event) => {
+      const button = event.currentTarget; button.disabled = true;
+      try { await downloadCatalogTemplate(); } catch (error) { showError(error.message); } finally { button.disabled = false; }
+    });
     importer.querySelector("form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget; const button = form.querySelector('[type="submit"]'); button.disabled = true;

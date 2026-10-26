@@ -11,6 +11,7 @@ from . import __version__
 from .db import init_db
 from .miniapp import STATIC_DIR, router
 from .documents import archive_completed_documents
+from .notification_outbox import retry_pending_notifications
 from .pii import purge_expired_identities
 
 
@@ -21,6 +22,7 @@ async def retention_loop():
         if last_purge != date.today():
             await asyncio.to_thread(purge_expired_identities)
             last_purge = date.today()
+        await retry_pending_notifications()
 
 
 @asynccontextmanager
@@ -28,6 +30,7 @@ async def lifespan(_app):
     await asyncio.to_thread(init_db)
     await asyncio.to_thread(archive_completed_documents)
     await asyncio.to_thread(purge_expired_identities)
+    await retry_pending_notifications()
     task = asyncio.create_task(retention_loop())
     try:
         yield

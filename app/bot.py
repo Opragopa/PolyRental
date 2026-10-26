@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import init_db
 from .booking_messages import booking_status_text
+from .notification_outbox import notify
 from .miniapp import BookingRequest
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 
@@ -106,15 +107,13 @@ def equipment_keyboard(items, selected):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def notify_managers(bot, booking_id):
-    booking = await asyncio.to_thread(get_booking, booking_id)
-    label = customer_label(booking) if booking else "клиент"
-    for admin_id in os.getenv("ADMIN_IDS", "").split(","):
-        if admin_id.strip().isdigit():
-            try:
-                await bot.send_message(int(admin_id), f"<b>Новая заявка №{booking_id}</b>\nКлиент: <tg-spoiler>{html.escape(label)}</tg-spoiler>\n<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>", parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
+async def notify_managers(_bot, booking_id):
+    message = (f"<b>Новая заявка №{booking_id}</b>\n"
+               f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
+    recipients = [int(admin_id.strip()) for admin_id in os.getenv("ADMIN_IDS", "").split(",")
+                  if admin_id.strip().isdigit()]
+    await asyncio.gather(*(notify(booking_id, recipient_id, "booking_created", message)
+                           for recipient_id in recipients))
 
 
 async def show_equipment(message, state):

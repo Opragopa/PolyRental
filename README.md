@@ -59,6 +59,10 @@ Telegram-бот и ролевая Mini App для аренды оборудов�
 
 Тесты: `docker compose --profile test run --rm --build test`. Compose создаёт для них отдельную БД `polyrental_test`.
 
+### CI/CD
+
+GitHub Actions запускает тесты для pull request и каждого push. Push в `main` также разворачивается на production Windows-хост через SSH после успешных тестов. Добавьте в GitHub Secrets значения `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (строка known_hosts для хоста) и `DEPLOY_PATH` (абсолютный путь к клону, например `C:\PROJECTS\PolyRental`). Перед первым запуском настройте на сервере SSH-доступ для ключа и доступ этого пользователя к Docker и `git pull` из `origin`. Если секреты не заполнены, deployment-job будет пропущен, а CI продолжит проверять код.
+
 Адаптированная [стратегия тестирования Mini App](docs/testing-strategy.md): локальный preview, API и роли, эмуляция Telegram, реальные клиенты и проверка удобства пользователями.
 
 Практическая [отладка Telegram Mini App](docs/telegram-debug-report.md) и [запуск локальных инструментов](tools/telegram-qa/README.md): Vite-панель, проверка подписей, tg-mini-app-emulator и DevKit. Для отдельного тестового сервера Telegram предусмотрен `TELEGRAM_TEST_ENVIRONMENT=1`; в обычном окружении оставляйте `0`.

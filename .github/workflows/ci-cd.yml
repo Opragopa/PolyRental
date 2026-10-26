@@ -1,0 +1,51 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests in the isolated PostgreSQL service
+        run: docker compose --profile test run --rm --build test
+
+  deploy:
+    name: Deploy production
+    needs: test
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      secrets.DEPLOY_HOST != '' &&
+      secrets.DEPLOY_USER != '' &&
+      secrets.DEPLOY_SSH_KEY != '' &&
+      secrets.DEPLOY_KNOWN_HOSTS != '' &&
+      secrets.DEPLOY_PATH != ''
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Load the deployment SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Trust only the configured deployment host
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Update and restart the production services
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: >-
+          ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST"
+          "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '$DEPLOY_PATH\\scripts\\deploy.ps1'"

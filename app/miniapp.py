@@ -31,6 +31,7 @@ from sqlalchemy import select
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .booking_messages import booking_status_text
+from .notification_outbox import notify
 from . import __version__
 from .db import BookingDocument, Inspection, Session
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
@@ -199,70 +200,33 @@ class BookingContactUpdate(BaseModel):
 
 
 async def notify_new_booking(booking_id: int, customer_id: int):
-    token = os.getenv("BOT_TOKEN", "")
-    if not token:
-        return
-    from .bot import make_bot, notify_managers
-    try:
-        async with make_bot(token) as bot:
-            await notify_managers(bot, booking_id)
-            await bot.send_message(customer_id, f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.", parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+    manager_message = (f"<b>Новая заявка №{booking_id}</b>\n"
+                       f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
+    await asyncio.gather(*(notify(booking_id, admin_id, "booking_created", manager_message)
+                           for admin_id in _ids("ADMIN_IDS")),
+                         notify(booking_id, customer_id, "booking_created_customer",
+                                f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены."))
 
 
 async def notify_cancelled_booking(booking_id: int):
-    token = os.getenv("BOT_TOKEN", "")
-    if not token:
-        return
-    from .bot import make_bot
-    try:
-        from .bot import customer_label
-        booking = await asyncio.to_thread(get_booking, booking_id)
-        label = customer_label(booking) if booking else "клиент"
-        async with make_bot(token) as bot:
-            for admin_id in os.getenv("ADMIN_IDS", "").split(","):
-                if admin_id.strip().isdigit():
-                    try:
-                        await bot.send_message(int(admin_id), f"<b>{html.escape(label)}</b> отменил заявку №{booking_id}.", parse_mode=ParseMode.HTML)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    message = f"Клиент отменил заявку №{booking_id}."
+    await asyncio.gather(*(notify(booking_id, admin_id, "booking_cancelled", message)
+                           for admin_id in _ids("ADMIN_IDS")))
 
 
 async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
-    token = os.getenv("BOT_TOKEN", "")
-    if not token:
-        return
-    from .bot import make_bot
-    try:
-        async with make_bot(token) as bot:
-            await bot.send_message(customer_id, booking_status_text(booking_id, status, operator),
-                                   parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+    await notify(booking_id, customer_id, f"booking_{status}",
+                 booking_status_text(booking_id, status, operator))
 
 
 async def notify_identity_submitted(booking_id: int):
     """Tell operators that identity data was submitted or corrected; never include PII."""
-    token = os.getenv("BOT_TOKEN", "")
-    if not token:
-        return
     recipient_ids = _ids("ADMIN_IDS") | pii_admin_ids()
     if not recipient_ids:
         return
-    from .bot import make_bot
-    try:
-        async with make_bot(token) as bot:
-            for recipient_id in recipient_ids:
-                try:
-                    await bot.send_message(recipient_id,
-                        f"<b>Анкета обновлена · заявка №{booking_id}</b>\nПроверьте документы клиента в Mini App.", parse_mode=ParseMode.HTML)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    message = f"<b>Анкета обновлена · заявка №{booking_id}</b>\nПроверьте документы клиента в Mini App."
+    await asyncio.gather(*(notify(booking_id, recipient_id, "identity_submitted", message)
+                           for recipient_id in recipient_ids))
 
 
 @router.get("/miniapp")
@@ -781,30 +745,40 @@ async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
         normalized, _ = sanitize_image(raw, photo.content_type or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    claimed = False
+    saved = False
     try:
         await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], operator_name(user))
+        claimed = True
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc
-    with Session.begin() as session:
-        record = session.scalar(select(Inspection).where(
-            Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
-            Inspection.stage == "check_in", Inspection.result == "fail").with_for_update())
-        if record is None:
-            raise HTTPException(409, "Сначала зафиксируйте неисправность при возврате")
-        nonce = os.urandom(12)
-        aad = f"{booking_id}:{equipment_id}:damage-photo-v1".encode()
-        record.encrypted_photo = AESGCM(_master_key()).encrypt(nonce, normalized, aad)
-        record.photo_nonce = nonce
-        record.photo_sha256 = hashlib.sha256(normalized).hexdigest()
-    return {"status": "saved"}
+    try:
+        with Session.begin() as session:
+            record = session.scalar(select(Inspection).where(
+                Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
+                Inspection.stage == "check_in", Inspection.result == "fail").with_for_update())
+            if record is None:
+                raise HTTPException(409, "Сначала зафиксируйте неисправность при возврате")
+            nonce = os.urandom(12)
+            aad = f"{booking_id}:{equipment_id}:damage-photo-v1".encode()
+            record.encrypted_photo = AESGCM(_master_key()).encrypt(nonce, normalized, aad)
+            record.photo_nonce = nonce
+            record.photo_sha256 = hashlib.sha256(normalized).hexdigest()
+        saved = True
+        return {"status": "saved"}
+    finally:
+        # A rejected upload must not block the return-inspection stage for ten minutes.
+        if claimed and not saved:
+            await asyncio.to_thread(release_booking_operation, booking_id, user["id"])
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/act-signed")
 async def admin_act_signed(booking_id: int, user=Depends(require_pii_admin)):
     try:
-        await asyncio.to_thread(mark_act_signed, booking_id, user["id"])
         await asyncio.to_thread(archived_document, booking_id, "issue", user["id"])
         await asyncio.to_thread(archived_document, booking_id, "receipt", user["id"])
+        # The irreversible signature marker is written only after both durable copies exist.
+        await asyncio.to_thread(mark_act_signed, booking_id, user["id"])
         return {"status": "signed"}
     except (Conflict, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc

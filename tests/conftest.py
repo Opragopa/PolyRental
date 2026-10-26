@@ -5,7 +5,7 @@ from sqlalchemy import delete
 
 from app.db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingItem,
                     BookingLine, CustomerIdentity, Equipment, IdentityDocument, Inspection,
-                    Occupancy, PIIAudit, PrivacyConsent, RepairTicket, Session, init_db)
+                    NotificationDelivery, Occupancy, PIIAudit, PrivacyConsent, RepairTicket, Session, init_db)
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,7 @@ def clean_database():
     _PII_REQUESTS.clear()
     init_db()
     with Session.begin() as session:
-        for model in (BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
+        for model in (NotificationDelivery, BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
                       RepairTicket, Inspection, BookingAsset, BookingLine, Audit,
                       Occupancy, BookingItem, Booking, ArticleDependency, Equipment, Article):
             session.execute(delete(model))
