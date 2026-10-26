@@ -84,7 +84,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
     )
     buffer_interval = text(f"interval '{int(article.buffer_hours)} hours'")
     actual_return = and_(
-        Booking.status == "returned",
+        Booking.status.in_({"returned", "cancelled"}),
         Booking.returned_at.is_not(None),
         Booking.returned_at + buffer_interval > start,
     )
@@ -101,7 +101,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
     events = []
     buffer = timedelta(hours=article.buffer_hours)
     for booking, quantity in session.execute(query):
-        if booking.status == "returned":
+        if booking.status in {"returned", "cancelled"} and booking.returned_at is not None:
             occupied_start, occupied_end = booking.returned_at, booking.returned_at + buffer
             quantity = session.scalar(select(func.count()).select_from(BookingAsset).join(
                 Equipment, Equipment.id == BookingAsset.equipment_id).where(
@@ -447,6 +447,7 @@ TRANSITIONS = {
     "ready": {"issued", "cancelled"},
     "issued": {"return_inspection"},
     "return_inspection": {"returned"},
+    "returned": {"cancelled"},
 }
 
 
@@ -499,10 +500,12 @@ def transition(booking_id, action, actor_id, customer_id=None):
             if identity:
                 identity.delete_after = now() + timedelta(days=90)
         elif action == "cancelled":
-            booking.identity_status = "not_required"
-            identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
-            if identity:
-                identity.delete_after = now() + timedelta(hours=24)
+            # Keep the real return and its buffer, plus the agreed 90-day identity retention.
+            if booking.returned_at is None:
+                booking.identity_status = "not_required"
+                identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
+                if identity:
+                    identity.delete_after = now() + timedelta(hours=24)
         booking.status = action
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=action))
         return booking.status

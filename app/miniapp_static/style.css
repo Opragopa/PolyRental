@@ -119,7 +119,7 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .button.primary { background: var(--accent); color: var(--on-accent); }
 .button.secondary { background: var(--soft); color: var(--accent); }
 .button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
-.button.compact { min-height: 40px; padding: 8px 12px; }
+.button.compact { min-height: 36px; padding: 7px 11px; font-size: 14px; }
 .action-bar { position: fixed; left: 50%; bottom: 0; width: min(920px, 100%); transform: translateX(-50%); gap: 12px; padding: 14px max(18px, env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px)) calc(14px + env(safe-area-inset-bottom) + var(--tg-content-safe-area-inset-bottom, 0px)) max(18px, env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px)); border-top: 1px solid var(--line); background: var(--bg); }
 .action-bar .primary { min-width: 220px; flex: 1; }
 .order-card { border: 1px solid var(--line); border-radius: 15px; padding: 17px; margin-top: 12px; }
@@ -145,8 +145,11 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .consent-box { max-height: 260px; overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 12px; white-space: pre-wrap; background: var(--soft); }
 .check-row { display: flex; gap: 10px; align-items: flex-start; margin: 18px 0; }
 .check-row input { width: 22px; height: 22px; flex: 0 0 22px; }
-.admin-tabs, .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0; }
+.admin-tabs, .action-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0; }
+.admin-tabs > .button, #admin-content > .action-row > .button { min-height: 36px; padding: 7px 11px; font-size: 14px; }
 .admin-card { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 15px; }
+.admin-card .action-row { gap: 6px; margin: 10px 0; }
+.admin-card .action-row > .button { min-height: 36px; padding: 7px 11px; font-size: 14px; }
 .admin-card h3 { margin: 0 0 8px; }
 .admin-card p { margin: 6px 0; color: var(--muted); }
 .booking-maintenance { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -196,11 +199,13 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .document-viewer-card { width: min(100%, 900px); max-height: 94vh; overflow: auto; background: var(--surface); border-radius: 18px; padding: 16px; }
 .document-viewer-body { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
 .document-viewer-body img { display: block; width: 100%; max-height: 76vh; object-fit: contain; background: #111; border-radius: 10px; }
-.document-actions { width: 100%; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+.document-actions { width: 100%; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.document-actions > summary { color: var(--accent); font-weight: 750; cursor: pointer; }
+.document-actions[open] > summary { margin-bottom: 8px; }
 .document-group-title, .document-group-caption { display: block; }
 .document-group-caption { margin-top: 3px; color: var(--muted); font-size: 14px; }
 .document-group { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
-.document-button { min-height: 48px; font-size: 15px; }
+.document-button { min-height: 36px; font-size: 14px; }
 .asset-list { margin: 10px 0; padding-left: 18px; }
 .danger { color: var(--danger) !important; }
 @media (max-width: 620px) {

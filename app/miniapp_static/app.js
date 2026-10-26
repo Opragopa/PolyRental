@@ -625,7 +625,7 @@
   }
 
   function actionButton(label, action, bookingId, className = "secondary", refresh = true) {
-    const button = document.createElement("button"); button.type = "button"; button.className = `button ${className}`; button.textContent = label;
+    const button = document.createElement("button"); button.type = "button"; button.className = `button compact ${className}`; button.textContent = label;
     button.addEventListener("click", async () => { const scrollTop = window.scrollY; button.disabled = true; try { await action(); if (refresh) { await showAdmin(state.adminMode); window.scrollTo(0, scrollTop); } } catch (error) { showError(error.message); } finally { button.disabled = false; } });
     return button;
   }
@@ -676,8 +676,8 @@
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id));
-          const documents = document.createElement("div"); documents.className = "document-actions";
-          documents.innerHTML = `<strong class="document-group-title">Документы</strong><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
+          const documents = document.createElement("details"); documents.className = "document-actions";
+          documents.innerHTML = `<summary>Документы анкеты</summary><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
           const passport = document.createElement("div"); passport.className = "document-group";
           passport.append(actionButton("Паспорт — страница с фото", () => openDocumentViewer(order.id, "passport_main"), order.id, "ghost document-button"));
           passport.append(actionButton("Паспорт — регистрация", () => openDocumentViewer(order.id, "passport_registration"), order.id, "ghost document-button"));
@@ -685,11 +685,15 @@
           student.append(actionButton("Студенческий — лицевая сторона", () => openDocumentViewer(order.id, "student_front"), order.id, "ghost document-button"));
           documents.append(passport, student); actions.append(documents);
         }
-        if (["confirmed", "preparing", "ready", "issued", "return_inspection", "returned"].includes(order.status) && state.role?.pii_admin) {
+        const canSeeDocuments = ["confirmed", "preparing", "ready", "issued", "return_inspection", "returned"].includes(order.status)
+          || (order.status === "cancelled" && (order.archived_documents || []).length > 0);
+        if (canSeeDocuments && state.role?.pii_admin) {
           const canGenerateDocuments = order.identity_status === "verified" && order.assets.length > 0;
           const archivedDocuments = new Set(order.archived_documents || []);
           const actButton = actionButton("Сформировать / скачать акт", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`, `act-${order.id}.docx`), order.id, "secondary", false);
           const receiptButton = actionButton("Сформировать / скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`, `receipt-${order.id}.docx`), order.id, "secondary", false);
+          const documents = document.createElement("details"); documents.className = "document-actions generated-documents";
+          const documentSummary = document.createElement("summary"); documentSummary.textContent = "Акт и сохранная расписка"; documents.append(documentSummary);
           actButton.disabled = !(archivedDocuments.has("issue") || canGenerateDocuments);
           receiptButton.disabled = !(archivedDocuments.has("receipt") || canGenerateDocuments);
           if (actButton.disabled || receiptButton.disabled) {
@@ -697,16 +701,17 @@
             note.textContent = order.identity_status !== "verified"
               ? "Акт и расписка станут доступны после проверки анкеты клиента."
               : "Акт и расписка станут доступны после назначения конкретных экземпляров при комплектации.";
-            actions.append(note);
+            documents.append(note);
           }
-          actions.append(actButton, receiptButton);
+          const documentButtons = document.createElement("div"); documentButtons.className = "document-group";
+          documentButtons.append(actButton, receiptButton); documents.append(documentButtons); actions.append(documents);
         }
         if (order.status === "ready" && state.role?.pii_admin && order.identity_status === "verified") {
           actions.append(actionButton("Акт подписан", () => api(`/api/miniapp/admin/bookings/${order.id}/act-signed`, { method: "POST" }), order.id));
         }
         if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать", transitionAction("issued"), order.id, "primary"));
         if (order.status === "ready" && !order.act_signed_at) { const note = document.createElement("p"); note.textContent = "Оператор должен отметить подписание акта перед выдачей."; actions.append(note); }
-        if (["pending", "confirmed", "preparing", "ready"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.id)) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
+        if (["pending", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.id, order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
         if (order.status === "issued") actions.append(actionButton("Начать возврат", transitionAction("return_inspection"), order.id, "primary"));
         if (order.status === "return_inspection") {
           const finishReturn = actionButton("Далее", transitionAction("returned"), order.id, "primary");
@@ -1060,11 +1065,14 @@
       content.append(card);
     }
   }
-  function confirmCancel(id) {
+  function confirmCancel(id, alreadyReturned = false) {
+    const description = alreadyReturned
+      ? `Заявка №${id} будет помечена отменённой. Факт возврата, документы и история сохранятся.`
+      : `Заявка №${id} будет отменена, оборудование снова станет доступным.`;
     if (tg?.showPopup && authorized) {
-      return new Promise((resolve) => tg.showPopup({ title: "Отменить заявку?", message: `Заявка №${id} будет отменена, оборудование снова станет доступным.`, buttons: [{ id: "cancel-order", type: "destructive", text: "Отменить заявку" }, { id: "keep-order", type: "cancel", text: "Оставить" }] }, (answer) => resolve(answer === "cancel-order")));
+      return new Promise((resolve) => tg.showPopup({ title: "Отменить заявку?", message: description, buttons: [{ id: "cancel-order", type: "destructive", text: "Отменить заявку" }, { id: "keep-order", type: "cancel", text: "Оставить" }] }, (answer) => resolve(answer === "cancel-order")));
     }
-    return Promise.resolve(window.confirm(`Отменить заявку №${id}?`));
+    return Promise.resolve(window.confirm(`${description}\nПродолжить?`));
   }
 
   function confirmPermanentBookingDelete(id) {
