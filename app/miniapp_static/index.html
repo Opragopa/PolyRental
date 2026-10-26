@@ -9,9 +9,10 @@
   <title>Политех.АРЕНДА — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+  <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__"></script>
   <script defer src="/miniapp/static/app.js?v=__APP_VERSION__"></script>
 </head>
-<body>
+<body class="dates-view">
   <div class="shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">П</span><span>Политех.АРЕНДА</span><span id="app-version" class="app-version" aria-label="Версия приложения">v__APP_VERSION__</span></div>
@@ -43,14 +44,14 @@
 
         <div id="step-dates" class="panel step-panel">
           <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда вам нужно оборудование?</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
-          <p class="supporting">Укажите дату и время выдачи и возврата по Москве.</p>
-          <div class="duration-options" role="group" aria-label="Быстрый выбор срока аренды"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div>
+          <div id="range-calendar" class="range-calendar" aria-label="Календарь аренды"></div>
           <div class="date-grid">
-            <label class="field"><span>Начало аренды</span><span class="date-input-row"><span><small>Дата</small><input id="start-date" type="hidden"><button id="start-date-picker" class="date-picker-button" type="button" aria-haspopup="dialog" aria-label="Выбрать дату начала аренды"></button></span><span><small>Время</small><input id="start-time" type="time" required step="900" aria-label="Время начала аренды"></span></span><input id="start" type="hidden"><small id="start-hint">Выберите дату и время получения</small><small id="start-error" class="field-error" role="alert" hidden></small></label>
-            <label class="field"><span>Возврат</span><span class="date-input-row"><span><small>Дата</small><input id="end-date" type="hidden"><button id="end-date-picker" class="date-picker-button" type="button" aria-haspopup="dialog" aria-label="Выбрать дату возврата"></button></span><span><small>Время</small><input id="end-time" type="time" required step="900" aria-label="Время возврата"></span></span><input id="end" type="hidden"><small id="end-hint">Выберите дату и время возврата</small><small id="end-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span id="start-time-label">Начало (дата)</span><input id="start-date" type="hidden"><input id="start" type="hidden"><input id="start-time" type="time" required step="900" aria-labelledby="start-time-label"><small id="start-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span id="end-time-label">Конец (дата)</span><input id="end-date" type="hidden"><input id="end" type="hidden"><input id="end-time" type="time" required step="900" aria-labelledby="end-time-label"><small id="end-error" class="field-error" role="alert" hidden></small></label>
           </div>
-          <div id="calendar-dialog" class="calendar-dialog" role="dialog" aria-modal="true" aria-labelledby="calendar-title" hidden><div class="calendar-card"><div class="calendar-head"><button id="calendar-prev" class="button ghost compact" type="button" aria-label="Предыдущий месяц">‹</button><strong id="calendar-title"></strong><button id="calendar-next" class="button ghost compact" type="button" aria-label="Следующий месяц">›</button></div><div class="calendar-weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div><div id="calendar-days" class="calendar-days" role="grid" aria-label="Календарь"></div><button id="calendar-close" class="button ghost calendar-close" type="button">Отмена</button></div></div>
-          <div class="info-strip"><span class="info-icon" aria-hidden="true">i</span><p>Мы проверим доступность на выбранный срок. После отправки заявка будет ждать решения оператора без ограничения по времени.</p></div>
+          <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p><button id="period-clear" type="button" class="button ghost compact" aria-label="Очистить выбранный период">Сбросить</button></div>
+          <p id="period-error" class="period-error" role="status"></p>
+          <details class="period-help"><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><p>Между арендами действует буфер артикула (обычно 24 ч). Доступность с учётом буфера проверяется при выборе техники и отправке заявки.</p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
         </div>
 
         <div id="step-items" class="panel step-panel" hidden>
@@ -161,7 +162,7 @@
       </section>
     </main>
 
-    <footer id="action-bar" class="action-bar"><button id="back-button" class="button ghost" type="button" hidden>Назад</button><button id="main-button" class="button primary" type="button">Показать оборудование <span aria-hidden="true">→</span></button></footer>
+    <footer id="action-bar" class="action-bar"><button id="back-button" class="button ghost" type="button" hidden>Назад</button><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
   </div>
 </body>
 </html>

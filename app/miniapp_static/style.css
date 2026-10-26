@@ -52,25 +52,6 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .duration-options { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 12px 0 18px; }
 .duration-custom { width: 140px; margin: 0; }
 .duration-options .button { min-height: 54px; }
-.date-input-row { display: grid; grid-template-columns: minmax(0, 1fr) 106px; gap: 8px; align-items: center; }
-.date-input-row > span { display: grid; gap: 4px; min-width: 0; }
-.date-input-row small { color: var(--muted); font-size: 12px; }
-.date-input-row input { width: 100%; min-width: 0; }
-.date-picker-button { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); font-weight: 650; text-align: left; }
-.date-picker-button::after { content: "⌄"; float: right; color: var(--accent); font-size: 18px; line-height: .8; }
-.calendar-dialog { position: fixed; z-index: 60; inset: 0; display: grid; place-items: end center; padding: 18px; background: rgba(16, 27, 35, .48); }
-.calendar-card { width: min(100%, 390px); padding: 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 24px 60px rgba(0, 0, 0, .25); }
-.calendar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; }
-.calendar-head strong { text-transform: capitalize; }
-.calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-.calendar-weekdays { margin: 14px 0 6px; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
-.calendar-days { min-height: 238px; }
-.calendar-day { display: grid; place-items: center; aspect-ratio: 1; border: 0; border-radius: 50%; background: transparent; color: var(--text); font-weight: 650; }
-.calendar-day:not(:disabled):hover, .calendar-day:not(:disabled):focus-visible { background: var(--soft); }
-.calendar-day.selected { background: var(--accent); color: var(--on-accent); }
-.calendar-day:disabled { color: var(--muted); opacity: .35; }
-.calendar-close { width: 100%; margin-top: 12px; }
-.date-input-row input[type="time"] { min-height: 44px; padding: 8px 5px; font-size: 15px; }
 .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 19px; font-weight: 700; }
 .field input { width: 100%; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text); font-weight: 500; }
 .field select, .field textarea { width: 100%; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text); }
@@ -294,4 +275,60 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 @media (prefers-reduced-motion: no-preference) {
   .button, .item-card { transition: background-color .16s ease, border-color .16s ease, transform .16s ease; }
   .button:active, .item-card:active { transform: scale(.99); }
+}
+
+/* The period is the first screen, including six-week months. */
+.dates-view .heading-row, .dates-view .intro, .dates-view .steps,
+.dates-view #step-dates .step-kicker, .dates-view #step-dates .panel-icon,
+.dates-view .topbar-note, .dates-view .mode-banner { display: none; }
+.dates-view .shell { padding-top: max(4px, env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px)); padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+.dates-view .topbar { min-height: 30px; padding-bottom: 0; border: 0; }
+.dates-view .tabs { margin-bottom: 4px; gap: 14px; flex-wrap: nowrap; }
+.dates-view .tab { min-height: 44px; padding: 8px 0; font-size: 14px; }
+.dates-view #step-dates { padding: 8px; }
+.dates-view #step-dates h2 { font-size: 18px; line-height: 24px; }
+.range-calendar { width: 100%; min-width: 0; min-height: 326px; }
+.range-calendar .calendar-head { display: flex; align-items: center; justify-content: space-between; height: 44px; }
+.calendar-nav { width: 44px; height: 44px; border: 0; border-radius: 10px; background: var(--soft); color: var(--text); font-size: 24px; }
+.range-calendar .calendar-weekdays, .range-calendar .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(44px, 1fr)); gap: 0; text-align: center; }
+.range-calendar .calendar-weekdays { height: 18px; margin: 0; font-size: 12px; color: var(--text); }
+.range-calendar .calendar-days { height: 264px; grid-template-rows: repeat(6, 44px); }
+.range-calendar .calendar-day { min-width: 44px; width: 100%; min-height: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 15px; }
+.range-calendar .calendar-day.in-range { border-radius: 0; background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.range-calendar .calendar-day.selected { background: var(--accent); color: var(--on-accent); font-weight: 800; }
+.range-calendar .calendar-day:disabled { opacity: .4; text-decoration: line-through; }
+.range-calendar .calendar-day.outside-month:not(.selected):not(.in-range) { background: var(--soft); }
+.dates-view .date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.dates-view .date-grid .field { margin: 0; gap: 2px; }
+.dates-view .date-grid .field > span { font-size: 12px; }
+.dates-view .date-grid input[type="time"] { min-height: 44px; height: 44px; padding: 6px 10px; }
+.period-row { display: flex; align-items: center; gap: 4px; min-height: 44px; }
+.period-row p { flex: 1; margin: 0; font-size: 12px; color: var(--text); }
+.period-row .button { min-height: 44px; padding: 6px; font-size: 12px; }
+.period-error { min-height: 30px; margin: 0; font-size: 12px; line-height: 15px; color: var(--danger); }
+.period-help { font-size: 12px; }
+.period-help summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.dates-view .action-bar { padding-top: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom), var(--tg-content-safe-area-inset-bottom, 0px)); }
+.dates-view .action-bar .button { min-height: 44px; }
+.article-photo, .article-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; min-width: 0; }
+.item-photo, .item-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
+/* Preserve at least 44px touch targets in the existing operator controls. */
+.button.compact, .admin-tabs > .button, .admin-card .action-row > .button,
+.document-button, .quantity-control .button, .inspection-row > .button,
+.order-card .button, .step-button, .catalog-controls input, .catalog-controls select { min-height: 44px; }
+@media (max-width: 359px) {
+  .dates-view .shell { padding-left: 5px; padding-right: 5px; }
+  .dates-view #step-dates { padding-left: 0; padding-right: 0; border: 0; }
+  .dates-view .brand { gap: 5px; font-size: 16px; }
+  .dates-view .tabs { gap: 10px; }
+}
+
+:root[data-theme="dark"] {
+  --bg: var(--tg-theme-bg-color, #17212b);
+  --surface: var(--tg-theme-secondary-bg-color, #232e3c);
+  --text: var(--tg-theme-text-color, #ffffff);
+  --muted: var(--tg-theme-hint-color, #b4c0cc);
+  --accent: var(--tg-theme-button-color, #8bd4c3);
+  --on-accent: var(--tg-theme-button-text-color, #102e27);
+  --danger: #ff8993;
 }

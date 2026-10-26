@@ -1,0 +1,8 @@
+{
+  "name": "polyrental-browser-qa",
+  "private": true,
+  "version": "0.3.0",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

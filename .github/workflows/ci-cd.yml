@@ -18,9 +18,24 @@ jobs:
       - name: Run tests in the isolated PostgreSQL service
         run: docker compose --profile test run --rm --build test
 
+  browser:
+    name: Calendar and mobile UI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/browser-qa
+      - run: tools/browser-qa/node_modules/.bin/playwright install --with-deps chromium
+      - run: node --test tests/calendar.test.cjs
+      - run: node tests/calendar-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+
   deploy:
     name: Deploy production
-    needs: test
+    needs: [test, browser]
     # Production credentials are repository secrets. A successful push to main
     # is the deliberate deployment trigger.
     if: github.ref == 'refs/heads/main'

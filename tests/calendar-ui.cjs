@@ -1,0 +1,138 @@
+/* Run with NODE_PATH pointing to an installed playwright package. No server,
+ * database, Telegram traffic or personal data is used by this browser suite. */
+const { chromium } = require("playwright");
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const root = path.resolve(__dirname, "..");
+const assets = path.join(root, "app", "miniapp_static");
+const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll("__APP_VERSION__", "0.3.0");
+
+(async () => {
+  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {}) });
+  const results = [];
+  try {
+    for (const [width, height] of [[320,640], [360,640], [390,844], [430,844]]) {
+      for (const dark of [false, true]) {
+        const page = await browser.newPage({ viewport:{width,height}, timezoneId:"America/Los_Angeles", colorScheme:dark?"dark":"light" });
+        const errors = [], requests = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.route("**/*", async route => {
+          const url = new URL(route.request().url()); requests.push(url.pathname);
+          if (url.pathname.startsWith("/miniapp/static/")) {
+            const file = path.join(assets, path.basename(url.pathname));
+            return route.fulfill({body:fs.readFileSync(file), contentType:file.endsWith(".css")?"text/css":"text/javascript"});
+          }
+          if (url.hostname === "telegram.org") return route.fulfill({body:"",contentType:"text/javascript"});
+          return route.fulfill({body:html, contentType:"text/html"});
+        });
+        await page.clock.install({time:new Date("2026-10-26T10:00:00Z")});
+        await page.goto("http://polyrental.test/miniapp?preview=1");
+        if (dark) await page.evaluate(() => {
+          const style = document.documentElement.style;
+          for (const [name,value] of Object.entries({"bg-color":"#17212b", "secondary-bg-color":"#232e3c", "text-color":"#ffffff", "hint-color":"#b4c0cc", "button-color":"#8bd4c3", "button-text-color":"#102e27"})) style.setProperty(`--tg-theme-${name}`,value);
+        });
+        assert.equal(await page.locator(".calendar-day").count(),42);
+        assert.equal(await page.locator("#main-button").isDisabled(),true);
+        assert.equal(await page.locator('[data-date="2026-10-26"]').isDisabled(),true);
+        await page.locator('[data-date="2026-10-30"]').click();
+        assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
+        assert.equal(await page.locator("#start-time").isDisabled(),true);
+        await page.locator('[data-date="2026-11-02"]').click();
+        assert.equal(await page.locator(".calendar-day.in-range").count(),2);
+        assert.equal(await page.locator("#start-time").isDisabled(),false);
+        assert.equal(await page.locator("#main-button").isDisabled(),false);
+        await page.locator("#start-time").fill("10:00");
+        await page.locator("#end-time").fill("18:00");
+        assert.match(await page.locator("#period-summary").innerText(), /10:00.*18:00.*МСК/);
+        const bounds = await page.evaluate(() => {
+          const rect = id => { const r=document.getElementById(id).getBoundingClientRect(); return {top:r.top,bottom:r.bottom}; };
+          return {calendar:rect("range-calendar"), time:rect("end-time"), summary:rect("period-summary"), button:rect("main-button"), action:rect("action-bar"), scroll:scrollY, overflow:document.documentElement.scrollWidth>innerWidth,
+            touch:[...document.querySelectorAll(".calendar-day")].every(b=>b.getBoundingClientRect().width>=44 && b.getBoundingClientRect().height>=44),
+            renderMs:(()=>{const target=document.createElement("div"); const start=performance.now();new PolyRentalCalendar.RangeCalendar(target,{minimum:"2026-10-30"});return performance.now()-start;})()};
+        });
+        assert.equal(bounds.overflow,false,JSON.stringify({width,dark,bounds}));
+        assert.equal(bounds.touch,true);
+        assert.equal(bounds.scroll,0);
+        assert.ok(bounds.calendar.bottom<=bounds.action.top && bounds.time.bottom<=bounds.action.top && bounds.summary.bottom<=bounds.action.top, JSON.stringify({width,dark,bounds}));
+        assert.ok(bounds.button.bottom<=height && bounds.button.top>=0);
+        assert.ok(bounds.renderMs<100,JSON.stringify(bounds));
+        await page.locator("#main-button").click();
+        await page.locator('[data-step="0"]').click();
+        assert.equal(await page.locator("#start-time").inputValue(),"10:00");
+        assert.equal(await page.locator("#start-date").inputValue(),"2026-10-30");
+        assert.equal(requests.filter(url=>url.startsWith("/api/")).length,0);
+        const media = await page.evaluate(async () => {
+          const host=document.createElement("div"); host.className="article-card-head";
+          host.style.cssText="position:fixed;opacity:0;width:300px;pointer-events:none";
+          const image=document.createElement("img"); image.className="article-photo"; host.append(image,document.createElement("span"));document.body.append(host);
+          const measurements=[];
+          for(const [w,h] of [[4000,200],[100,3000],[120,120]]) {
+            image.src=`data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="gray"/></svg>`)}`;
+            await image.decode(); const rect=image.getBoundingClientRect(); measurements.push([rect.width,rect.height]);
+          }
+          host.remove();return measurements;
+        });
+        assert.deepEqual(media,[[76,57],[76,57],[76,57]]);
+        await page.locator('[data-date="2026-10-30"]').focus();
+        await page.keyboard.press("ArrowRight");
+        assert.equal(await page.locator(":focus").getAttribute("data-date"),"2026-10-31");
+        const beforeMonth=await page.locator("#range-calendar").boundingBox();
+        await page.getByRole("button",{name:"Следующий месяц"}).click();
+        const afterMonth=await page.locator("#range-calendar").boundingBox();
+        assert.equal(afterMonth.height,beforeMonth.height);
+        await page.getByRole("button",{name:"Предыдущий месяц"}).click();
+        if ((width===360&&!dark) || (width===390&&dark)) await page.screenshot({path:path.join(root,"docs","qa",`v0.3.0-calendar-${width}-${dark?"dark":"light"}.png`)});
+        await page.locator("#period-clear").click();
+        assert.equal(await page.locator(".calendar-day.selected").count(),0);
+        await page.locator('[data-date="2026-10-30"]').click();
+        await page.locator('[data-date="2026-10-30"]').click();
+        assert.equal(await page.locator("#main-button").isDisabled(),false); // 10:00–18:00 same day
+        await page.locator("#end-time").fill("09:00");
+        assert.equal(await page.locator("#main-button").isDisabled(),true);
+        assert.match(await page.locator("#period-error").innerText(),/позже/);
+        assert.deepEqual(errors,[]);
+        results.push({width,height,dark,renderMs:Math.round(bounds.renderMs*10)/10});
+        await page.close();
+      }
+    }
+    // Signed launch uses the server's role, including the optional client mode.
+    const page=await browser.newPage({viewport:{width:390,height:844}});
+    const errors=[]; page.on("pageerror",error=>errors.push(error.message));
+    let piiAdmin=false; const reviews=[];
+    const order={id:7,status:"confirmed",identity_status:"submitted",items:[],assets:[],lines:[],inspections:[],starts_at:"2026-11-02T10:00:00+03:00",ends_at:"2026-11-02T18:00:00+03:00",customer_name:"QA",customer_contact:"@qa_user"};
+    await page.route("**/*",async route=>{
+      const url=new URL(route.request().url());
+      if(url.hostname==="telegram.org")return route.fulfill({contentType:"text/javascript",body:'window.Telegram={WebApp:{initData:"signed-test",initDataUnsafe:{user:{id:42}}}}'});
+      if(url.pathname.startsWith("/miniapp/static/")){const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith("css")?"text/css":"text/javascript"});}
+      if(url.pathname==="/api/miniapp/me")return route.fulfill({json:{id:piiAdmin?200:100,admin:true,pii_admin:piiAdmin}});
+      if(url.pathname==="/api/miniapp/admin/bookings")return route.fulfill({json:{items:[order]}});
+      if(url.pathname.endsWith("/identity/review")){reviews.push(route.request().postDataJSON());return route.fulfill({json:{status:"saved"}});}
+      if(url.pathname.endsWith("/identity"))return route.fulfill({json:{document_checks:{student_front:{document:"not_document",student:"unknown",reason:"blank_image",manual_review:true}}}});
+      if(url.pathname.startsWith("/api/"))return route.fulfill({json:{items:[]}});
+      return route.fulfill({body:html,contentType:"text/html"});
+    });
+    await page.goto("http://polyrental.test/miniapp");
+    await page.locator("#admin-panel").waitFor({state:"visible"});
+    await page.locator(".admin-card").waitFor();
+    assert.equal(await page.getByRole("button",{name:/^Проверить анкету/}).count(),0);
+    await page.locator("#tab-new").click();
+    assert.equal(await page.locator("#range-calendar").isVisible(),true);
+    piiAdmin=true; await page.reload();
+    await page.getByRole("button",{name:/^Проверить анкету/}).click();
+    assert.match(await page.locator(".identity-check-review").innerText(),/не документ.*однотонное фото/);
+    page.on("dialog",dialog=>dialog.accept());
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith("/identity/review")),page.getByRole("button",{name:"Подтвердить документы",exact:true}).click()]);
+    assert.equal(reviews[0].approved,true);
+    await page.getByRole("button",{name:/^Проверить анкету/}).click();
+    await page.getByRole("button",{name:"Отклонить / исправить",exact:true}).click();
+    await page.locator('#identity-review-form input[value="student_front"]').check();
+    await page.locator('#identity-review-form textarea').fill("Замените однотонное фото");
+    await Promise.all([page.waitForResponse(response=>response.url().endsWith("/identity/review")),page.locator("#identity-review-submit").click()]);
+    assert.equal(reviews[1].approved,false);
+    assert.deepEqual(reviews[1].fields,["student_front"]);
+    assert.deepEqual(errors,[]);
+    await page.close();
+    console.log(JSON.stringify({passed:results.length+2,viewports:results},null,2));
+  } finally { await browser.close(); }
+})().catch(error=>{console.error(error);process.exitCode=1;});
