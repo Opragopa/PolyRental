@@ -56,6 +56,20 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .date-input-row > span { display: grid; gap: 4px; min-width: 0; }
 .date-input-row small { color: var(--muted); font-size: 12px; }
 .date-input-row input { width: 100%; min-width: 0; }
+.date-picker-button { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); font-weight: 650; text-align: left; }
+.date-picker-button::after { content: "⌄"; float: right; color: var(--accent); font-size: 18px; line-height: .8; }
+.calendar-dialog { position: fixed; z-index: 60; inset: 0; display: grid; place-items: end center; padding: 18px; background: rgba(16, 27, 35, .48); }
+.calendar-card { width: min(100%, 390px); padding: 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 24px 60px rgba(0, 0, 0, .25); }
+.calendar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; }
+.calendar-head strong { text-transform: capitalize; }
+.calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calendar-weekdays { margin: 14px 0 6px; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
+.calendar-days { min-height: 238px; }
+.calendar-day { display: grid; place-items: center; aspect-ratio: 1; border: 0; border-radius: 50%; background: transparent; color: var(--text); font-weight: 650; }
+.calendar-day:not(:disabled):hover, .calendar-day:not(:disabled):focus-visible { background: var(--soft); }
+.calendar-day.selected { background: var(--accent); color: var(--on-accent); }
+.calendar-day:disabled { color: var(--muted); opacity: .35; }
+.calendar-close { width: 100%; margin-top: 12px; }
 .date-input-row input[type="time"] { min-height: 44px; padding: 8px 5px; font-size: 15px; }
 .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 19px; font-weight: 700; }
 .field input { width: 100%; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text); font-weight: 500; }

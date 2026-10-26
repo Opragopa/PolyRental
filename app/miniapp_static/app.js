@@ -15,6 +15,7 @@
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
   let contactEdited = false;
+  const datePicker = { target: null, month: null };
   const identityPhotoDrafts = new Map();
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
@@ -38,14 +39,30 @@
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     return match ? `${match[3]}.${match[2]}.${match[1]} ${match[4]}:${match[5]}` : "";
   }
+  function datePickerText(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}.${match[2]}.${match[1]}` : "Выберите дату";
+  }
+  function isIsoDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")); }
+  function monthStart(value) { return `${value.slice(0, 7)}-01`; }
+  function daysInMonth(value) {
+    const [year, month] = value.slice(0, 7).split("-").map(Number);
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+  function weekdayOffset(value) { return (new Date(`${value}T12:00:00Z`).getUTCDay() + 6) % 7; }
+  function refreshDatePickerButton(id) {
+    const button = $(`${id}-date-picker`); const value = $(`${id}-date`).value;
+    button.textContent = datePickerText(value); button.classList.toggle("empty", !value);
+  }
   function syncDateTime(id) {
     const date = $(`${id}-date`).value; const time = $(`${id}-time`).value;
-    $(id).value = date && time ? `${date}T${time}` : "";
+    $(id).value = date && time ? `${date}T${time}` : ""; refreshDatePickerButton(id);
   }
   function syncDateFields(id) {
     const match = String($(id).value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
     if (match) { $(`${id}-date`).value = match[1]; $(`${id}-time`).value = match[2]; }
     else { $(`${id}-date`).value = ""; $(`${id}-time`).value = ""; }
+    refreshDatePickerButton(id);
   }
   function moscowDateIso(date = new Date()) {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -74,10 +91,50 @@
   function minimumBookingDate() { return addIsoDays(moscowDateIso(), 4); }
   function applyBookingDateLimits() {
     const min = minimumBookingDate();
-    $("start-date").min = min;
-    $("end-date").min = $("start-date").value >= min ? $("start-date").value : min;
+    const endMin = $("start-date").value >= min ? $("start-date").value : min;
     $("start-hint").textContent = `Доступно с ${bookingDateLabel(min)}; даты ближайших трёх дней закрыты.`;
-    $("end-hint").textContent = `Возврат — позже выдачи, не раньше ${bookingDateLabel($("end-date").min)}.`;
+    $("end-hint").textContent = `Возврат — позже выдачи, не раньше ${bookingDateLabel(endMin)}.`;
+  }
+  function openDatePicker(id) {
+    datePicker.target = id;
+    const selected = $(`${id}-date`).value;
+    datePicker.month = monthStart(isIsoDate(selected) ? selected : minimumBookingDate());
+    renderDatePicker(); $("calendar-dialog").hidden = false;
+  }
+  function closeDatePicker() { $("calendar-dialog").hidden = true; datePicker.target = null; }
+  function renderDatePicker() {
+    const target = datePicker.target; if (!target || !datePicker.month) return;
+    const min = target === "start" ? minimumBookingDate() : ($("start-date").value || minimumBookingDate());
+    $("calendar-title").textContent = new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" }).format(new Date(`${datePicker.month}T12:00:00Z`));
+    const grid = $("calendar-days"); grid.replaceChildren();
+    for (let index = 0; index < weekdayOffset(datePicker.month); index += 1) grid.append(document.createElement("span"));
+    for (let day = 1; day <= daysInMonth(datePicker.month); day += 1) {
+      const value = `${datePicker.month.slice(0, 7)}-${String(day).padStart(2, "0")}`;
+      const button = document.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.textContent = String(day);
+      button.disabled = value < min; button.setAttribute("role", "gridcell");
+      if (value === $(`${target}-date`).value) button.classList.add("selected");
+      button.addEventListener("click", () => selectCalendarDate(target, value)); grid.append(button);
+    }
+    $("calendar-prev").disabled = datePicker.month <= monthStart(min);
+  }
+  function selectCalendarDate(id, value) {
+    const previousStart = $("start-date").value;
+    $(`${id}-date`).value = value;
+    if (id === "start" && (!$("end-date").value || $("end-date").value <= value || previousStart !== value)) {
+      $("end-date").value = addIsoDays(value, 1); $("end-time").value = $("start-time").value || "12:00";
+    }
+    syncDateTime("start"); syncDateTime("end"); applyBookingDateLimits();
+    state.items = []; state.quantities.clear(); state.requestId = null;
+    fieldError(id, ""); saveDraft(); closeDatePicker();
+  }
+  function ensureBookingPeriod() {
+    const min = minimumBookingDate(); const startDate = $("start-date").value; const endDate = $("end-date").value;
+    const validTime = (value) => /^\d{2}:\d{2}$/.test(value || "");
+    if (!isIsoDate(startDate) || startDate < min || !isIsoDate(endDate) || endDate <= startDate || !validTime($("start-time").value) || !validTime($("end-time").value)) {
+      $("start-date").value = min; $("end-date").value = addIsoDays(min, 1); $("start-time").value = "12:00"; $("end-time").value = "12:00";
+      state.quantities.clear(); syncDateTime("start"); syncDateTime("end"); saveDraft(); return false;
+    }
+    syncDateTime("start"); syncDateTime("end"); return true;
   }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
   function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
@@ -103,7 +160,7 @@
     showError(error?.message || "Не удалось сохранить анкету. Проверьте введённые данные и попробуйте ещё раз.");
   }
   function fieldError(id, message) {
-    const input = $(id); const focusTarget = $(`${id}-date`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
+    const input = $(id); const focusTarget = $(`${id}-date-picker`) || $(`${id}-date`) || input; const error = $(`${id === "customer-name" ? "name" : id === "customer-contact" ? "contact" : id}-error`);
     focusTarget.setAttribute("aria-invalid", String(Boolean(message)));
     error.textContent = message || ""; error.hidden = !message;
     if (message) focusTarget.focus();
@@ -1210,7 +1267,7 @@
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
   $("identity-close").addEventListener("click", () => { $("identity-form").reset(); state.consent = null; state.identityBookingId = null; showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer(); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer(); if (event.key === "Escape" && !$("calendar-dialog").hidden) closeDatePicker(); });
   $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("consent-next").addEventListener("click", async () => {
@@ -1238,8 +1295,13 @@
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
   for (const id of ["start", "end"]) {
-    for (const part of ["date", "time"]) $(`${id}-${part}`).addEventListener("input", () => { syncDateTime(id); applyBookingDateLimits(); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
+    $(`${id}-time`).addEventListener("input", () => { syncDateTime(id); applyBookingDateLimits(); state.items = []; state.quantities.clear(); state.requestId = null; fieldError(id, ""); saveDraft(); });
+    $(`${id}-date-picker`).addEventListener("click", () => openDatePicker(id));
   }
+  $("calendar-prev").addEventListener("click", () => { datePicker.month = addIsoDays(datePicker.month, -1).slice(0, 7) + "-01"; renderDatePicker(); });
+  $("calendar-next").addEventListener("click", () => { datePicker.month = addIsoDays(datePicker.month, daysInMonth(datePicker.month)).slice(0, 7) + "-01"; renderDatePicker(); });
+  $("calendar-close").addEventListener("click", closeDatePicker);
+  $("calendar-dialog").addEventListener("click", (event) => { if (event.target === $("calendar-dialog")) closeDatePicker(); });
   document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
   $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });
@@ -1256,7 +1318,8 @@
   const hasDraft = restoreDraft();
   const hasSavedContact = restoreContact();
   void pruneExpiredIdentityPhotos();
-  syncDateFields("start"); syncDateFields("end"); applyBookingDateLimits();
+  syncDateFields("start"); syncDateFields("end");
+  const restoredPeriod = ensureBookingPeriod(); applyBookingDateLimits();
   const profile = tg?.initDataUnsafe?.user;
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
@@ -1265,7 +1328,7 @@
   if (preview) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Демонстрация интерфейса: можно пройти шаги, но заявка не отправляется."; }
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
-  else if (hasDraft) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
+  else if (hasDraft && restoredPeriod) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
   if (nativeButtons) { tg.MainButton.onClick(next); tg.BackButton?.onClick(back); tg.expand?.(); }
   if (authorized) api("/api/miniapp/me").then((role) => { state.role = role; $("tab-admin").hidden = !role.admin; }).catch(() => {});
   tg?.onEvent?.("activated", () => { if (state.view === "orders") showOrders(); });
