@@ -28,7 +28,7 @@ jobs:
     environment: production
     steps:
       - name: Update and restart the production services locally
-        shell: pwsh
+        shell: powershell
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           EXPECTED_COMMIT: ${{ github.sha }}
