@@ -169,7 +169,7 @@ npx tma-devkit dev --app http://localhost:8000/miniapp
 
 ## Этап 5. Проверка удобства пользователями
 
-Автоматические проверки v0.3.0 выполняются отдельно от сессий с пользователями:
+Автоматические проверки v0.3.1 выполняются отдельно от сессий с пользователями:
 
 ```sh
 docker compose --profile test run --rm --build test
@@ -178,6 +178,8 @@ npm ci --prefix tools/browser-qa
 tools/browser-qa/node_modules/.bin/playwright install --with-deps chromium webkit
 NODE_PATH=./tools/browser-qa/node_modules node tests/calendar-ui.cjs
 NODE_PATH=./tools/browser-qa/node_modules PLAYWRIGHT_BROWSER=webkit node tests/calendar-ui.cjs
+NODE_PATH=./tools/browser-qa/node_modules node tests/request-review-ui.cjs
+NODE_PATH=./tools/browser-qa/node_modules PLAYWRIGHT_BROWSER=webkit node tests/request-review-ui.cjs
 docker compose --profile test run --rm -v "$PWD:/app" test python scripts/benchmark_documents.py --output artifacts/document-benchmark.json
 ```
 
@@ -185,7 +187,11 @@ docker compose --profile test run --rm -v "$PWD:/app" test python scripts/benchm
 
 Browser suite работает с локальными файлами через перехват запросов: БД, бот, Интернет и production ему не нужны. Она проверяет 320×640, 360×640, 390×844 и 430×844 в обеих темах, размеры тач-целей, первый экран, переход месяца без изменения высоты, клавиатуру, выбор и сброс диапазона, время МСК при timezone устройства America/Los_Angeles, сохранение при навигации и отсутствие API-вызовов в preview. Фото проверяются на синтетических пропорциях 4000×200, 100×3000 и 120×120. Отдельный сценарий проверяет открытие управления по серверной роли и переход «Как клиент».
 
+`tests/request-review-ui.cjs` отдельно проверяет компактные карточки, клавиатурное раскрытие, ревью внутри выбранной заявки, подписи полей, light/dark, отсутствие PII-запросов у обычного оператора, подтверждение/исправление, историю, истечение блокировки и поздние ответы при смене заявки. В PowerShell после настройки `NODE_PATH` запустите `node tests/request-review-ui.cjs` для каждого `PLAYWRIGHT_BROWSER`. Снимки календаря создаются только при заданном `QA_SCREENSHOTS` (путь к папке), чтобы повторный прогон не менял доказательства предыдущих выпусков.
+
 Pytest проверяет подписанный Telegram ID, одинаковые роли в боте/API, fail-fast env, изоляцию заявок, бот/API-синхронизацию, идемпотентность и межарендный буфер. Документы проверяются моками, синтетическим OCR без ПД, таймаутом внутреннего провайдера, шифротекстом в БД, PII-доступом и сохранностью изображений при downgrade/upgrade миграции `20261026_07`.
+
+`tests/test_v031.py` проверяет права и минимальный состав истории, порядок событий, совместимость активной блокировки и видимость истёкшей, отсутствие событий после отклонённых переходов, сохранение ручного решения и запрет доступа к ПД обычному оператору. Эти сценарии используют только отдельную PostgreSQL `polyrental_test`.
 
 Реальные Telegram iOS/Android, экранные дикторы и измерение точности на разрешённом наборе фотографий остаются отдельными приёмочными проверками. Не используйте реальные документы в публичных скриншотах или CI-артефактах.
 
