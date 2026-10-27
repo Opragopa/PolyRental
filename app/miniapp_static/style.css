@@ -382,3 +382,9 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
   .request-accordion[open] > .request-body { animation: request-open .18s ease-out; }
   @keyframes request-open { from { opacity: .35; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 }
+
+html.role-pending main, html.role-pending .action-bar { visibility: hidden; }
+#profile-header { margin-bottom: 24px; }
+#profile-name { font-weight: 700; }
+#return-to-management, #operator-book { margin: 12px 0; }
+#onboarding-dialog .button { min-height: 44px; }

@@ -104,6 +104,22 @@ class RequestNumberCounter(Base):
     last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class ClientProfile(Base):
+    __tablename__ = "client_profiles"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    onboarding_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ClientActivity(Base):
+    __tablename__ = "client_activity"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
 class BookingOperationLease(Base):
     """Temporary claim on the current workflow stage, not ownership of a booking."""
     __tablename__ = "booking_operation_leases"
@@ -393,5 +409,6 @@ def init_db():
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_customer_request_unique ON bookings (customer_id, client_request_id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_number_unique ON bookings (receipt_number)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_human_number_unique ON bookings (human_number)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS bookings_customer_created_idx ON bookings (customer_id, created_at DESC, id DESC)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS equipment_article_idx ON equipment (article_id)"))
     _legacy_backfill()

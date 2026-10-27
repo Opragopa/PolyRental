@@ -1,0 +1,63 @@
+/* Browser acceptance for server-directed start screens and onboarding. */
+const { chromium, webkit } = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..');
+const assets = path.join(root, 'app/miniapp_static');
+const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll('__APP_VERSION__', 'qa');
+
+(async () => {
+  const engineName = process.env.PLAYWRIGHT_BROWSER || 'chromium';
+  const engine = engineName === 'webkit' ? webkit : chromium;
+  const browser = await engine.launch({headless: true, ...(engineName === 'chromium' && process.env.PLAYWRIGHT_CHANNEL ? {channel: process.env.PLAYWRIGHT_CHANNEL} : {})});
+  try {
+    for (const admin of [false, true]) {
+      const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      let seen = false, completed = 0, switches = 0;
+      await page.route('**/*', async route => {
+        const url = new URL(route.request().url());
+        if (url.hostname === 'telegram.org') return route.fulfill({contentType:'text/javascript', body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
+        if (url.pathname.startsWith('/miniapp/static/')) { const file = path.join(assets, path.basename(url.pathname)); return route.fulfill({body: fs.readFileSync(file), contentType: file.endsWith('.css') ? 'text/css' : 'text/javascript'}); }
+        if (url.pathname === '/api/miniapp/me') return route.fulfill({json:{id:admin ? 100 : 42, admin, pii_admin:false}});
+        if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA', member_since:'2026-01-01T00:00:00Z', onboarding_seen:seen, start_screen:admin ? 'management' : 'booking'}});
+        if (url.pathname === '/api/miniapp/onboarding/show') { const first = !seen; seen = true; return route.fulfill({json:{first_show:first}}); }
+        if (url.pathname === '/api/miniapp/onboarding/complete') { completed++; return route.fulfill({json:{status:'ok'}}); }
+        if (url.pathname === '/api/miniapp/operator/client-mode') { switches++; return route.fulfill({json:{status:'ok'}}); }
+        if (url.pathname === '/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[],dependencies:[]}});
+        if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[],total:0}});
+        return route.fulfill({body:html,contentType:'text/html'});
+      });
+      await page.goto('http://polyrental.test/miniapp');
+      if (admin) {
+        await page.locator('#admin-panel').waitFor({state:'visible'});
+        assert.equal(await page.locator('#onboarding-dialog').isHidden(), true);
+        await page.getByRole('button',{name:'Каталог',exact:true}).click();
+        await page.getByRole('button',{name:'Забронировать как клиент'}).click();
+      }
+      const dialog = page.locator('#onboarding-dialog');
+      await dialog.waitFor({state:'visible'});
+      assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
+      await dialog.getByRole('button',{name:'Далее'}).click();
+      assert.equal(await dialog.locator('h2').innerText(),'Каталог и подборка');
+      await dialog.getByRole('button',{name:'Пропустить'}).click();
+      await dialog.waitFor({state:'hidden'});
+      await page.waitForFunction(() => document.querySelector('#onboarding-dialog').hidden);
+      if (admin) {
+        await page.getByRole('button',{name:'Вернуться в управление'}).click();
+        await page.getByText('Показано моделей: 0 из 0').waitFor();
+        assert.equal(switches, 1);
+      }
+      await page.locator('#tab-orders').click();
+      await page.getByRole('button',{name:'Как пользоваться'}).click();
+      assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
+      await dialog.getByRole('button',{name:'Пропустить'}).click();
+      await page.waitForTimeout(50);
+      assert.equal(completed, 2);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Client and operator onboarding checks passed');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

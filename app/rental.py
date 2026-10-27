@@ -437,6 +437,19 @@ def list_customer_bookings(customer_id):
                                .order_by(Booking.created_at.desc()).limit(50)).all()
 
 
+def customer_history_page(customer_id, category, page, page_size=10):
+    filters = {"active": ACTIVE_STATUSES, "completed": {"returned"}, "cancelled": {"cancelled", "expired"}}
+    if category not in filters or page < 0:
+        raise ValueError("Неверный фильтр истории")
+    with Session() as session:
+        conditions = (Booking.customer_id == customer_id, Booking.status.in_(filters[category]))
+        total = session.scalar(select(func.count()).select_from(Booking).where(*conditions))
+        query = (select(Booking).options(selectinload(Booking.lines).selectinload(BookingLine.article))
+                 .where(*conditions).order_by(Booking.created_at.desc(), Booking.id.desc())
+                 .offset(page * page_size).limit(page_size))
+        return session.scalars(query).all(), total
+
+
 def _asset_conflicts(session, booking, equipment_id):
     article = session.get(Equipment, equipment_id).article
     scheduled = and_(

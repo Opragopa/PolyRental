@@ -9,6 +9,7 @@
   <title>Политех.АРЕНДА — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+  <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__"></script>
   <script defer src="/miniapp/static/app.js?v=__APP_VERSION__"></script>
 </head>
@@ -28,11 +29,12 @@
       <p id="page-intro" class="intro">Выберите сроки и оборудование. На оформление уйдёт пара минут.</p>
 
       <nav class="tabs" aria-label="Разделы">
-        <button id="tab-new" type="button" class="tab active" aria-current="page">Новая бронь</button>
-        <button id="tab-orders" type="button" class="tab">Мои заявки</button>
         <button id="tab-admin" type="button" class="tab" hidden>Управление</button>
+        <button id="tab-new" type="button" class="tab active" aria-current="page">Бронирование</button>
+        <button id="tab-orders" type="button" class="tab">Профиль</button>
       </nav>
       <div id="global-error" class="notice error" role="alert" hidden></div>
+      <button id="return-to-management" class="button secondary" type="button" hidden>Вернуться в управление</button>
 
       <section id="booking-flow" aria-label="Оформление бронирования">
         <ol id="steps" class="steps" aria-label="Шаги оформления">
@@ -88,7 +90,7 @@
 
       <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
         <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2>Мои заявки</h2></div><span class="panel-icon" aria-hidden="true">≡</span></div>
-        <div id="orders-content" role="status"></div>
+        <div id="profile-header"><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button></div><label class="field"><span>История заявок</span><select id="profile-filter"><option value="active">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
       </section>
 
       <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
@@ -127,6 +129,9 @@
         </form>
       </section>
 
+      <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy">
+        <div class="dialog-card"><p id="onboarding-progress" class="step-kicker" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
+      </section>
       <section id="identity-review-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="identity-review-title">
         <form id="identity-review-form" class="dialog-card">
           <h2 id="identity-review-title">Что нужно исправить?</h2>
@@ -144,7 +149,7 @@
         </div>
       </section>
 
-      <section id="admin-panel" class="panel" hidden aria-label="Управление арендой">
+      <section id="admin-panel" class="panel" hidden aria-label="Управление арендой"><button id="operator-book" class="button secondary" type="button">Забронировать как клиент</button>
         <div class="panel-head"><div><p class="step-kicker">СЛУЖЕБНЫЙ РАЗДЕЛ</p><h2>Заказы и склад</h2></div><span class="panel-icon" aria-hidden="true">⚙</span></div>
         <div class="admin-tabs">
           <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>

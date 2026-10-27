@@ -10,10 +10,11 @@
   const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
-  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
+  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, operatorClientMode: false, onboardingLoading: false, onboardingPending: false, profileFilter: "active", profilePage: 0 };
   const catalogView = { query: "", status: "all", expanded: new Set() };
   let selectedRequestId = null;
   let adminRenderSequence = 0;
+  let profileLoadSequence = 0;
   let leaseRefreshTimer = null;
   let addressSuggestTimer = null;
   let addressSuggestController = null;
@@ -312,9 +313,10 @@
     $("tab-new").classList.toggle("active", state.view === "flow");
     $("tab-orders").classList.toggle("active", state.view === "orders");
     $("tab-admin").classList.toggle("active", state.view === "admin");
+    $("return-to-management").hidden = !state.role?.admin || !state.operatorClientMode || state.view === "admin";
     $("tab-new").setAttribute("aria-current", state.view === "flow" ? "page" : "false");
     $("tab-orders").setAttribute("aria-current", state.view === "orders" ? "page" : "false");
-    $("page-title").textContent = state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Ваши заявки" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки";
+    $("page-title").textContent = state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки";
     $("page-intro").textContent = state.view === "admin" ? "Комплектация, проверки, возврат, каталог и ремонт." : state.view === "identity" ? "Защищённая передача данных напрямую в PolyRental." : state.view === "orders" ? "Здесь можно следить за статусом и отменить активную заявку." : done ? "Менеджер получил запрос и скоро ответит." : "Выберите сроки и оборудование. На оформление уйдёт пара минут.";
     $("steps").hidden = done || state.view !== "flow";
     [...$("steps").children].forEach((element, index) => {
@@ -326,7 +328,7 @@
     });
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
-    const showAction = state.view === "flow" && !done;
+    const showAction = state.view === "flow" && !done && $("onboarding-dialog").hidden;
     $("action-bar").hidden = !showAction || nativeButtons;
     $("back-button").hidden = state.step === 0;
     const labels = ["Продолжить", "Продолжить", "Проверить заказ", "Подтвердить бронирование"];
@@ -506,16 +508,27 @@
   }
 
   async function showOrders() {
+    const sequence = ++profileLoadSequence;
     clearError(); state.view = "orders"; render();
+    $("profile-name").textContent = state.profile?.display_name || "Профиль Telegram";
+    $("profile-contact").textContent = state.profile?.contact || "";
+    $("profile-since").textContent = state.profile?.member_since ? `С нами с ${new Date(state.profile.member_since).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" })}` : "";
     $("orders-content").textContent = "Загружаем заявки…";
     if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
     if (keyboardMode) { $("orders-content").textContent = "Вернитесь в чат с ботом и нажмите «Мои заявки». Там же можно узнать статус и связаться с менеджером."; return; }
     if (!authorized) { $("orders-content").textContent = "Откройте приложение через Telegram."; return; }
     try {
-      const result = await api("/api/miniapp/bookings");
+      const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}`);
+      if (sequence !== profileLoadSequence || state.view !== "orders") return;
       $("orders-content").replaceChildren();
-      if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
-      for (const order of result.items) {
+      const filtered = result.items;
+      const pages = Math.max(1, Math.ceil((result.total ?? filtered.length) / 10));
+      if (state.profilePage >= pages) { state.profilePage = pages - 1; return showOrders(); }
+      $("profile-pagination").hidden = pages <= 1;
+      $("profile-prev").disabled = state.profilePage === 0; $("profile-next").disabled = state.profilePage >= pages - 1;
+      $("profile-page").textContent = `${state.profilePage + 1} / ${pages}`;
+      if (!filtered.length) { $("orders-content").textContent = "В этой категории заявок пока нет."; return; }
+      for (const order of filtered) {
         const card = document.createElement("article"); card.className = "order-card";
         card.innerHTML = `<div class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? "<p>Ожидает решения оператора без ограничения по времени.</p>" : ""}`;
         if (order.status === "pending") appendPendingContactEditor(card, order);
@@ -538,7 +551,7 @@
         }
         $("orders-content").append(card);
       }
-    } catch (error) { $("orders-content").textContent = "Не удалось загрузить заявки. Попробуйте открыть раздел ещё раз."; showError(error.message); }
+    } catch (error) { if (sequence === profileLoadSequence && state.view === "orders") { $("orders-content").textContent = "Не удалось загрузить заявки. Попробуйте открыть раздел ещё раз."; showError(error.message); } }
   }
 
   function renderUniversityOptions() {
@@ -785,7 +798,9 @@
     const focused = previousCard?.contains(document.activeElement) ? document.activeElement.textContent : null;
     if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
     closeDocumentViewer();
-    clearError(); state.view = "admin"; state.adminMode = mode; render();
+    clearError(); state.view = "admin"; state.adminMode = mode; state.operatorClientMode = false;
+    if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
+    render();
     document.querySelectorAll(".admin-mode").forEach((button) => { button.className = `button ${button.dataset.mode === mode ? "secondary" : "ghost"} admin-mode`; });
     const content = $("admin-content");
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
@@ -1470,13 +1485,62 @@
   $("main-button").addEventListener("click", next);
   $("retry-items").addEventListener("click", loadItems);
   $("back-button").addEventListener("click", back);
-  $("tab-new").addEventListener("click", () => {
-    clearError(); state.view = "flow";
+  const onboardingSlides = [
+    ["Выбор дат", "Выберите даты и время получения и возврата оборудования."],
+    ["Каталог и подборка", "Посмотрите доступное оборудование и выберите количество."],
+    ["Оформление заявки", "Укажите контакт, проверьте подборку и отправьте заявку."],
+    ["Мои заявки и поддержка", "Следите за заявками в профиле и обращайтесь к оператору в чате бота."],
+  ];
+  let onboardingIndex = 0, onboardingReturnFocus = null;
+  function drawOnboarding() {
+    const [title, copy] = onboardingSlides[onboardingIndex];
+    $("onboarding-title").textContent = title; $("onboarding-copy").textContent = copy;
+    $("onboarding-progress").textContent = `${onboardingIndex + 1} / ${onboardingSlides.length}`;
+    $("onboarding-next").textContent = onboardingIndex === onboardingSlides.length - 1 ? "Готово" : "Далее";
+  }
+  function openOnboarding() {
+    onboardingReturnFocus = document.activeElement; onboardingIndex = 0; drawOnboarding();
+    $("onboarding-dialog").hidden = false; render(); $("onboarding-next").focus();
+  }
+  async function finishOnboarding() {
+    $("onboarding-dialog").hidden = true; render();
+    if (onboardingReturnFocus?.isConnected) onboardingReturnFocus.focus({ preventScroll: true });
+    if (authorized) { try { await api("/api/miniapp/onboarding/complete", { method: "POST" }); } catch (_) { showError("Не удалось сохранить отметку о просмотре инструкции."); } }
+  }
+  async function maybeShowOnboarding() {
+    if (state.onboardingPending && state.view === "flow") { state.onboardingPending = false; openOnboarding(); return; }
+    if (!authorized || !state.profile || state.profile.onboarding_seen || state.onboardingLoading) return;
+    state.onboardingLoading = true;
+    try {
+      const result = await api("/api/miniapp/onboarding/show", { method: "POST" });
+      state.profile.onboarding_seen = true;
+      if (result.first_show) { if (state.view === "flow") openOnboarding(); else state.onboardingPending = true; }
+    } catch (_) { showError("Не удалось загрузить инструкцию. Её можно открыть в профиле."); }
+    finally { state.onboardingLoading = false; }
+  }
+  function enterClientMode() {
+    clearError();
+    if (state.role?.admin && state.view === "admin") {
+      state.operatorClientMode = true;
+      api("/api/miniapp/operator/client-mode", { method: "POST" }).catch(() => showError("Не удалось записать переход в режим бронирования."));
+    }
+    state.view = "flow";
     if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; }
     syncDateFields("start"); syncDateFields("end");
     rangeCalendar.setRange($("start-date").value, $("end-date").value); applyBookingDateLimits(); render();
-  });
+    void maybeShowOnboarding();
+  }
+  $("tab-new").addEventListener("click", enterClientMode);
+  $("operator-book").addEventListener("click", enterClientMode);
+  $("return-to-management").addEventListener("click", () => showAdmin(state.adminMode));
+  $("onboarding-reopen").addEventListener("click", openOnboarding);
+  $("onboarding-skip").addEventListener("click", finishOnboarding);
+  $("onboarding-next").addEventListener("click", () => { if (onboardingIndex + 1 === onboardingSlides.length) void finishOnboarding(); else { onboardingIndex++; drawOnboarding(); } });
+  $("onboarding-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("onboarding-dialog")); if (event.key === "Escape") void finishOnboarding(); });
   $("tab-orders").addEventListener("click", showOrders);
+  $("profile-filter").addEventListener("change", (event) => { state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
+  $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
+  $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
   $("identity-close").addEventListener("click", () => { $("identity-form").reset(); state.consent = null; state.identityBookingId = null; showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
@@ -1542,7 +1606,20 @@
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
   else if (hasDraft && restoredPeriod) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
   if (nativeButtons) { tg.MainButton.onClick(next); tg.BackButton?.onClick(back); tg.expand?.(); }
-  if (authorized) api("/api/miniapp/me").then((role) => { state.role = role; $("tab-admin").hidden = !role.admin; if (role.admin) { $("tab-new").textContent = "Как клиент"; return showAdmin("orders"); } }).catch(() => {});
+  if (authorized) {
+    Promise.all([api("/api/miniapp/me"), api("/api/miniapp/profile").catch(() => null)]).then(([role, profileState]) => {
+      state.role = role; state.profile = profileState; $("tab-admin").hidden = !role.admin;
+      const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
+      if (["my_bookings", "orders"].includes(startParam)) return showOrders();
+      if ((profileState?.start_screen || (role.admin ? "management" : "booking")) === "management" && role.admin) {
+        let mode = "orders"; try { mode = localStorage.getItem(`polyrental-admin-tab:${role.id}`) || "orders"; } catch (_) {}
+        if (!["orders", "catalog", "repairs"].includes(mode)) mode = "orders";
+        return showAdmin(mode);
+      }
+      void maybeShowOnboarding();
+    }).catch(() => showError("Не удалось определить права. Откройте приложение через Telegram ещё раз."))
+      .finally(() => document.documentElement.classList.remove("role-pending"));
+  }
   tg?.onEvent?.("activated", () => { if (state.view === "orders") showOrders(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "orders") showOrders(); });
   const applyTheme = () => { document.documentElement.dataset.theme = tg?.colorScheme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); };

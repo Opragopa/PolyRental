@@ -31,6 +31,7 @@ from sqlalchemy import select
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .catalog_titles import catalog_title
+from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode
 from .booking_messages import booking_status_text
 from .notification_outbox import notify
 from . import __version__
@@ -45,7 +46,7 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identit
 from .rental import (Conflict, assign_booking_assets, availability, booking_history,
                      claim_booking_operation, create_booking, operation_lease_states,
                      close_repair, delete_booking, delete_dependency, delete_equipment, get_booking,
-                     list_articles, list_bookings, list_customer_bookings,
+                     list_articles, list_bookings, list_customer_bookings, customer_history_page,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, release_booking_operation, save_article, save_dependency, save_equipment,
                      transition, update_booking_contact)
@@ -326,10 +327,42 @@ async def current_role(user=Depends(require_customer)):
     return role
 
 
+@router.get("/api/miniapp/profile")
+async def client_profile(user=Depends(require_customer)):
+    state = await asyncio.to_thread(profile_state, user["id"])
+    role = role_for(user["id"])
+    return {**state, "display_name": operator_name(user),
+            "start_screen": "management" if role["admin"] else "booking"}
+
+
+@router.post("/api/miniapp/onboarding/show")
+async def show_onboarding(user=Depends(require_customer)):
+    return {"first_show": await asyncio.to_thread(mark_onboarding_shown, user["id"])}
+
+
+@router.post("/api/miniapp/onboarding/complete")
+async def finish_onboarding(user=Depends(require_customer)):
+    await asyncio.to_thread(complete_onboarding, user["id"])
+    return {"status": "ok"}
+
+
+@router.post("/api/miniapp/operator/client-mode")
+async def operator_client_mode(user=Depends(require_admin)):
+    await asyncio.to_thread(record_client_mode, user["id"])
+    return {"status": "ok"}
+
+
 @router.get("/api/miniapp/bookings")
 async def customer_bookings(user=Depends(require_customer)):
     bookings = await asyncio.to_thread(list_customer_bookings, user["id"])
     return {"items": [booking_view(booking) for booking in bookings]}
+
+
+@router.get("/api/miniapp/profile/history")
+async def client_history(category: str = Query(default="active", pattern="^(active|completed|cancelled)$"),
+                         page: int = Query(default=0, ge=0, le=100000), user=Depends(require_customer)):
+    bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page)
+    return {"items": [booking_view(booking) for booking in bookings], "total": total, "page": page, "page_size": 10}
 
 
 @router.patch("/api/miniapp/bookings/{booking_id}/contact")
