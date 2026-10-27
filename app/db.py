@@ -110,6 +110,7 @@ class ClientProfile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     onboarding_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminders_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
 
 
 class ClientActivity(Base):
@@ -372,6 +373,8 @@ def init_db():
                     connection.execute(text(f"ALTER TABLE articles ADD COLUMN {name} VARCHAR({size}) NOT NULL DEFAULT ''"))
             if "composition" not in columns:
                 connection.execute(text("ALTER TABLE articles ADD COLUMN composition TEXT NOT NULL DEFAULT ''"))
+        if "client_profiles" in tables and "reminders_enabled" not in _columns(connection, "client_profiles"):
+            connection.execute(text("ALTER TABLE client_profiles ADD COLUMN reminders_enabled BOOLEAN NOT NULL DEFAULT true"))
         if "inspections" in tables:
             columns = _columns(connection, "inspections")
             additions = {"encrypted_photo": "BYTEA", "photo_nonce": "BYTEA", "photo_sha256": "VARCHAR(64)"}

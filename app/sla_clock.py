@@ -1,12 +1,25 @@
 """Business-time arithmetic for the v0.4 SLA calendar.
 
 This calendar is deliberately separate from the issue/return schedule: SLA
-holidays start empty and are supplied explicitly by the caller.
+holidays start empty and can be configured independently.
 """
-from datetime import datetime, time, timedelta
+import os
+import re
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def configured_holidays():
+    """Read comma-separated ISO dates; an empty setting means no holidays."""
+    values = [value.strip() for value in os.getenv("SLA_HOLIDAYS", "").split(",") if value.strip()]
+    try:
+        if any(not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) for value in values):
+            raise ValueError("invalid date format")
+        return frozenset(date.fromisoformat(value) for value in values)
+    except ValueError as exc:
+        raise ValueError("SLA_HOLIDAYS: ожидаются даты YYYY-MM-DD через запятую") from exc
 
 
 def _local(value):
@@ -23,14 +36,14 @@ def _window(day, holidays):
     return (datetime.combine(day, start, MOSCOW), datetime.combine(day, end, MOSCOW))
 
 
-def add_business_time(start, duration, holidays=()):
+def add_business_time(start, duration, holidays=None):
     """Return the Moscow deadline after a non-negative business duration."""
     current = _local(start)
     if duration < timedelta(0):
         raise ValueError("duration must be non-negative")
     if duration == timedelta(0):
         return current
-    holidays = frozenset(holidays)
+    holidays = configured_holidays() if holidays is None else frozenset(holidays)
     while True:
         window = _window(current.date(), holidays)
         if window:
@@ -45,12 +58,12 @@ def add_business_time(start, duration, holidays=()):
         current = datetime.combine(next_day, time.min, MOSCOW)
 
 
-def business_time_between(start, end, holidays=()):
+def business_time_between(start, end, holidays=None):
     """Measure elapsed business time between two aware timestamps."""
     start, end = _local(start), _local(end)
     if end < start:
         raise ValueError("end must not precede start")
-    holidays = frozenset(holidays)
+    holidays = configured_holidays() if holidays is None else frozenset(holidays)
     total = timedelta(0)
     day = start.date()
     while day <= end.date():

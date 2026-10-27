@@ -15,13 +15,14 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     for (const admin of [false, true]) {
       const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
-      let seen = false, completed = 0, switches = 0;
+      let seen = false, completed = 0, switches = 0, reminders = true;
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.hostname === 'telegram.org') return route.fulfill({contentType:'text/javascript', body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
         if (url.pathname.startsWith('/miniapp/static/')) { const file = path.join(assets, path.basename(url.pathname)); return route.fulfill({body: fs.readFileSync(file), contentType: file.endsWith('.css') ? 'text/css' : 'text/javascript'}); }
         if (url.pathname === '/api/miniapp/me') return route.fulfill({json:{id:admin ? 100 : 42, admin, pii_admin:false}});
-        if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA', member_since:'2026-01-01T00:00:00Z', onboarding_seen:seen, start_screen:admin ? 'management' : 'booking'}});
+        if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA', member_since:'2026-01-01T00:00:00Z', onboarding_seen:seen, reminders_enabled:reminders, start_screen:admin ? 'management' : 'booking'}});
+        if (url.pathname === '/api/miniapp/profile/reminders') { reminders = route.request().postDataJSON().enabled; return route.fulfill({json:{enabled:reminders}}); }
         if (url.pathname === '/api/miniapp/onboarding/show') { const first = !seen; seen = true; return route.fulfill({json:{first_show:first}}); }
         if (url.pathname === '/api/miniapp/onboarding/complete') { completed++; return route.fulfill({json:{status:'ok'}}); }
         if (url.pathname === '/api/miniapp/operator/client-mode') { switches++; return route.fulfill({json:{status:'ok'}}); }
@@ -50,6 +51,8 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
         assert.equal(switches, 1);
       }
       await page.locator('#tab-orders').click();
+      await page.locator('#reminders-enabled').uncheck();
+      assert.equal(reminders, false);
       await page.getByRole('button',{name:'Как пользоваться'}).click();
       assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
       await dialog.getByRole('button',{name:'Пропустить'}).click();

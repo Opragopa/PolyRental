@@ -30,6 +30,17 @@ def test_sla_rejects_naive_and_negative_inputs():
         add_business_time(local(2026, 1, 1, 9), -timedelta(seconds=1))
 
 
+def test_sla_holidays_are_configured_independently(monkeypatch):
+    monkeypatch.setenv("SLA_HOLIDAYS", "2026-11-02, 2026-11-03")
+    start = local(2026, 10, 30, 16, 30)
+    assert add_business_time(start, timedelta(hours=2)) == local(2026, 11, 4, 10)
+    assert business_time_between(start, local(2026, 11, 4, 10)) == timedelta(hours=2)
+    assert add_business_time(start, timedelta(hours=2), ()) == local(2026, 11, 2, 10)
+    monkeypatch.setenv("SLA_HOLIDAYS", "20261102")
+    with pytest.raises(ValueError, match="SLA_HOLIDAYS"):
+        add_business_time(start, timedelta(hours=1))
+
+
 @pytest.mark.parametrize("seq", [1, 9999, 10000, 100000])
 def test_number_round_trip_and_overflow(seq):
     number = format_request_number(2026, seq)

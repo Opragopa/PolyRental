@@ -10,7 +10,14 @@ def profile_state(user_id):
         contact = session.scalar(select(Booking.customer_contact).where(Booking.customer_id == user_id)
                                  .order_by(Booking.created_at.desc(), Booking.id.desc()).limit(1))
         return {"member_since": profile.created_at.isoformat(), "onboarding_seen": profile.onboarding_shown_at is not None,
-                "contact": contact or ""}
+                "contact": contact or "", "reminders_enabled": profile.reminders_enabled}
+
+
+def set_reminders_enabled(user_id, enabled):
+    with Session.begin() as session:
+        session.execute(text("INSERT INTO client_profiles (telegram_id, created_at) VALUES (:id, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT DO NOTHING"), {"id": user_id})
+        profile = session.get(ClientProfile, user_id, with_for_update=True)
+        profile.reminders_enabled = enabled
 
 
 def mark_onboarding_shown(user_id):

@@ -46,6 +46,19 @@ def test_profile_entry_permissions_and_independent_onboarding(monkeypatch):
             assert sorted(actions) == ["onboarding_completed", "onboarding_first_shown", "operator_client_mode"]
 
 
+def test_reminder_preference_is_private_and_strict(monkeypatch):
+    configure(monkeypatch)
+    with TestClient(app) as client:
+        url = "/api/miniapp/profile/reminders"
+        assert client.put(url, json={"enabled": False}).status_code == 401
+        assert client.put(url, headers=headers(42), json={"enabled": "false"}).status_code == 422
+        for _ in range(2):
+            assert client.put(url, headers=headers(42), json={"enabled": False}).json() == {"enabled": False}
+        assert client.get("/api/miniapp/profile", headers=headers(42)).json()["reminders_enabled"] is False
+        assert client.get("/api/miniapp/profile", headers=headers(43)).json()["reminders_enabled"] is True
+        assert client.put(url, headers=headers(42), json={"enabled": True, "id": 43}).status_code == 422
+
+
 def test_profile_history_is_paginated_filtered_and_customer_scoped(monkeypatch):
     configure(monkeypatch)
     with Session.begin() as session:

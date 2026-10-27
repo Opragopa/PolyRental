@@ -31,7 +31,7 @@ from sqlalchemy import select
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .catalog_titles import catalog_title
-from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode
+from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode, set_reminders_enabled
 from .booking_messages import booking_status_text
 from .notification_outbox import notify
 from . import __version__
@@ -333,6 +333,17 @@ async def client_profile(user=Depends(require_customer)):
     role = role_for(user["id"])
     return {**state, "display_name": operator_name(user),
             "start_screen": "management" if role["admin"] else "booking"}
+
+
+class ReminderPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = Field(strict=True)
+
+
+@router.put("/api/miniapp/profile/reminders")
+async def update_reminder_preference(payload: ReminderPreference, user=Depends(require_customer)):
+    await asyncio.to_thread(set_reminders_enabled, user["id"], payload.enabled)
+    return {"enabled": payload.enabled}
 
 
 @router.post("/api/miniapp/onboarding/show")

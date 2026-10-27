@@ -512,6 +512,8 @@
     clearError(); state.view = "orders"; render();
     $("profile-name").textContent = state.profile?.display_name || "Профиль Telegram";
     $("profile-contact").textContent = state.profile?.contact || "";
+    $("reminders-enabled").checked = state.profile?.reminders_enabled !== false;
+    $("reminders-enabled").disabled = !authorized || !state.profile || typeof state.profile.reminders_enabled !== "boolean";
     $("profile-since").textContent = state.profile?.member_since ? `С нами с ${new Date(state.profile.member_since).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" })}` : "";
     $("orders-content").textContent = "Загружаем заявки…";
     if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
@@ -1534,6 +1536,13 @@
   $("operator-book").addEventListener("click", enterClientMode);
   $("return-to-management").addEventListener("click", () => showAdmin(state.adminMode));
   $("onboarding-reopen").addEventListener("click", openOnboarding);
+  $("reminders-enabled").addEventListener("change", async (event) => {
+    const checkbox = event.target, previous = state.profile.reminders_enabled;
+    checkbox.disabled = true;
+    try { const result = await api("/api/miniapp/profile/reminders", { method: "PUT", body: JSON.stringify({ enabled: checkbox.checked }) }); state.profile.reminders_enabled = result.enabled; checkbox.checked = result.enabled; }
+    catch (error) { checkbox.checked = previous; showError(`Не удалось сохранить настройку: ${error.message}`); }
+    finally { checkbox.disabled = false; }
+  });
   $("onboarding-skip").addEventListener("click", finishOnboarding);
   $("onboarding-next").addEventListener("click", () => { if (onboardingIndex + 1 === onboardingSlides.length) void finishOnboarding(); else { onboardingIndex++; drawOnboarding(); } });
   $("onboarding-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("onboarding-dialog")); if (event.key === "Escape") void finishOnboarding(); });
