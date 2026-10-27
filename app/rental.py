@@ -1,6 +1,7 @@
 """Article-based rental, preparation, inspection and return workflows."""
 
 from collections import defaultdict
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urlparse
@@ -11,11 +12,12 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingDocument,
+from .db import (Article, ArticleTitleAudit, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingDocument,
                  BookingOperationLease,
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
                  PrivacyConsent, RepairTicket, Session)
+from .catalog_titles import catalog_title
 from .request_numbers import format_request_number, parse_request_number
 
 
@@ -226,6 +228,8 @@ def availability(start, end):
             available_count = max(0, capacity - reserved)
             result.append({
                 "id": article.id, "sku": article.sku, "name": article.name,
+                "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+                "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
                 "description": article.description, "image_url": article.image_url,
                 "category": article.category,
                 "buffer_hours": article.buffer_hours, "capacity": capacity,
@@ -694,7 +698,8 @@ def delete_dependency(parent_article_id, child_article_id):
 
 
 def save_article(sku, name, description, rate, category="generic", profile="generic",
-                 buffer_hours=24, image_url="", article_id=None, active=True, composition=""):
+                 buffer_hours=24, image_url="", article_id=None, active=True, composition="",
+                 kind=None, brand=None, key_spec=None, actor_id=None):
     rate = validated_rate(rate)
     if not sku.strip() or not name.strip():
         raise ValueError("Укажите артикул и название модели")
@@ -708,13 +713,22 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
         article = session.get(Article, article_id) if article_id else Article()
         if article is None:
             raise ValueError("Артикул не найден")
+        before = {key: getattr(article, key, "") or "" for key in ("category", "kind", "brand", "key_spec", "name")}
         article.sku, article.name = sku.strip(), name.strip()
+        for field, value, limit in (("kind", kind, 80), ("brand", brand, 100), ("key_spec", key_spec, 120)):
+            if value is not None:
+                setattr(article, field, value.strip()[:limit])
         article.description, article.hourly_rate = description.strip(), Decimal(str(rate))
         article.composition = (composition or "").strip()[:4000]
         article.category, article.inspection_profile = category, profile
         article.buffer_hours, article.image_url, article.is_active = int(buffer_hours), image_url.strip(), bool(active)
         session.add(article)
         session.flush()
+        after = {key: getattr(article, key, "") or "" for key in before}
+        if actor_id is not None and before != after:
+            session.add(ArticleTitleAudit(article_id=article.id, actor_id=actor_id,
+                                          before=json.dumps(before, ensure_ascii=False),
+                                          after=json.dumps(after, ensure_ascii=False)))
         return article.id
 
 

@@ -30,6 +30,7 @@ from sqlalchemy import select
 
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
+from .catalog_titles import catalog_title
 from .booking_messages import booking_status_text
 from .notification_outbox import notify
 from . import __version__
@@ -146,7 +147,8 @@ def booking_view(booking):
         "customer_name": booking.customer_name,
         "customer_contact": booking.customer_contact,
         "identity_status": booking.identity_status,
-        "items": [{"id": line.article_id, "name": line.article.name, "quantity": line.quantity,
+        "items": [{"id": line.article_id, "name": line.article.name,
+                   "title": catalog_title(line.article.name, line.article.kind, line.article.brand, line.article.key_spec), "quantity": line.quantity,
                    "auto_added": line.auto_added}
                   for line in booking.lines],
     }
@@ -290,6 +292,7 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
     available = [item for item in items if item["available"]]
     return {
         "items": available,
+        "all_items": available + [item for item in items if not item["available"]],
         "unavailable_count": len(items) - len(available),
         "unavailable": [{"name": item["name"], "sku": item["sku"], "available_quantity": 0}
                         for item in items if not item["available"]],
@@ -602,6 +605,8 @@ async def admin_catalog(user=Depends(require_admin)):
     articles = await asyncio.to_thread(list_articles)
     dependencies = await asyncio.to_thread(list_dependencies)
     return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
+                           "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+                           "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
                            "category": article.category,
                            "description": article.description,
                            "composition": article.composition or "",
@@ -638,6 +643,9 @@ class ArticleRequest(BaseModel):
     id: int | None = None
     sku: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
+    kind: str | None = Field(default=None, max_length=80)
+    brand: str | None = Field(default=None, max_length=100)
+    key_spec: str | None = Field(default=None, max_length=120)
     description: str = Field(default="", max_length=4000)
     composition: str = Field(default="", max_length=4000)
     rate: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
@@ -654,7 +662,8 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
         article_id = await asyncio.to_thread(
             save_article, payload.sku, payload.name, payload.description, Decimal("0"),
             payload.category, payload.inspection_profile, payload.buffer_hours,
-            payload.image_url, payload.id, payload.active, payload.composition)
+            payload.image_url, payload.id, payload.active, payload.composition,
+            payload.kind, payload.brand, payload.key_spec, user["id"])
         return {"id": article_id}
     except IntegrityError as exc:
         raise HTTPException(422, "Артикул с таким SKU уже существует") from exc

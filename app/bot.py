@@ -78,7 +78,7 @@ def format_items(items):
     lines = []
     for item in items:
         status = f'свободно: {item["available_quantity"]}' if item["available"] else "недоступно"
-        lines.append(f'{item["id"]}: {item["name"]} ({item["sku"]}) — {status}')
+        lines.append(f'{item["id"]}: {item.get("title") or item["name"]} ({item["sku"]}) — {status}')
     return "\n".join(lines) or "Оборудование пока не добавлено"
 
 
@@ -105,7 +105,7 @@ def flow_keyboard(contact=False):
 
 
 def equipment_keyboard(items, selected):
-    buttons = [[InlineKeyboardButton(text=f'{"✓ " if item["id"] in selected else ""}{item["name"]}', callback_data=f'rent:toggle:{item["id"]}')] for item in items]
+    buttons = [[InlineKeyboardButton(text=f'{"✓ " if item["id"] in selected else ""}{item.get("title") or item["name"]}', callback_data=f'rent:toggle:{item["id"]}')] for item in items]
     buttons.append([InlineKeyboardButton(text="Продолжить →", callback_data="rent:next")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

@@ -21,6 +21,9 @@ class Article(Base):
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     composition: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    brand: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    key_spec: Mapped[str] = mapped_column(String(120), default="", server_default="")
     category: Mapped[str] = mapped_column(String(40), default="generic")
     inspection_profile: Mapped[str] = mapped_column(String(30), default="generic")
     image_url: Mapped[str] = mapped_column(String(500), default="")
@@ -28,6 +31,16 @@ class Article(Base):
     buffer_hours: Mapped[int] = mapped_column(Integer, default=24)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     equipment: Mapped[list["Equipment"]] = relationship(back_populates="article")
+
+
+class ArticleTitleAudit(Base):
+    __tablename__ = "article_title_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("articles.id", ondelete="SET NULL"), nullable=True, index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    before: Mapped[str] = mapped_column(Text)
+    after: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class ArticleDependency(Base):
@@ -338,6 +351,9 @@ def init_db():
                     connection.execute(text(f"ALTER TABLE equipment ADD COLUMN {name} {ddl}"))
         if "articles" in tables:
             columns = _columns(connection, "articles")
+            for name, size in (("kind", 80), ("brand", 100), ("key_spec", 120)):
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE articles ADD COLUMN {name} VARCHAR({size}) NOT NULL DEFAULT ''"))
             if "composition" not in columns:
                 connection.execute(text("ALTER TABLE articles ADD COLUMN composition TEXT NOT NULL DEFAULT ''"))
         if "inspections" in tables:
