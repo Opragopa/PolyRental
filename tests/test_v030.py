@@ -19,7 +19,7 @@ from app.db import IdentityDocument, Session
 from app.document_check import LocalDocumentChecker, Verdict, check_documents
 from app.miniapp_server import app
 from app.roles import configured_ids, role_for, validate_role_config
-from app.rental import availability, create_booking, now, save_equipment
+from app.rental import availability, create_booking, get_booking, now, save_equipment
 from tests.test_miniapp import configure, create_confirmed, image_bytes, signed_init_data
 
 
@@ -77,8 +77,8 @@ def test_bot_launches_authenticated_inline_app(monkeypatch, user_id, staff):
     message = SimpleNamespace(from_user=SimpleNamespace(id=user_id), answer=AsyncMock())
     asyncio.run(bot.book(message, AsyncMock()))
     button = message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.web_app.url == "https://example.test/miniapp"
-    assert ("управление" in button.text) == staff
+    assert button.web_app.url == "https://example.test/miniapp?startapp=booking"
+    assert button.text == "Открыть каталог"
     assert bot.main_keyboard().keyboard[0][0].web_app is None
 
 
@@ -100,8 +100,8 @@ def test_customer_isolation_and_bot_api_sync(monkeypatch):
             assert {row["id"] for row in rows} >= {first, second}
         message = SimpleNamespace(from_user=SimpleNamespace(id=42), answer=AsyncMock())
         asyncio.run(bot.my_bookings(message))
-        assert f"№{first}" in message.answer.call_args.args[0]
-        assert f"№{second}" not in message.answer.call_args.args[0]
+        assert get_booking(first).human_number in message.answer.call_args.args[0]
+        assert get_booking(second).human_number not in message.answer.call_args.args[0]
         third_start = start + timedelta(days=6)
         payload = {"request_id": str(uuid4()), "start": third_start.isoformat(), "end": (third_start + timedelta(hours=1)).isoformat(),
                    "lines": [{"article_id": article, "quantity": 1}], "name": "Клиент", "contact": "@sync1"}
@@ -109,7 +109,7 @@ def test_customer_isolation_and_bot_api_sync(monkeypatch):
         assert created.status_code == 201
         assert client.post("/api/miniapp/bookings", headers=customer, json=payload).json()["id"] == created.json()["id"]
         asyncio.run(bot.my_bookings(message))
-        assert f'№{created.json()["id"]}' in message.answer.call_args.args[0]
+        assert created.json()["human_number"] in message.answer.call_args.args[0]
 
 
 def noisy_image():

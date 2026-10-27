@@ -21,13 +21,27 @@ class Article(Base):
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     composition: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    brand: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    key_spec: Mapped[str] = mapped_column(String(120), default="", server_default="")
     category: Mapped[str] = mapped_column(String(40), default="generic")
     inspection_profile: Mapped[str] = mapped_column(String(30), default="generic")
     image_url: Mapped[str] = mapped_column(String(500), default="")
     hourly_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     buffer_hours: Mapped[int] = mapped_column(Integer, default=24)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     equipment: Mapped[list["Equipment"]] = relationship(back_populates="article")
+
+
+class ArticleTitleAudit(Base):
+    __tablename__ = "article_title_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("articles.id", ondelete="SET NULL"), nullable=True, index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    before: Mapped[str] = mapped_column(Text)
+    after: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class ArticleDependency(Base):
@@ -66,6 +80,14 @@ class Booking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[int] = mapped_column(BigInteger)
     client_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    human_number: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deletion_level: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    assignee_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_contact: Mapped[str] = mapped_column(String(200))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -79,9 +101,118 @@ class Booking(Base):
     receipt_number: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     items: Mapped[list["BookingItem"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
-    lines: Mapped[list["BookingLine"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
-    assets: Mapped[list["BookingAsset"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    lines: Mapped[list["BookingLine"]] = relationship(back_populates="booking", cascade="all, delete-orphan",
+                                                       primaryjoin="and_(Booking.id == BookingLine.booking_id, BookingLine.deleted_at.is_(None))")
+    assets: Mapped[list["BookingAsset"]] = relationship(back_populates="booking", cascade="all, delete-orphan",
+                                                       primaryjoin="and_(Booking.id == BookingAsset.booking_id, BookingAsset.deleted_at.is_(None))")
     inspections: Mapped[list["Inspection"]] = relationship(cascade="all, delete-orphan")
+
+
+class RequestNumberCounter(Base):
+    __tablename__ = "request_number_counters"
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ClientProfile(Base):
+    __tablename__ = "client_profiles"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    onboarding_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminders_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    client_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+
+
+class ClientActivity(Base):
+    __tablename__ = "client_activity"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    actor_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    action: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BookingCart(Base):
+    __tablename__ = "booking_carts"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    starts_at: Mapped[str] = mapped_column(String(16), nullable=False, server_default="")
+    ends_at: Mapped[str] = mapped_column(String(16), nullable=False, server_default="")
+    lines: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class SupportThread(Base):
+    __tablename__ = "support_threads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True)
+    request_number: Mapped[str] = mapped_column(String(32), nullable=False, server_default="")
+    screen: Mapped[str] = mapped_column(String(40), nullable=False)
+    owner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="new")
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("customer_id", "request_number", name="support_customer_request_unique"),)
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey("support_threads.id", ondelete="CASCADE"), index=True)
+    sender_id: Mapped[int] = mapped_column(BigInteger)
+    direction: Mapped[str] = mapped_column(String(12))
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class SupportActivity(Base):
+    __tablename__ = "support_activity"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey("support_threads.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    action: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class SlaEscalation(Base):
+    __tablename__ = "sla_escalations"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    tier: Mapped[str] = mapped_column(String(32), primary_key=True)
+    cycle: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class OperatorNotificationPreference(Base):
+    __tablename__ = "operator_notification_preferences"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    quiet_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    quiet_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
+
+
+class PurgeLog(Base):
+    __tablename__ = "purge_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deleted_booking_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class DeletionIntent(Base):
+    __tablename__ = "deletion_intents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    target_type: Mapped[str] = mapped_column(String(12))
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class BookingOperationLease(Base):
@@ -110,12 +241,14 @@ class BookingLine(Base):
     booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), index=True)
     quantity: Mapped[int] = mapped_column(Integer)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     billable_quantity: Mapped[int] = mapped_column(Integer, default=0)
     hourly_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     auto_added: Mapped[bool] = mapped_column(Boolean, default=False)
     booking: Mapped[Booking] = relationship(back_populates="lines")
     article: Mapped[Article] = relationship()
-    assets: Mapped[list["BookingAsset"]] = relationship(back_populates="line")
+    assets: Mapped[list["BookingAsset"]] = relationship(back_populates="line",
+                                                       primaryjoin="and_(BookingLine.id == BookingAsset.booking_line_id, BookingAsset.deleted_at.is_(None))")
     __table_args__ = (UniqueConstraint("booking_id", "article_id", name="booking_line_article_unique"),)
 
 
@@ -125,6 +258,8 @@ class BookingAsset(Base):
     equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id"), primary_key=True)
     booking_line_id: Mapped[int] = mapped_column(ForeignKey("booking_lines.id", ondelete="CASCADE"), index=True)
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    removed_billable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     booking: Mapped[Booking] = relationship(back_populates="assets")
     line: Mapped[BookingLine] = relationship(back_populates="assets")
     equipment: Mapped[Equipment] = relationship()
@@ -259,6 +394,7 @@ class NotificationDelivery(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
@@ -331,8 +467,19 @@ def init_db():
                     connection.execute(text(f"ALTER TABLE equipment ADD COLUMN {name} {ddl}"))
         if "articles" in tables:
             columns = _columns(connection, "articles")
+            if "is_test" not in columns:
+                connection.execute(text("ALTER TABLE articles ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT false"))
+            for name, size in (("kind", 80), ("brand", 100), ("key_spec", 120)):
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE articles ADD COLUMN {name} VARCHAR({size}) NOT NULL DEFAULT ''"))
             if "composition" not in columns:
                 connection.execute(text("ALTER TABLE articles ADD COLUMN composition TEXT NOT NULL DEFAULT ''"))
+        if "client_profiles" in tables and "reminders_enabled" not in _columns(connection, "client_profiles"):
+            connection.execute(text("ALTER TABLE client_profiles ADD COLUMN reminders_enabled BOOLEAN NOT NULL DEFAULT true"))
+        if "client_profiles" in tables and "client_blocked" not in _columns(connection, "client_profiles"):
+            connection.execute(text("ALTER TABLE client_profiles ADD COLUMN client_blocked BOOLEAN NOT NULL DEFAULT false"))
+        if "client_activity" in tables and "actor_id" not in _columns(connection, "client_activity"):
+            connection.execute(text("ALTER TABLE client_activity ADD COLUMN actor_id BIGINT"))
         if "inspections" in tables:
             columns = _columns(connection, "inspections")
             additions = {"encrypted_photo": "BYTEA", "photo_nonce": "BYTEA", "photo_sha256": "VARCHAR(64)"}
@@ -346,6 +493,11 @@ def init_db():
                 "identity_status": "VARCHAR(30) NOT NULL DEFAULT 'not_required'",
                 "act_signed_at": "TIMESTAMPTZ", "act_signed_by": "BIGINT",
                 "returned_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",
+                "human_number": "VARCHAR(32)",
+                "deleted_at": "TIMESTAMPTZ",
+                "assignee_id": "BIGINT", "claimed_at": "TIMESTAMPTZ", "sla_closed_at": "TIMESTAMPTZ",
+                "sla_cycle": "INTEGER NOT NULL DEFAULT 0",
+                "is_test": "BOOLEAN NOT NULL DEFAULT false", "deletion_level": "VARCHAR(2)",
             }
             for name, ddl in additions.items():
                 if name not in columns:
@@ -359,14 +511,30 @@ def init_db():
             for name in ("encrypted_check", "check_nonce"):
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE identity_documents ADD COLUMN {name} BYTEA"))
+        if "notification_deliveries" in tables and "cancelled_at" not in _columns(connection, "notification_deliveries"):
+            connection.execute(text("ALTER TABLE notification_deliveries ADD COLUMN cancelled_at TIMESTAMPTZ"))
+        if "support_threads" in tables and "resolved_at" not in _columns(connection, "support_threads"):
+            connection.execute(text("ALTER TABLE support_threads ADD COLUMN resolved_at TIMESTAMPTZ"))
+        if "deletion_intents" in tables and "expires_at" not in _columns(connection, "deletion_intents"):
+            connection.execute(text("ALTER TABLE deletion_intents ADD COLUMN expires_at TIMESTAMPTZ NOT NULL DEFAULT now()"))
         if "booking_lines" in tables:
             columns = _columns(connection, "booking_lines")
+            if "deleted_at" not in columns:
+                connection.execute(text("ALTER TABLE booking_lines ADD COLUMN deleted_at TIMESTAMPTZ"))
             if "billable_quantity" not in columns:
                 connection.execute(text("ALTER TABLE booking_lines ADD COLUMN billable_quantity INTEGER NOT NULL DEFAULT 0"))
                 connection.execute(text("UPDATE booking_lines SET billable_quantity = quantity WHERE billable_quantity = 0"))
+        if "booking_assets" in tables:
+            columns = _columns(connection, "booking_assets")
+            if "deleted_at" not in columns:
+                connection.execute(text("ALTER TABLE booking_assets ADD COLUMN deleted_at TIMESTAMPTZ"))
+            if "removed_billable" not in columns:
+                connection.execute(text("ALTER TABLE booking_assets ADD COLUMN removed_billable BOOLEAN NOT NULL DEFAULT false"))
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_customer_request_unique ON bookings (customer_id, client_request_id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_number_unique ON bookings (receipt_number)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_human_number_unique ON bookings (human_number)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS bookings_customer_created_idx ON bookings (customer_id, created_at DESC, id DESC)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS equipment_article_idx ON equipment (article_id)"))
     _legacy_backfill()

@@ -425,8 +425,10 @@ def delete_identity(booking_id, actor_id, reason="manual_delete"):
     with Session.begin() as session:
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         booking = session.get(Booking, booking_id)
+        from .support import purge_support_for_booking
+        support_deleted = purge_support_for_booking(session, booking_id, actor_id, "support_subject_purge")
         if not identity:
-            return False
+            return bool(support_deleted)
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id, action=reason))
         session.delete(identity)
         if booking:

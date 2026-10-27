@@ -92,7 +92,7 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
             f"{identity['student_id_number']}, {identity['student_institution']}"
         )
     context = {
-        "booking_id": booking.id,
+        "booking_id": booking.human_number or booking.id,
         "created_at": booking.created_at.astimezone(local).strftime("%d.%m.%Y"),
         "customer_name": booking.customer_name,
         "customer_contact": booking.customer_contact,
@@ -147,7 +147,7 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         context.update({
             "date": receipt_moment.strftime("%d.%m.%Y"),
             "time": receipt_moment.strftime("%H:%M"),
-            "receipt_number": receipt_number.removeprefix("ТС-"),
+            "receipt_number": booking.human_number or receipt_number.removeprefix("ТС-"),
             "issuer_name": os.getenv("OPERATOR_NAME", "сотрудником организации"),
             "identity_document": f"паспорт {identity_payload.get('passport_series', '')} {identity_payload.get('passport_number', '')}",
             "passport_issued_at": _russian_date(identity_payload.get("passport_issued_at", "")),
@@ -161,6 +161,11 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
             "quantity": "\n".join(str(len(assets)) for _, _, assets in item_rows),
         })
     template = DocxTemplate(template_path if kind == "receipt" else TEMPLATE_DIR / f"{kind}.docx")
+    if kind == "receipt" and booking.human_number:
+        # The bundled template predates human request numbers and adds its own prefix.
+        for paragraph in template.get_docx().paragraphs:
+            for run in paragraph.runs:
+                run.text = run.text.replace("ТС-{{ receipt_number }}", "{{ receipt_number }}")
     # Older default templates are upgraded in memory; user-edited files remain untouched.
     if kind != "receipt" and include_identity and not any("{{ identity" in paragraph.text for paragraph in template.get_docx().paragraphs):
         template.get_docx().add_paragraph("Паспортные данные: {{ identity }}")
@@ -172,7 +177,7 @@ def render_document(booking_id, kind, include_identity=False, actor_id=0):
         document = Document(io.BytesIO(body))
         document.add_page_break()
         document.add_heading("Приложение к сохранной расписке. Повреждения", level=1)
-        document.add_paragraph(f"Расписка № ТС-{receipt_number}")
+        document.add_paragraph(f"Расписка № {booking.human_number or receipt_number}")
         for serial, photo in damaged_photos:
             document.add_heading(f"Экземпляр {serial}", level=2)
             document.add_picture(io.BytesIO(photo), width=Mm(150))
@@ -201,7 +206,9 @@ def archived_document(booking_id, kind, actor_id, refresh=False):
             return body, saved.filename
 
     body = render_document(booking_id, kind, include_identity=True, actor_id=actor_id)
-    filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+    booking = get_booking(booking_id)
+    public_id = (booking.human_number or "request").replace("ТС", "TS")
+    filename = f"{'act' if kind == 'issue' else 'receipt'}-{public_id}.docx"
     nonce = os.urandom(12)
     aad = f"{booking_id}:{kind}:doc-v1".encode()
     encrypted = AESGCM(_master_key()).encrypt(nonce, body, aad)
@@ -233,7 +240,7 @@ def operator_document(booking_id, kind, actor_id):
         raise ValueError("Заявка не найдена")
     if booking.status in {"confirmed", "preparing"} or (booking.status == "ready" and not booking.act_signed_at):
         return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
-            f"{'act' if kind == 'issue' else kind}-{booking_id}.docx"
+            f"{'act' if kind == 'issue' else kind}-{(booking.human_number or 'request').replace('ТС', 'TS')}.docx"
     if kind == "receipt":
         with Session() as session:
             damaged_photo = session.scalar(select(Inspection.id).where(

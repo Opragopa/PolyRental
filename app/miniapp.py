@@ -20,7 +20,7 @@ import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, UploadFile)
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from aiogram.enums import ParseMode
 from icalendar import Calendar, Event
@@ -30,21 +30,30 @@ from sqlalchemy import select
 
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
+from .cart import CartConflict, get_cart, put_cart
+from .availability_events import subscribe as subscribe_availability, unsubscribe as unsubscribe_availability
+from .catalog_titles import catalog_title
+from .request_sla import request_sla
+from .support import (SupportConflict, submit_question, list_threads as list_support_threads,
+                      claim_thread, read_messages as read_support_messages, reply as support_reply,
+                      resolve_thread, reassign_thread, deliver_reply)
+from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode, set_reminders_enabled, set_client_block
 from .booking_messages import booking_status_text
-from .notification_outbox import notify
+from .notification_outbox import notify, notify_actionable
+from .operator_preferences import preferences as operator_preferences, save_preferences as save_operator_preferences
 from . import __version__
 from .roles import configured_ids, is_staff, role_for, audit_admin_access
-from .db import BookingDocument, Inspection, Session
+from .db import BookingDocument, Inspection, Session, SupportMessage, SupportThread
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
                   reusable_identity_fields,
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
-from .rental import (Conflict, assign_booking_assets, availability, booking_history,
+from .rental import (ClientBlocked, Conflict, assign_booking_assets, availability, booking_history,
                      claim_booking_operation, create_booking, operation_lease_states,
-                     close_repair, delete_booking, delete_dependency, delete_equipment, get_booking,
-                     list_articles, list_bookings, list_customer_bookings,
+                     close_repair, delete_booking, restore_booking, set_booking_line_deleted, set_booking_asset_deleted, create_deletion_intent, cancel_deletion_intent, schedule_legacy_deletion, deletion_undo_seconds, reassign_booking, hide_test_booking, purge_test_booking, set_booking_test_flag, set_article_test_flag, delete_dependency, delete_equipment, get_booking,
+                     list_articles, list_bookings, list_customer_bookings, list_hidden_test_bookings, customer_history_page,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, release_booking_operation, save_article, save_dependency, save_equipment,
                      transition, update_booking_contact)
@@ -124,6 +133,12 @@ def require_admin(user=Depends(require_customer)):
     return user
 
 
+def require_system_admin(user=Depends(require_customer)):
+    if user["id"] not in configured_ids("ADMIN_IDS"):
+        raise HTTPException(403, "Доступ только для администратора")
+    return user
+
+
 def operator_name(user):
     name = " ".join(filter(None, [user.get("first_name", ""), user.get("last_name", "")])).strip()
     return name or (f"@{user['username']}" if user.get("username") else f"оператор {user['id']}")
@@ -138,6 +153,8 @@ def require_pii_admin(user=Depends(require_customer)):
 def booking_view(booking):
     return {
         "id": booking.id,
+        "is_test": booking.is_test,
+        "human_number": booking.human_number,
         "status": booking.status,
         "starts_at": booking.starts_at.isoformat(),
         "ends_at": booking.ends_at.isoformat(),
@@ -145,7 +162,9 @@ def booking_view(booking):
         "customer_name": booking.customer_name,
         "customer_contact": booking.customer_contact,
         "identity_status": booking.identity_status,
-        "items": [{"id": line.article_id, "name": line.article.name, "quantity": line.quantity,
+        "estimated_until": request_sla(booking)["deadline"],
+        "items": [{"id": line.article_id, "name": line.article.name,
+                   "title": catalog_title(line.article.name, line.article.kind, line.article.brand, line.article.key_spec), "quantity": line.quantity,
                    "auto_added": line.auto_added}
                   for line in booking.lines],
     }
@@ -201,33 +220,29 @@ class BookingContactUpdate(BaseModel):
 
 
 async def notify_new_booking(booking_id: int, customer_id: int):
-    manager_message = (f"<b>Новая заявка №{booking_id}</b>\n"
-                       f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
-    await asyncio.gather(*(notify(booking_id, admin_id, "booking_created", manager_message)
-                           for admin_id in _ids("ADMIN_IDS")),
-                         notify(booking_id, customer_id, "booking_created_customer",
-                                f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены."))
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    number = booking.human_number or f"№{booking_id}"
+    await notify(booking_id, customer_id, "booking_created_customer",
+                 f"<b>Заявка {number} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.")
 
 
 async def notify_cancelled_booking(booking_id: int):
-    message = f"Клиент отменил заявку №{booking_id}."
-    await asyncio.gather(*(notify(booking_id, admin_id, "booking_cancelled", message)
-                           for admin_id in _ids("ADMIN_IDS")))
+    # Status changes are visible in the activity history, not operator pushes.
+    return None
 
 
 async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
-    await notify(booking_id, customer_id, f"booking_{status}",
-                 booking_status_text(booking_id, status, operator))
+    return None
 
 
 async def notify_identity_submitted(booking_id: int):
     """Tell operators that identity data was submitted or corrected; never include PII."""
-    recipient_ids = _ids("ADMIN_IDS") | pii_admin_ids()
-    if not recipient_ids:
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    if not booking or not booking.assignee_id:
         return
-    message = f"<b>Анкета обновлена · заявка №{booking_id}</b>\nПроверьте документы клиента в Mini App."
-    await asyncio.gather(*(notify(booking_id, recipient_id, "identity_submitted", message)
-                           for recipient_id in recipient_ids))
+    number = getattr(booking, "human_number", None) or f"№{booking_id}"
+    message = f"<b>Анкета обновлена · заявка {number}</b>\nПроверьте документы клиента в Mini App."
+    await notify_actionable(booking_id, booking.assignee_id, "identity_submitted", message)
 
 
 @router.get("/miniapp")
@@ -264,7 +279,7 @@ def _calendar_feed_response(token: str):
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
         equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
-        event.add("summary", f"Аренда №{booking.id} · {equipment or 'оборудование'}")
+        event.add("summary", f"Аренда {booking.human_number or 'заявка'} · {equipment or 'оборудование'}")
         event.add("description", f"Политех.АРЕНДА · {status_labels[booking.status]}")
         event.add("dtstart", booking.starts_at)
         event.add("dtend", booking.returned_at if booking.returned_at and booking.status in {"returned", "cancelled"} else booking.ends_at)
@@ -272,6 +287,24 @@ def _calendar_feed_response(token: str):
             event.add("status", "CANCELLED")
         calendar.add_component(event)
     return Response(calendar.to_ical(), media_type="text/calendar")
+
+
+@router.get("/api/miniapp/availability/events")
+async def availability_events(user=Depends(require_customer)):
+    async def stream():
+        queue = subscribe_availability()
+        try:
+            yield "data: changed\n\n"
+            while True:
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=20)
+                    yield "data: changed\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+        finally:
+            unsubscribe_availability(queue)
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-store", "X-Accel-Buffering":"no"})
 
 
 @router.get("/api/miniapp/availability")
@@ -283,6 +316,7 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
     available = [item for item in items if item["available"]]
     return {
         "items": available,
+        "all_items": available + [item for item in items if not item["available"]],
         "unavailable_count": len(items) - len(available),
         "unavailable": [{"name": item["name"], "sku": item["sku"], "available_quantity": 0}
                         for item in items if not item["available"]],
@@ -302,7 +336,11 @@ async def create_customer_booking(payload: BookingRequest, background_tasks: Bac
         raise HTTPException(422, str(exc)) from exc
     except Conflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    except ClientBlocked as exc:
+        raise HTTPException(403, str(exc)) from exc
     booking = await asyncio.to_thread(get_booking, booking_id)
+    if booking is None:
+        raise HTTPException(410, "Заявка с этим идентификатором удалена; создайте новую заявку")
     if created:
         background_tasks.add_task(notify_new_booking, booking_id, user["id"])
     return booking_view(booking)
@@ -316,10 +354,204 @@ async def current_role(user=Depends(require_customer)):
     return role
 
 
+class CartLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    article_id: int = Field(gt=0, strict=True)
+    quantity: int = Field(ge=1, le=30, strict=True)
+
+
+class CartUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: str = Field(default="", max_length=16, pattern=r"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})$")
+    end: str = Field(default="", max_length=16, pattern=r"^(?:|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})$")
+    lines: list[CartLine] = Field(default_factory=list, max_length=30)
+    version: int = Field(ge=0, strict=True)
+
+    @field_validator("start", "end")
+    @classmethod
+    def valid_cart_date(cls, value):
+        if value:
+            datetime.strptime(value, "%Y-%m-%dT%H:%M")
+        return value
+
+    @field_validator("lines")
+    @classmethod
+    def unique_cart_lines(cls, value):
+        if len({line.article_id for line in value}) != len(value):
+            raise ValueError("Позиции не должны повторяться")
+        return value
+
+
+@router.get("/api/miniapp/cart")
+async def customer_cart(user=Depends(require_customer)):
+    return await asyncio.to_thread(get_cart, user["id"])
+
+
+@router.put("/api/miniapp/cart")
+async def update_customer_cart(payload: CartUpdate, user=Depends(require_customer)):
+    try:
+        return await asyncio.to_thread(put_cart, user["id"], payload.start, payload.end,
+                                       [line.model_dump() for line in payload.lines], payload.version)
+    except CartConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class SupportQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=3000)
+    booking_id: int | None = Field(default=None, gt=0)
+    screen: str = Field(pattern="^(profile|booking|request|bot)$")
+
+
+class SupportReply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=3000)
+
+
+@router.get("/api/miniapp/support/faq")
+async def support_faq(user=Depends(require_customer)):
+    return {"items": json.loads((Path(__file__).parent / "assets" / "faq.json").read_text(encoding="utf-8"))}
+
+
+async def notify_support_owner(owner_id: int, thread_id: int, number: str):
+    await notify_actionable(None, owner_id, "support_action", f"Новое обращение №{thread_id}" + (f" · заявка {number}" if number else "") + ". Откройте поддержку в Mini App.")
+
+
+@router.post("/api/miniapp/support/questions")
+async def support_question(payload: SupportQuestion, tasks: BackgroundTasks, user=Depends(require_customer)):
+    try:
+        result = await asyncio.to_thread(submit_question, user["id"], payload.booking_id, payload.screen, payload.question)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if result["owner_id"]:
+        tasks.add_task(notify_support_owner, result["owner_id"], result["id"], result["request_number"])
+    return {"status": "Обращение получено", "id": result["id"]}
+
+
+@router.get("/api/miniapp/support/threads")
+async def customer_support_threads(user=Depends(require_customer)):
+    rows = await asyncio.to_thread(list_support_threads, customer_id=user["id"])
+    return {"items": [{"id": row["id"], "request_number": row["request_number"], "status": row["customer_state"]} for row in rows]}
+
+
+@router.get("/api/miniapp/admin/support")
+async def admin_support_threads(user=Depends(require_admin)):
+    return {"items": await asyncio.to_thread(list_support_threads)}
+
+
+@router.post("/api/miniapp/admin/support/{thread_id}/claim")
+async def admin_claim_support(thread_id: int, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(claim_thread, thread_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SupportConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "in_progress"}
+
+
+@router.get("/api/miniapp/admin/support/{thread_id}/messages")
+async def admin_support_messages(thread_id: int, user=Depends(require_pii_admin)):
+    try:
+        return await asyncio.to_thread(read_support_messages, thread_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SupportConflict as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.post("/api/miniapp/admin/support/{thread_id}/reply")
+async def admin_support_reply(thread_id: int, payload: SupportReply, tasks: BackgroundTasks, user=Depends(require_pii_admin)):
+    try:
+        message_id = await asyncio.to_thread(support_reply, thread_id, user["id"], payload.text)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except SupportConflict as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(503, str(exc)) from exc
+    tasks.add_task(deliver_reply, message_id)
+    return {"status": "queued"}
+
+
+@router.post("/api/miniapp/admin/support/{thread_id}/resolve")
+async def admin_resolve_support(thread_id: int, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(resolve_thread, thread_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SupportConflict as exc:
+        raise HTTPException(403, str(exc)) from exc
+    return {"status": "resolved"}
+
+
+class ClientBlockRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    blocked: bool = Field(strict=True)
+
+
+@router.put("/api/miniapp/admin/clients/{customer_id}/booking-block")
+async def admin_set_client_booking_block(customer_id: int, payload: ClientBlockRequest, user=Depends(require_system_admin)):
+    if customer_id <= 0:
+        raise HTTPException(422, "Неверный Telegram ID")
+    await asyncio.to_thread(set_client_block, customer_id, user["id"], payload.blocked)
+    return {"blocked": payload.blocked}
+
+
+@router.get("/api/miniapp/profile")
+async def client_profile(user=Depends(require_customer)):
+    state = await asyncio.to_thread(profile_state, user["id"])
+    role = role_for(user["id"])
+    return {**state, "display_name": operator_name(user), "system_admin": user["id"] in configured_ids("ADMIN_IDS"),
+            "start_screen": "management" if role["admin"] else ("booking" if state["client_allowed"] else "blocked")}
+
+
+class ReminderPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = Field(strict=True)
+
+
+@router.put("/api/miniapp/profile/reminders")
+async def update_reminder_preference(payload: ReminderPreference, user=Depends(require_customer)):
+    await asyncio.to_thread(set_reminders_enabled, user["id"], payload.enabled)
+    return {"enabled": payload.enabled}
+
+
+@router.post("/api/miniapp/onboarding/show")
+async def show_onboarding(user=Depends(require_customer)):
+    return {"first_show": await asyncio.to_thread(mark_onboarding_shown, user["id"])}
+
+
+@router.post("/api/miniapp/onboarding/complete")
+async def finish_onboarding(user=Depends(require_customer)):
+    await asyncio.to_thread(complete_onboarding, user["id"])
+    return {"status": "ok"}
+
+
+@router.post("/api/miniapp/operator/client-mode")
+async def operator_client_mode(user=Depends(require_admin)):
+    await asyncio.to_thread(record_client_mode, user["id"])
+    return {"status": "ok"}
+
+
 @router.get("/api/miniapp/bookings")
 async def customer_bookings(user=Depends(require_customer)):
     bookings = await asyncio.to_thread(list_customer_bookings, user["id"])
     return {"items": [booking_view(booking) for booking in bookings]}
+
+
+@router.get("/api/miniapp/profile/history")
+async def client_history(category: str = Query(default="active", pattern="^(active|completed|cancelled|all)$"),
+                         page: int = Query(default=0, ge=0, le=100000), number: str = Query(default="", max_length=32), user=Depends(require_customer)):
+    try:
+        bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number)
+    except ValueError as exc:
+        raise HTTPException(422, "Введите полный номер заявки или последние четыре цифры") from exc
+    return {"items": [booking_view(booking) for booking in bookings], "total": total, "page": page, "page_size": 10}
 
 
 @router.patch("/api/miniapp/bookings/{booking_id}/contact")
@@ -493,13 +725,15 @@ async def customer_identity_submit(
 
 def admin_booking_view(booking):
     result = booking_view(booking)
+    result["assignee_id"] = booking.assignee_id
+    result["sla"] = request_sla(booking)
     ordered_assets = sorted(booking.assets, key=lambda row: (
         row.equipment.storage_location or "", row.equipment.article.name if row.equipment.article else row.equipment.name,
         row.equipment.inventory_number))
     result["assets"] = [{"id": asset.equipment.id,
                          "serial": asset.equipment.inventory_number,
                          "article_id": asset.equipment.article_id,
-                         "name": asset.equipment.article.name if asset.equipment.article else asset.equipment.name,
+                         "name": catalog_title(asset.equipment.article.name, asset.equipment.article.kind, asset.equipment.article.brand, asset.equipment.article.key_spec) if asset.equipment.article else asset.equipment.name,
                          "location": asset.equipment.storage_location,
                          "inspection_profile": asset.equipment.article.inspection_profile if asset.equipment.article else "generic"}
                         for asset in ordered_assets]
@@ -514,8 +748,15 @@ def admin_booking_view(booking):
     with Session() as session:
         result["archived_documents"] = session.scalars(select(BookingDocument.kind).where(
             BookingDocument.booking_id == booking.id)).all()
+        threads = session.scalars(select(SupportThread).where(SupportThread.booking_id == booking.id,
+                                      SupportThread.status != "resolved")).all()
+        pending_support = sum(1 for thread in threads if session.scalar(
+            select(SupportMessage.direction).where(SupportMessage.thread_id == thread.id)
+            .order_by(SupportMessage.id.desc()).limit(1)) == "client")
+        result["actionable_count"] = pending_support + (1 if booking.identity_status == "submitted" else 0)
     result["lines"] = [{"id": line.id, "article_id": line.article_id,
-                         "name": line.article.name, "quantity": line.quantity}
+                         "name": line.article.name,
+                         "title": catalog_title(line.article.name, line.article.kind, line.article.brand, line.article.key_spec), "quantity": line.quantity}
                         for line in booking.lines]
     return result
 
@@ -535,7 +776,7 @@ async def admin_bookings(user=Depends(require_admin)):
                   if state and not state["expired"] else None)
         items.append(admin_booking_view(booking) | {"operation_lease": active,
                                                    "operation_lease_state": state})
-    return {"items": items}
+    return {"items": items, "undo_seconds": deletion_undo_seconds()}
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/history")
@@ -544,6 +785,53 @@ async def admin_booking_history(booking_id: int, user=Depends(require_admin)):
         return {"items": await asyncio.to_thread(booking_history, booking_id)}
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+class ReassignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    assignee_id: int = Field(gt=0)
+
+
+class OperatorQuietHours(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    quiet_start: str | None = Field(default=None, max_length=5)
+    quiet_end: str | None = Field(default=None, max_length=5)
+
+
+@router.get("/api/miniapp/admin/notification-preferences")
+async def get_operator_preferences(user=Depends(require_admin)):
+    return await asyncio.to_thread(operator_preferences, user["id"])
+
+
+@router.put("/api/miniapp/admin/notification-preferences")
+async def update_operator_preferences(payload: OperatorQuietHours, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(save_operator_preferences, user["id"], payload.quiet_start, payload.quiet_end)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return await asyncio.to_thread(operator_preferences, user["id"])
+
+
+@router.put("/api/miniapp/admin/bookings/{booking_id}/assignee")
+async def admin_reassign_booking(booking_id: int, payload: ReassignRequest, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(reassign_booking, booking_id, user["id"], payload.assignee_id)
+        return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.put("/api/miniapp/admin/support/{thread_id}/owner")
+async def admin_reassign_support(thread_id: int, payload: ReassignRequest, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(reassign_thread, thread_id, user["id"], payload.assignee_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except SupportConflict as exc:
+        raise HTTPException(403, str(exc)) from exc
+    return {"status": "ok"}
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/operation")
@@ -576,10 +864,42 @@ async def admin_calendar_feed(user=Depends(require_admin)):
     return {"url": f"{public_url}/calendar.ics?{urlencode({'token': token})}"}
 
 
-@router.delete("/api/miniapp/admin/bookings/{booking_id}")
-async def admin_delete_booking(booking_id: int, user=Depends(require_admin)):
+class DeletionIntentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    target_type: str = Field(pattern="^(request|line|asset)$")
+    target_id: int | None = Field(default=None, gt=0)
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/deletion-intents")
+async def admin_prepare_deletion(booking_id: int, payload: DeletionIntentRequest, user=Depends(require_admin)):
     try:
-        await asyncio.to_thread(delete_booking, booking_id, user["id"])
+        result = await asyncio.to_thread(create_deletion_intent, booking_id, user["id"], str(payload.id), payload.target_type, payload.target_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return result
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/deletion-intents/{intent_id}/cancel")
+async def admin_cancel_deletion(booking_id: int, intent_id: UUID, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(cancel_deletion_intent, booking_id, user["id"], str(intent_id))
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "cancelled"}
+
+
+@router.delete("/api/miniapp/admin/bookings/{booking_id}")
+async def admin_delete_booking(booking_id: int, intent_id: UUID | None = Query(default=None, alias="intent"), replacement_id: UUID | None = Query(default=None, alias="replacement"), user=Depends(require_admin)):
+    try:
+        if intent_id is None:
+            scheduled = await asyncio.to_thread(schedule_legacy_deletion, booking_id, user["id"], "request", None)
+            return {"status": "deleted", "booking_id": booking_id, "intent_id": scheduled}
+        await asyncio.to_thread(delete_booking, booking_id, user["id"], str(intent_id) if intent_id else None, str(replacement_id) if replacement_id else None)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Conflict as exc:
@@ -590,11 +910,133 @@ async def admin_delete_booking(booking_id: int, user=Depends(require_admin)):
     return {"status": "deleted", "booking_id": booking_id}
 
 
+@router.post("/api/miniapp/admin/bookings/{booking_id}/restore")
+async def admin_restore_booking(booking_id: int, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(restore_booking, booking_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "restored", "booking_id": booking_id}
+
+
+@router.delete("/api/miniapp/admin/bookings/{booking_id}/lines/{line_id}")
+async def admin_delete_booking_line(booking_id: int, line_id: int, intent_id: UUID | None = Query(default=None, alias="intent"), replacement_id: UUID | None = Query(default=None, alias="replacement"), user=Depends(require_admin)):
+    try:
+        if intent_id is None:
+            scheduled = await asyncio.to_thread(schedule_legacy_deletion, booking_id, user["id"], "line", line_id)
+            return {"status": "deleted", "intent_id": scheduled}
+        await asyncio.to_thread(set_booking_line_deleted, booking_id, line_id, user["id"], True, str(intent_id) if intent_id else None, str(replacement_id) if replacement_id else None)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "deleted"}
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/lines/{line_id}/restore")
+async def admin_restore_booking_line(booking_id: int, line_id: int, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(set_booking_line_deleted, booking_id, line_id, user["id"], False)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "restored"}
+
+
+@router.delete("/api/miniapp/admin/bookings/{booking_id}/assets/{equipment_id}")
+async def admin_delete_booking_asset(booking_id: int, equipment_id: int, intent_id: UUID | None = Query(default=None, alias="intent"), replacement_id: UUID | None = Query(default=None, alias="replacement"), user=Depends(require_admin)):
+    try:
+        if intent_id is None:
+            scheduled = await asyncio.to_thread(schedule_legacy_deletion, booking_id, user["id"], "asset", equipment_id)
+            return {"status": "deleted", "intent_id": scheduled}
+        await asyncio.to_thread(set_booking_asset_deleted, booking_id, equipment_id, user["id"], True, str(intent_id) if intent_id else None, str(replacement_id) if replacement_id else None)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "deleted"}
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/assets/{equipment_id}/restore")
+async def admin_restore_booking_asset(booking_id: int, equipment_id: int, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(set_booking_asset_deleted, booking_id, equipment_id, user["id"], False)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "restored"}
+
+
+class TestFlagRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    is_test: bool = Field(strict=True)
+
+
+class PurgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: str = Field(min_length=1, max_length=32)
+    reason: str = Field(pattern="^(test_cleanup|duplicate_test|invalid_test)$")
+
+
+@router.put("/api/miniapp/admin/bookings/{booking_id}/test-flag")
+async def admin_set_booking_test_flag(booking_id: int, payload: TestFlagRequest, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(set_booking_test_flag, booking_id, user["id"], payload.is_test)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"is_test": payload.is_test}
+
+
+@router.put("/api/miniapp/admin/catalog/articles/{article_id}/test-flag")
+async def admin_set_article_test_flag(article_id: int, payload: TestFlagRequest, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(set_article_test_flag, article_id, user["id"], payload.is_test)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"is_test": payload.is_test}
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/hide-test")
+async def admin_hide_test_booking(booking_id: int, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(hide_test_booking, booking_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "hidden"}
+
+
+@router.get("/api/miniapp/admin/hidden-test-bookings")
+async def admin_hidden_test_bookings(user=Depends(require_system_admin)):
+    bookings = await asyncio.to_thread(list_hidden_test_bookings)
+    return {"items": [{"id": booking.id, "human_number": booking.human_number,
+                       "status": booking.status, "created_at": booking.created_at.isoformat()} for booking in bookings]}
+
+
+@router.post("/api/miniapp/service/bookings/{booking_id}/purge")
+async def service_purge_test_booking(booking_id: int, payload: PurgeRequest, user=Depends(require_system_admin)):
+    try:
+        await asyncio.to_thread(purge_test_booking, booking_id, user["id"], payload.confirmation, payload.reason)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "purged"}
+
+
 @router.get("/api/miniapp/admin/catalog")
 async def admin_catalog(user=Depends(require_admin)):
     articles = await asyncio.to_thread(list_articles)
     dependencies = await asyncio.to_thread(list_dependencies)
     return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
+                           "is_test": article.is_test,
+                           "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+                           "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
                            "category": article.category,
                            "description": article.description,
                            "composition": article.composition or "",
@@ -631,6 +1073,9 @@ class ArticleRequest(BaseModel):
     id: int | None = None
     sku: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
+    kind: str | None = Field(default=None, max_length=80)
+    brand: str | None = Field(default=None, max_length=100)
+    key_spec: str | None = Field(default=None, max_length=120)
     description: str = Field(default="", max_length=4000)
     composition: str = Field(default="", max_length=4000)
     rate: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
@@ -647,7 +1092,8 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
         article_id = await asyncio.to_thread(
             save_article, payload.sku, payload.name, payload.description, Decimal("0"),
             payload.category, payload.inspection_profile, payload.buffer_hours,
-            payload.image_url, payload.id, payload.active, payload.composition)
+            payload.image_url, payload.id, payload.active, payload.composition,
+            payload.kind, payload.brand, payload.key_spec, user["id"])
         return {"id": article_id}
     except IntegrityError as exc:
         raise HTTPException(422, "Артикул с таким SKU уже существует") from exc
@@ -905,9 +1351,13 @@ async def admin_generated_document_download_link(booking_id: int, kind: str, use
             _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
     if len(_DOCUMENT_DOWNLOAD_TOKENS) >= 10000:
         raise HTTPException(503, "Загрузка документов временно недоступна")
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    if booking is None:
+        raise HTTPException(404, "Заявка не найдена")
     token = secrets.token_urlsafe(32)
     _DOCUMENT_DOWNLOAD_TOKENS[token] = (booking_id, kind, user["id"], current + 120)
-    filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+    public_id = (booking.human_number or "request").replace("ТС", "TS")
+    filename = f"{'act' if kind == 'issue' else 'receipt'}-{public_id}.docx"
     return {"url": f"{public_url}/api/miniapp/document-download/{token}", "file_name": filename}
 
 

@@ -1,0 +1,47 @@
+const { chromium, webkit } = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs'), path = require('node:path');
+const assets = path.resolve(__dirname, '../app/miniapp_static');
+const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll('__APP_VERSION__', 'qa');
+(async () => {
+  const name = process.env.PLAYWRIGHT_BROWSER || 'chromium';
+  const browser = await (name === 'webkit' ? webkit : chromium).launch({headless:true, ...(name === 'chromium' && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
+  try {
+    const page = await browser.newPage({viewport:{width:390,height:844}}), errors=[];
+    page.on('pageerror', error => errors.push(error.message));
+    let cart={start:'2026-11-01T10:00',end:'2026-11-02T10:00',lines:[],version:0};
+    const item={id:1,name:'Камера Sony',title:'Камера Sony',description:'',sku:'CAM',available:true,available_quantity:3};
+    await page.route('**/*', async route => {
+      const url=new URL(route.request().url());
+      if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
+      if (url.pathname.startsWith('/miniapp/static/')) {const file=path.join(assets,path.basename(url.pathname)); return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
+      if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:42,admin:false,pii_admin:false}});
+      if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,start_screen:'booking',reminders_enabled:true}});
+      if (url.pathname==='/api/miniapp/cart' && route.request().method()==='GET') return route.fulfill({json:cart});
+      if (url.pathname==='/api/miniapp/cart' && route.request().method()==='PUT') {const next=route.request().postDataJSON(); if (next.version!==cart.version) return route.fulfill({status:409,json:{detail:'conflict'}}); cart={...next,version:cart.version+1}; return route.fulfill({json:cart});}
+      if (url.pathname==='/api/miniapp/availability') return route.fulfill({json:{items:[item],all_items:[item],unavailable_count:0,unavailable:[]}});
+      if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
+      return route.fulfill({body:html,contentType:'text/html'});
+    });
+    await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});
+    await page.goto('http://polyrental.test/miniapp');
+    await page.waitForFunction(() => !document.documentElement.classList.contains('role-pending'));
+    await page.locator('#main-button').click();
+    await page.getByRole('button',{name:'Добавить',exact:true}).click();
+    await page.locator('#main-button').click();
+    await page.locator('#cart-items').getByRole('button',{name:'Увеличить количество'}).click();
+    assert.match(await page.locator('#cart-total').innerText(), /2 шт/);
+    await page.clock.runFor(400);
+    await page.waitForFunction(() => !document.querySelector('#mode-banner').textContent.includes('Не удалось синхронизировать'));
+    assert.equal(cart.lines[0].quantity,2);
+    await page.locator('#back-button').click();
+    await page.getByRole('button',{name:'Изменить даты'}).click();
+    await page.locator('[data-date="2026-11-03"]').click();
+    await page.locator('[data-date="2026-11-04"]').click();
+    await page.locator('#main-button').click();
+    await page.waitForFunction(() => document.querySelector('#selected-count').textContent === '2');
+    assert.match(await page.locator('#selected-count').innerText(),/2/);
+    assert.deepEqual(errors, []);
+    console.log('Versioned cart and date change checks passed');
+  } finally { await browser.close(); }
+})().catch(error=>{console.error(error);process.exitCode=1;});

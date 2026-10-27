@@ -76,11 +76,12 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .mode-banner { margin-top: 20px; padding: 12px 14px; border-radius: 12px; background: var(--soft); font-size: 13px; }
 .items-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .item-card { display: flex; flex-direction: column; justify-content: space-between; gap: 18px; min-height: 170px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); text-align: left; color: var(--text); }
+.item-card.unavailable { background: var(--soft); }
 .item-card.selected { border: 2px solid var(--accent); background: var(--soft); padding: 17px; }
 .item-card:hover { border-color: var(--accent); }
 .item-card:focus-visible { outline-offset: 2px; }
 .item-top { gap: 14px; align-items: flex-start; }
-.item-name { font-weight: 800; font-size: 17px; line-height: 1.25; }
+.item-name { margin: 0; font-weight: 800; font-size: 17px; line-height: 1.25; }
 .item-number { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
 .available-badge { display: inline-block; margin-top: 9px; padding: 3px 7px; border-radius: 5px; background: var(--soft); color: var(--accent); font-size: 11px; font-weight: 800; }
 .item-description { margin: 9px 0 0; color: var(--muted); font-size: 13px; font-weight: 400; }
@@ -311,7 +312,7 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .dates-view .action-bar { padding-top: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom), var(--tg-content-safe-area-inset-bottom, 0px)); }
 .dates-view .action-bar .button { min-height: 44px; }
 .article-photo, .article-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; min-width: 0; }
-.item-photo, .item-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
+.item-photo, .item-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: contain; }
 /* Preserve at least 44px touch targets in the existing operator controls. */
 .button.compact, .admin-tabs > .button, .admin-card .action-row > .button,
 .document-button, .quantity-control .button, .inspection-row > .button,
@@ -381,3 +382,17 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
   .request-accordion[open] > .request-body { animation: request-open .18s ease-out; }
   @keyframes request-open { from { opacity: .35; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 }
+
+html.role-pending main, html.role-pending .action-bar { visibility: hidden; }
+#profile-header { margin-bottom: 24px; }
+#profile-name { font-weight: 700; }
+#return-to-management, #operator-book { margin: 12px 0; }
+#onboarding-dialog .button { min-height: 44px; }
+
+.delete-snackbar { position: fixed; z-index: 50; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(94vw, 560px); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 6px 24px #0004; }
+.delete-snackbar .button { min-height: 44px; }
+
+.request-equipment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.request-equipment { position: relative; min-height: 1.5em; }
+.request-equipment-empty { position: absolute; inset: 0 auto auto 0; margin: 0; }
