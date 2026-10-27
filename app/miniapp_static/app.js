@@ -78,7 +78,7 @@
     return `${parts.year}-${parts.month}-${parts.day}`;
   }
   const addIsoDays = window.PolyRentalCalendar.addDays;
-  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 4); }
+  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 3); }
   function bookingDateLabel(value) {
     return new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long"}).format(new Date(`${value}T12:00:00Z`));
   }
@@ -621,6 +621,28 @@
         card.innerHTML = `<div class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</p>${order.estimated_until ? `<p>В обработке, ориентировочно до ${escapeHtml(dateText(order.estimated_until))} МСК</p>` : ""}`;
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
         help.addEventListener("click", () => openSupport("request", order.id)); card.append(help);
+        if (order.receipt_available) {
+          const receipt = document.createElement("button"); receipt.type = "button"; receipt.className = "button secondary"; receipt.textContent = "Скачать расписку PDF";
+          receipt.addEventListener("click", async () => {
+            receipt.disabled = true;
+            try { await downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`, `receipt-${(order.human_number || "request").replace("ТС", "TS")}.pdf`); }
+            catch (error) { showError(error.message); } finally { receipt.disabled = false; }
+          });
+          card.append(receipt);
+        }
+        const repeat = document.createElement("button"); repeat.type = "button"; repeat.className = "button secondary"; repeat.textContent = "Повторить заявку";
+        repeat.addEventListener("click", () => {
+          clearError();
+          state.quantities = new Map(order.items.map((item) => [item.id, item.quantity]));
+          state.items = order.items.map((item) => ({ ...item, available_quantity: 0 }));
+          state.requestId = null; state.booking = null; state.view = "flow"; state.step = 0;
+          $("start").value = ""; $("end").value = "";
+          syncDateFields("start"); syncDateFields("end");
+          rangeCalendar.setRange("", ""); applyBookingDateLimits(); saveDraft(); render();
+          $("mode-banner").textContent = "Выберите новый период, чтобы проверить доступность позиций повторной заявки.";
+          $("mode-banner").hidden = false;
+        });
+        card.append(repeat);
         if (order.status === "pending") appendPendingContactEditor(card, order);
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
@@ -705,8 +727,6 @@
     try {
       const current = await api(`/api/miniapp/bookings/${bookingId}/identity`);
       state.identityNeedsChanges = current.status === "needs_changes";
-      const universityResult = await api("/api/miniapp/universities");
-      state.universities = universityResult.items || []; renderUniversityOptions();
       await restoreIdentityPhotos(current.documents || []);
       const fields = current.fields || {};
       if (!state.identityNeedsChanges && !Object.values(fields).some((value) => Boolean(value))) {
@@ -763,17 +783,19 @@
       const value = String(data.get(name) || ""); fields[name] = name === "student_id_number" ? value : value.trim();
     }
     const labels = { full_name: "ФИО", birth_date: "дату рождения", passport_issued_at: "дату выдачи паспорта", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "вуз" };
-    for (const name of textFields) if (!fields[name]) { showIdentityFieldError(name, `Укажите ${labels[name]}.`); return; }
+    for (const name of textFields) if (!["student_id_number", "student_institution"].includes(name) && !fields[name]) { showIdentityFieldError(name, `Укажите ${labels[name]}.`); return; }
     const passportCombined = String(data.get("passport_combined") || "").replace(/\D/g, "");
     if (!/^\d{10}$/.test(passportCombined)) { showIdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера."); return; }
     fields.passport_series = passportCombined.slice(0, 4); fields.passport_number = passportCombined.slice(4);
-    const dateToday = new Date().toISOString().slice(0, 10);
+    const dateToday = moscowDateIso();
     if (!/^[А-ЯЁа-яёA-Za-z][А-ЯЁа-яёA-Za-z .'-]{1,199}$/.test(fields.full_name) || fields.full_name.split(/\s+/).length < 2) { showIdentityFieldError("full_name", "Укажите ФИО минимум из двух слов."); return; }
     if (!/^\d{3}-\d{3}$/.test(fields.passport_division_code)) { showIdentityFieldError("passport_division_code", "Введите код в формате 000-000."); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.birth_date) || fields.birth_date > dateToday) { showIdentityFieldError("birth_date", "Проверьте дату рождения."); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < fields.birth_date) { showIdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта."); return; }
-    if (!/^\d{8}$/.test(fields.student_id_number)) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр."); return; }
-    if (!state.universities.includes(fields.student_institution) && fields.student_institution !== state.identityLegacyInstitution) { showIdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга."); return; }
+    const birth = fields.birth_date;
+    const birthday = (years) => { const year = Number(birth.slice(0, 4)) + years; const suffix = birth.slice(4); return `${year}${suffix === "-02-29" && !(year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? "-02-28" : suffix}`; };
+    if (birthday(16) > dateToday) { showIdentityFieldError("birth_date", "Минимальный возраст — 16 лет."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.passport_issued_at) || fields.passport_issued_at > dateToday || fields.passport_issued_at < birthday(14)) { showIdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта."); return; }
+    if (fields.student_id_number.trim().length > 8) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать не более 8 символов."); return; }
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields));
     if (state.consent) { upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash); }
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
@@ -792,7 +814,7 @@
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
       await clearIdentityPhotoDrafts(state.identityBookingId);
       form.reset(); $("identity-form").hidden = true; $("identity-status").hidden = false;
-      $("identity-status").textContent = "Анкета отправлена и находится на проверке. Статус обновлён в разделе «Мои заявки».";
+      $("identity-status").textContent = "Анкета заполнена, ждите ответа оператора";
     } catch (error) { showIdentityError(error); }
     finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
   }
@@ -985,6 +1007,15 @@
         processing.append(nextStep);
         body.append(summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
+        const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
+        if (reworkTargets[order.status]) {
+          const [target, label] = reworkTargets[order.status];
+          actions.append(actionButton("Вернуть на доработку", async () => {
+            const comment = await requestReworkComment(label);
+            if (comment === null) return;
+            await api(`/api/miniapp/admin/bookings/${order.id}/rework`, {method:"POST", body:JSON.stringify({target, comment})});
+          }, order.id, "secondary"));
+        }
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
         if (order.status === "confirmed") {
           if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
@@ -1041,7 +1072,7 @@
         }
         if (order.status === "ready" && order.act_signed_at) actions.append(actionButton("Выдать оборудование", transitionAction("issued"), order.id, "primary workflow-next"));
         if (order.status === "ready" && !order.act_signed_at) { const note = document.createElement("p"); note.textContent = "Оператор должен отметить подписание акта перед выдачей."; actions.append(note); }
-        if (["pending", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заказ", async () => { if (await confirmCancel(order.human_number || "", order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
+        if (["pending", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заявку", async () => { if (await confirmCancel(order.human_number || "", order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
         if (order.status === "issued") actions.append(actionButton("Начать приём оборудования", transitionAction("return_inspection"), order.id, "primary workflow-next"));
         if (order.status === "return_inspection") {
           const finishReturn = actionButton("Завершить возврат", transitionAction("returned"), order.id, "primary workflow-next");
@@ -1286,8 +1317,8 @@
     const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
     const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
     if (supportsNativeDownload) {
-      const ticket = await api(`${path}/download-link`, { method: "POST" });
       try {
+        const ticket = await api(`${path}/download-link`, { method: "POST" });
         tg.downloadFile({ url: ticket.url, file_name: ticket.file_name || filename });
         return;
       } catch (_) { /* Older or customized clients may expose but not implement downloadFile. */ }
@@ -1330,6 +1361,24 @@
     const first = focusable[0], last = focusable[focusable.length - 1];
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
+
+  function requestReworkComment(target) {
+    const dialog = $("rework-dialog"), form = $("rework-form"), cancel = $("rework-cancel");
+    const comment = form.elements.comment, returnFocus = document.activeElement;
+    form.reset(); $("rework-target").textContent = `Заявка вернётся на этап «${target}».`;
+    dialog.hidden = false; comment.focus();
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        dialog.hidden = true; form.reset(); form.removeEventListener("submit", submit);
+        cancel.removeEventListener("click", cancelHandler); dialog.removeEventListener("keydown", keydown);
+        if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); resolve(value);
+      };
+      const submit = (event) => { event.preventDefault(); const value = comment.value.trim(); if (value) finish(value); else comment.focus(); };
+      const cancelHandler = () => finish(null);
+      const keydown = (event) => { if (event.key === "Escape") { event.preventDefault(); finish(null); } else if (event.key === "Tab") trapDialogFocus(event, dialog); };
+      form.addEventListener("submit", submit); cancel.addEventListener("click", cancelHandler); dialog.addEventListener("keydown", keydown);
+    });
   }
   async function openDocumentViewer(bookingId, kind) {
     if (!state.role?.pii_admin) return;

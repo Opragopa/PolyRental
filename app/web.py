@@ -21,15 +21,17 @@ from .db import Session, init_db
 from .documents import ensure_templates, render_document
 from .miniapp import STATIC_DIR, router as miniapp_router
 from .rental import TRANSITIONS, expire_deletion_intents
+from .receipt_archive import purge_expired_receipts
 from .catalog_titles import catalog_title
 from .availability_events import listen_for_availability
-from .roles import is_staff, audit_admin_access, validate_role_config
+from .roles import is_staff, audit_admin_access, validate_role_config, staff_allows
 from .service import Conflict, expire_holds, list_bookings, list_equipment, save_equipment, transition
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 
 async def expiry_loop():
+    last_receipt_purge = None
     while True:
         await asyncio.sleep(1)
         def expire():
@@ -37,6 +39,9 @@ async def expiry_loop():
                 expire_holds(session)
             expire_deletion_intents()
         await asyncio.to_thread(expire)
+        if last_receipt_purge is None or time.monotonic() - last_receipt_purge >= 86400:
+            await asyncio.to_thread(purge_expired_receipts)
+            last_receipt_purge = time.monotonic()
 
 
 def verify_telegram(data):
@@ -141,6 +146,8 @@ def dashboard(request: Request):
 @app.post("/admin/bookings/{booking_id}/{action}")
 async def change_booking(request: Request, booking_id: int, action: str):
     admin = require_admin(request)
+    if not await asyncio.to_thread(staff_allows, admin, "manager" if action == "confirmed" else "operator"):
+        raise HTTPException(403, "Недостаточно прав для этого действия")
     try:
         status = await asyncio.to_thread(transition, booking_id, action, admin)
     except (ValueError, Conflict) as exc:

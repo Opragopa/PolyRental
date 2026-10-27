@@ -21,7 +21,7 @@
       const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
       if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value.slice(0, 10)) return "Проверьте дату и время.";
     }
-    if (start.slice(0, 10) < minimum) return "Выдача доступна с четвёртого дня от сегодня.";
+    if (start.slice(0, 10) < minimum) return "Бронирование доступно минимум за 3 дня";
     if (a < now) return "Начало аренды должно быть в будущем.";
     if (b <= a) return "Конец должен быть строго позже начала.";
     return "";

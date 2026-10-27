@@ -19,6 +19,8 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,start_screen:'booking',reminders_enabled:true}});
       if (url.pathname==='/api/miniapp/cart' && route.request().method()==='GET') return route.fulfill({json:cart});
       if (url.pathname==='/api/miniapp/cart' && route.request().method()==='PUT') {const next=route.request().postDataJSON(); if (next.version!==cart.version) return route.fulfill({status:409,json:{detail:'conflict'}}); cart={...next,version:cart.version+1}; return route.fulfill({json:cart});}
+      if (url.pathname==='/api/miniapp/profile/history') return route.fulfill({json:{total:1,items:[{id:7,human_number:'ТС260007',status:'returned',identity_status:'verified',receipt_available:true,starts_at:'2026-10-01T10:00:00+03:00',ends_at:'2026-10-02T10:00:00+03:00',items:[{id:2,name:'Старый штатив',quantity:1}]}]}});
+      if (url.pathname==='/api/miniapp/bookings/7/receipt') return route.fulfill({contentType:'application/pdf',body:'%PDF-synthetic'});
       if (url.pathname==='/api/miniapp/availability') return route.fulfill({json:{items:[item],all_items:[item],unavailable_count:0,unavailable:[]}});
       if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:'text/html'});
@@ -41,6 +43,20 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#main-button').click();
     await page.waitForFunction(() => document.querySelector('#selected-count').textContent === '2');
     assert.match(await page.locator('#selected-count').innerText(),/2/);
+    await page.locator('#tab-orders').click();
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button',{name:'Скачать расписку PDF'}).click();
+    assert.match((await downloadPromise).suggestedFilename(), /\.pdf$/);
+    await page.getByRole('button',{name:'Повторить заявку'}).click();
+    assert.equal(await page.locator('#start-date').inputValue(), '');
+    await page.locator('[data-date="2026-11-05"]').click();
+    await page.locator('[data-date="2026-11-06"]').click();
+    await page.locator('#main-button').click();
+    await page.getByText('Старый штатив', {exact:true}).first().waitFor();
+    assert.match(await page.locator('.item-card').filter({hasText:'Старый штатив'}).innerText(), /Нет в наличии/);
+    await page.clock.runFor(400);
+    await page.waitForFunction(() => !document.querySelector('#mode-banner').textContent.includes('Не удалось синхронизировать'));
+    assert.deepEqual(cart.lines, [{article_id:2, quantity:1}]);
     assert.deepEqual(errors, []);
     console.log('Versioned cart and date change checks passed');
   } finally { await browser.close(); }

@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import (BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary,
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary,
                         Numeric, String, Text, UniqueConstraint, create_engine, inspect,
                         select, text)
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,6 +12,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 
 class Base(DeclarativeBase):
     pass
+
+
+class StaffRole(Base):
+    """Persist the staff subrole independently of configured PII access."""
+    __tablename__ = "staff_roles"
+    __table_args__ = (CheckConstraint("role IN ('operator', 'manager', 'admin')",
+                                      name="staff_roles_role_check"),)
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
 class Article(Base):
@@ -98,6 +108,7 @@ class Booking(Base):
     act_signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     act_signed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     returned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inspection_cycle_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     receipt_number: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     items: Mapped[list["BookingItem"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
@@ -278,6 +289,15 @@ class BookingDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
+class ReceiptArchive(Base):
+    """Receipt lifecycle survives removal of the encrypted PDF itself."""
+    __tablename__ = "receipt_archive"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Occupancy(Base):
     """Legacy per-asset occupancy. New reservations are quantity based."""
     __tablename__ = "occupancy"
@@ -379,6 +399,19 @@ class Audit(Base):
     booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), index=True)
     actor_id: Mapped[int] = mapped_column(BigInteger)
     action: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BookingRework(Base):
+    """Reason encrypted separately from the content-free activity history."""
+    __tablename__ = "booking_rework"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    from_status: Mapped[str] = mapped_column(String(30))
+    to_status: Mapped[str] = mapped_column(String(30))
+    encrypted_comment: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
@@ -492,7 +525,7 @@ def init_db():
                 "client_request_id": "VARCHAR(36)",
                 "identity_status": "VARCHAR(30) NOT NULL DEFAULT 'not_required'",
                 "act_signed_at": "TIMESTAMPTZ", "act_signed_by": "BIGINT",
-                "returned_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",
+                "returned_at": "TIMESTAMPTZ", "inspection_cycle_started_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",
                 "human_number": "VARCHAR(32)",
                 "deleted_at": "TIMESTAMPTZ",
                 "assignee_id": "BIGINT", "claimed_at": "TIMESTAMPTZ", "sla_closed_at": "TIMESTAMPTZ",

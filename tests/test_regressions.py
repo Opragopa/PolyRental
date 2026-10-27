@@ -115,9 +115,10 @@ def test_nonoverlapping_bookings_do_not_add_up_to_false_unavailability():
         session.get(Article, article_id).buffer_hours = 0
     start = now() + timedelta(days=5)
     for offset in (1, 3):
-        create_booking(42, "Тест", "@qa", start + timedelta(hours=offset),
-                       start + timedelta(hours=offset + 1),
-                       [{"article_id": article_id, "quantity": 1}])
+        booking_id = create_booking(42, "Тест", "@qa", start + timedelta(hours=offset),
+                                    start + timedelta(hours=offset + 1),
+                                    [{"article_id": article_id, "quantity": 1}])
+        transition(booking_id, "confirmed", 100)
     assert availability(start, start + timedelta(hours=6))[0]["available_quantity"] == 1
 
 
@@ -143,6 +144,7 @@ def test_customer_cannot_cancel_during_preparation():
 
 def test_calendar_keeps_preparing_and_ready_orders(monkeypatch):
     from fastapi.testclient import TestClient
+    from icalendar import Calendar
     from app.miniapp_server import app
     booking_id, _ = prepared_booking()
     monkeypatch.setenv("ICAL_TOKEN", "qa-calendar")
@@ -154,6 +156,16 @@ def test_calendar_keeps_preparing_and_ready_orders(monkeypatch):
         assert response.status_code == 200
         assert f"booking-{booking_id}@polyrental" in response.text
         assert response.headers["cache-control"] == "no-store"
+        events = Calendar.from_ical(response.content).walk("VEVENT")
+        assert len(events) == 1
+        assert "DESCRIPTION" not in events[0]
+        assert "Анна" not in str(events[0].get("SUMMARY"))
+        assert get_booking(booking_id).human_number not in str(events[0].get("SUMMARY"))
+    for status in ("pending", "needs_changes", "returned", "cancelled"):
+        with Session.begin() as session:
+            session.get(Booking, booking_id).status = status
+        events = Calendar.from_ical(client.get("/calendar/qa-calendar.ics").content).walk("VEVENT")
+        assert not events
     assert client.get("/calendar/wrong.ics").status_code == 404
 
 

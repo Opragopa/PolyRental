@@ -121,7 +121,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     });
     await page.goto("http://polyrental.test/miniapp");
     try { await page.locator("#admin-panel").waitFor({state:"visible"}); }
-    catch (error) { console.error("Page errors:", errors); throw error; }
+    catch (error) { console.error("Page errors:", errors, await page.evaluate(() => ({error: document.querySelector('#global-error')?.textContent, banner: document.querySelector('#mode-banner')?.textContent, rolePending: document.documentElement.classList.contains('role-pending'), title: document.querySelector('#page-intro')?.textContent}))); throw error; }
     await page.locator(".admin-card").waitFor();
     assert.equal(await page.getByRole("button",{name:/^Проверить анкету/}).count(),0);
     await page.locator("#tab-new").click();

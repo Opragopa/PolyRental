@@ -13,6 +13,7 @@ from .miniapp import STATIC_DIR, router
 from .documents import archive_completed_documents
 from .notification_outbox import retry_pending_notifications
 from .pii import purge_expired_identities
+from .receipt_archive import purge_expired_receipts
 from .roles import validate_role_config
 from .rental import expire_deletion_intents
 from .availability_events import listen_for_availability
@@ -26,6 +27,7 @@ async def retention_loop():
         await asyncio.sleep(60)
         if last_purge != date.today():
             await asyncio.to_thread(purge_expired_identities)
+            await asyncio.to_thread(purge_expired_receipts)
             await asyncio.to_thread(purge_expired_support)
             last_purge = date.today()
         await asyncio.to_thread(queue_sla_escalations)
@@ -45,6 +47,7 @@ async def lifespan(_app):
     await asyncio.to_thread(init_db)
     await asyncio.to_thread(archive_completed_documents)
     await asyncio.to_thread(purge_expired_identities)
+    await asyncio.to_thread(purge_expired_receipts)
     await asyncio.to_thread(purge_expired_support)
     await retry_pending_notifications()
     task = asyncio.create_task(retention_loop())

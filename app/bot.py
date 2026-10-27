@@ -20,7 +20,7 @@ from .db import init_db
 from .booking_messages import booking_status_text
 from .notification_outbox import notify, notify_actionable
 from .miniapp import BookingRequest
-from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config
+from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config, staff_allows
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 from .rental import resolve_booking_number, ClientBlocked
 from .support import submit_question, reply as support_reply, deliver_reply, SupportConflict
@@ -520,6 +520,8 @@ async def change(message: Message, bot: Bot):
     action = {"/confirm": "confirmed", "/cancel": "cancelled", "/prepare": "preparing",
               "/ready": "ready", "/issue": "issued", "/checkin": "return_inspection",
               "/return": "returned"}.get(command.split("@")[0])
+    if not await asyncio.to_thread(staff_allows, message.from_user.id, "manager" if action == "confirmed" else "operator"):
+        return await message.answer("Недостаточно прав для этого действия")
     try:
         key = number.strip()
         booking_id = int(key) if key.isascii() and key.isdigit() and len(key) != 4 else await asyncio.to_thread(resolve_booking_number, key)

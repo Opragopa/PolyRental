@@ -14,14 +14,14 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from .db import (DeletionIntent, ClientProfile, Article, ArticleTitleAudit, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingDocument, PurgeLog, SupportThread, SupportActivity,
+from .db import (DeletionIntent, ClientProfile, Article, ArticleTitleAudit, ArticleDependency, Audit, Booking, BookingAsset, BookingDeletionAudit, BookingRework, SupportThread, SupportActivity,
                  BookingOperationLease,
                  BookingItem, BookingLine,
-                 CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
-                 PrivacyConsent, RepairTicket, Session)
+                 CustomerIdentity, Equipment, Inspection, Occupancy, PIIAudit,
+                 RepairTicket, Session)
 from .catalog_titles import catalog_title
 from .request_numbers import format_request_number, parse_request_number
-from .roles import is_staff
+from .roles import is_staff, staff_subrole
 
 
 class Conflict(Exception):
@@ -32,7 +32,8 @@ class ClientBlocked(Exception):
     pass
 
 
-ACTIVE_STATUSES = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+ACTIVE_STATUSES = {"pending", "needs_changes", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+RESERVING_STATUSES = {"confirmed", "preparing", "ready", "issued", "return_inspection"}
 OPERATION_LEASE = timedelta(minutes=10)
 
 
@@ -134,7 +135,7 @@ def active_operation_leases():
 
 _HISTORY_STATUS_ACTIONS = {"created", "pending", "confirmed", "preparing", "ready", "issued",
                            "return_inspection", "returned", "cancelled", "expired"}
-_HISTORY_OPERATION_ACTIONS = {"act_signed", "contact_updated", "repair_closed", "request_deleted", "request_restored", "assignee_cleared", "test_hidden", "test_unhidden", "test_flag_on", "test_flag_off", "delete_failed"}
+_HISTORY_OPERATION_ACTIONS = {"act_signed", "contact_updated", "repair_closed", "request_deleted", "request_restored", "assignee_cleared", "test_hidden", "test_unhidden", "test_flag_on", "test_flag_off", "delete_failed", "returned_for_rework"}
 _HISTORY_IDENTITY_ACTIONS = {"verified", "changes_requested", "blocked", "unblocked",
                              "manual_delete", "subject_request", "retention_purge"}
 
@@ -186,9 +187,9 @@ def validate_interval(start, end, enforce_booking_notice=False):
         raise ValueError("Укажите корректные дату и время начала и возврата")
     moscow = ZoneInfo("Europe/Moscow")
     if enforce_booking_notice:
-        earliest_date = now().astimezone(moscow).date() + timedelta(days=4)
+        earliest_date = now().astimezone(moscow).date() + timedelta(days=3)
         if start.astimezone(moscow).date() < earliest_date:
-            raise ValueError("Выдачу можно назначить не раньше чем через 4 календарных дня; дата сегодня + 3 дня недоступна")
+            raise ValueError("Бронирование доступно минимум за 3 дня")
     if start < now() - timedelta(minutes=1):
         raise ValueError("Начало аренды уже прошло")
 
@@ -211,43 +212,27 @@ def lines_total(start, end, lines):
 
 
 def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None):
-    article = session.get(Article, article_id)
     scheduled = and_(
-        Booking.status.in_(ACTIVE_STATUSES),
-        Booking.starts_at < end + timedelta(hours=article.buffer_hours),
-        Booking.ends_at + timedelta(hours=article.buffer_hours) > start,
-    )
-    buffer_interval = text(f"interval '{int(article.buffer_hours)} hours'")
-    actual_return = and_(
-        Booking.status.in_({"returned", "cancelled"}),
-        Booking.returned_at.is_not(None),
-        Booking.returned_at + buffer_interval > start,
+        Booking.status.in_(RESERVING_STATUSES),
+        Booking.starts_at < end,
+        Booking.ends_at > start,
     )
     query = select(Booking, BookingLine.quantity).join(
         BookingLine, Booking.id == BookingLine.booking_id).where(
         BookingLine.article_id == article_id, BookingLine.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
-        or_(scheduled, actual_return, and_(
-            Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= now())),
+        or_(scheduled, and_(Booking.status.in_({"issued", "return_inspection"}),
+                            Booking.ends_at <= now())),
     )
     if exclude_booking_id:
         query = query.where(Booking.id != exclude_booking_id)
-    # Count the peak simultaneous occupancy, not the sum of every booking
-    # touching a long requested interval. End events precede start events.
+    # Count peak occupancy; end events precede start events at the same instant.
     events = []
-    buffer = timedelta(hours=article.buffer_hours)
     for booking, quantity in session.execute(query):
-        if booking.status in {"returned", "cancelled"} and booking.returned_at is not None:
-            occupied_start, occupied_end = booking.returned_at, booking.returned_at + buffer
-            quantity = session.scalar(select(func.count()).select_from(BookingAsset).join(
-                Equipment, Equipment.id == BookingAsset.equipment_id).where(
-                BookingAsset.booking_id == booking.id, BookingAsset.deleted_at.is_(None), Equipment.article_id == article_id,
-                Equipment.condition == "available")) or 0
-        else:
-            occupied_start, occupied_end = booking.starts_at, booking.ends_at + buffer
-            if booking.status in {"issued", "return_inspection"} and booking.ends_at <= now():
-                occupied_end = datetime.max.replace(tzinfo=timezone.utc)
-        left, right = max(start, occupied_start), min(end + buffer, occupied_end)
+        occupied_end = booking.ends_at
+        if booking.status in {"issued", "return_inspection"} and booking.ends_at <= now():
+            occupied_end = datetime.max.replace(tzinfo=timezone.utc)
+        left, right = max(start, booking.starts_at), min(end, occupied_end)
         if left < right:
             events.extend(((left, quantity), (right, -quantity)))
     current = peak = 0
@@ -268,19 +253,9 @@ def _nearest_free_start(session, article, start, end, capacity):
     rows = session.scalars(select(Booking).join(BookingLine, Booking.id == BookingLine.booking_id).where(
         BookingLine.article_id == article.id, BookingLine.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
-        Booking.status.in_(ACTIVE_STATUSES | {"returned", "cancelled"}),
-        or_(Booking.ends_at >= start, Booking.returned_at.is_not(None)))).all()
-    buffer = timedelta(hours=article.buffer_hours)
-    candidates = set()
-    for booking in rows:
-        if booking.status in {"returned", "cancelled"}:
-            candidate = booking.returned_at + buffer if booking.returned_at else None
-        elif booking.status in {"issued", "return_inspection"} and booking.ends_at <= now():
-            candidate = None  # An overdue rental has no reliable end time.
-        else:
-            candidate = booking.ends_at + buffer
-        if candidate is not None and candidate >= start:
-            candidates.add(candidate)
+        Booking.status.in_(RESERVING_STATUSES), Booking.ends_at >= start)).all()
+    candidates = {booking.ends_at for booking in rows
+                  if not (booking.status in {"issued", "return_inspection"} and booking.ends_at <= now())}
     duration = end - start
     for candidate in sorted(candidates)[:50]:
         if capacity - _reserved_quantity(session, article.id, candidate, candidate + duration) > 0:
@@ -587,10 +562,6 @@ def restore_booking(booking_id, actor_id):
         lines = session.scalars(select(BookingLine).where(BookingLine.booking_id == booking_id, BookingLine.deleted_at.is_(None))).all()
         for article_id in sorted({line.article_id for line in lines}):
             session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
-        if booking.status == "pending":
-            for line in lines:
-                if _capacity(session, line.article_id) - _reserved_quantity(session, line.article_id, booking.starts_at, booking.ends_at) < line.quantity:
-                    raise Conflict("Оборудование уже занято; восстановить заявку нельзя")
         booking.deleted_at = None
         booking.deletion_level = None
         session.add(Audit(booking_id=booking_id, actor_id=actor_id, action="request_restored"))
@@ -634,42 +605,6 @@ def hide_test_booking(booking_id, actor_id):
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="test_hidden"))
 
 
-def purge_test_booking(booking_id, actor_id, confirmation, reason):
-    """Irreversible service operation; reason is a fixed non-PII code."""
-    if reason not in {"test_cleanup", "duplicate_test", "invalid_test"}:
-        raise ValueError("Укажите допустимую причину удаления")
-    with Session.begin() as session:
-        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
-        if booking is None:
-            raise ValueError("Заявка не найдена")
-        if not booking.is_test or not booking.human_number or confirmation != booking.human_number:
-            raise Conflict("Требуется тестовая заявка и точное подтверждение её номера")
-        if session.scalar(select(BookingOperationLease.booking_id).where(BookingOperationLease.booking_id == booking_id,
-                                                                           BookingOperationLease.expires_at > now()).limit(1)):
-            raise Conflict("Освободите этап обработки перед удалением заявки")
-        lines = session.scalars(select(BookingLine).where(BookingLine.booking_id == booking_id)).all()
-        for article_id in sorted({line.article_id for line in lines}):
-            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id":article_id})
-        repairs = session.scalars(select(RepairTicket).where(RepairTicket.booking_id == booking_id).with_for_update()).all()
-        affected = {ticket.equipment_id for ticket in repairs}
-        session.execute(delete(RepairTicket).where(RepairTicket.booking_id == booking_id))
-        session.execute(delete(BookingDocument).where(BookingDocument.booking_id == booking_id))
-        for equipment_id in affected:
-            equipment = session.get(Equipment, equipment_id)
-            other = session.scalar(select(RepairTicket.id).where(RepairTicket.equipment_id == equipment_id,
-                                                                   RepairTicket.status != "closed").limit(1))
-            if equipment and equipment.condition == "maintenance" and not other:
-                equipment.condition = "available"
-        session.execute(delete(SupportThread).where(SupportThread.booking_id == booking_id))
-        identity_ids = select(CustomerIdentity.id).where(CustomerIdentity.booking_id == booking_id)
-        session.execute(delete(IdentityDocument).where(IdentityDocument.identity_id.in_(identity_ids)))
-        for model in (CustomerIdentity, PrivacyConsent, PIIAudit, Audit, Inspection, Occupancy, BookingItem, BookingAsset, BookingLine):
-            session.execute(delete(model).where(model.booking_id == booking_id))
-        session.add(PurgeLog(deleted_booking_id=booking_id, request_number=booking.human_number,
-                             actor_id=actor_id, reason=reason))
-        session.execute(delete(Booking).where(Booking.id == booking_id))
-
-
 def set_booking_line_deleted(booking_id, line_id, actor_id, deleted, intent_id=None, replacement_id=None):
     """Remove or restore one pending request line without deleting relationships."""
     with Session.begin() as session:
@@ -692,9 +627,6 @@ def set_booking_line_deleted(booking_id, line_id, actor_id, deleted, intent_id=N
                 BookingOperationLease.expires_at > now()).limit(1)):
             raise Conflict("Освободите этап обработки перед изменением заявки")
         session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": line.article_id})
-        if not deleted and _capacity(session, line.article_id) - _reserved_quantity(
-                session, line.article_id, booking.starts_at, booking.ends_at) < line.quantity:
-            raise Conflict("Оборудование уже занято; восстановить позицию нельзя")
         line.deleted_at = now() if deleted else None
         if intent: intent.status = "committed"
         session.add(Audit(booking_id=booking_id, actor_id=actor_id,
@@ -846,26 +778,20 @@ def customer_history_page(customer_id, category, page, page_size=10, number=""):
 
 
 def _asset_conflicts(session, booking, equipment_id):
-    article = session.get(Equipment, equipment_id).article
     scheduled = and_(
-        Booking.status.in_(ACTIVE_STATUSES),
-        Booking.starts_at < booking.ends_at + timedelta(hours=article.buffer_hours),
-        Booking.ends_at + timedelta(hours=article.buffer_hours) > booking.starts_at,
-    )
-    buffer_interval = text(f"interval '{int(article.buffer_hours)} hours'")
-    actual_return = and_(
-        Booking.status == "returned",
-        Booking.returned_at.is_not(None),
-        Booking.returned_at + buffer_interval > booking.starts_at,
+        Booking.status.in_(RESERVING_STATUSES),
+        Booking.starts_at < booking.ends_at,
+        Booking.ends_at > booking.starts_at,
     )
     return session.scalar(select(func.count()).select_from(BookingAsset).join(
         Booking, Booking.id == BookingAsset.booking_id).where(
         BookingAsset.equipment_id == equipment_id, BookingAsset.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
         Booking.id != booking.id,
-        or_(scheduled, actual_return, and_(
-            Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= now())),
+        or_(scheduled, and_(Booking.status.in_({"issued", "return_inspection"}),
+                            Booking.ends_at <= now())),
     )) > 0
+
 
 
 def _validate_asset(asset, article_id):
@@ -960,6 +886,7 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
             record = Inspection(booking_id=booking_id, equipment_id=equipment_id, stage=stage,
                                 actor_id=actor_id)
         record.result, record.checklist, record.notes, record.defect = result, checklist or {}, notes.strip(), (defect or "").strip()[:4000]
+        record.created_at = now()
         record.estimated_cost, record.charge_customer, record.actor_id = Decimal(str(estimated_cost)), bool(charge_customer), actor_id
         session.add(record)
         if result == "fail":
@@ -1001,6 +928,44 @@ TRANSITIONS = {
     "returned": {"cancelled"},
 }
 
+REWORK_TRANSITIONS = {"confirmed": "pending", "preparing": "confirmed", "ready": "preparing", "return_inspection": "issued"}
+
+
+def return_for_rework(booking_id, target, comment, actor_id, actor_name=""):
+    """Apply an explicitly authorised backwards transition and retain its reason encrypted."""
+    role = staff_subrole(actor_id)
+    if role not in {"operator", "manager", "admin"}:
+        raise PermissionError("Недостаточно прав для этого действия")
+    if not isinstance(comment, str) or not comment.strip() or len(comment.strip()) > 2000:
+        raise ValueError("Укажите комментарий длиной до 2000 символов")
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from .pii import _master_key
+    with Session.begin() as session:
+        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        if booking is None or booking.deleted_at is not None:
+            raise ValueError("Заявка не найдена")
+        previous = booking.status
+        if REWORK_TRANSITIONS.get(previous) != target:
+            raise Conflict("Недопустимый возврат на доработку")
+        if previous == "confirmed" and role == "operator":
+            raise PermissionError("Вернуть подтверждённую заявку может менеджер или администратор")
+        if previous in {"preparing", "ready"} and role == "operator" and booking.assignee_id != actor_id:
+            raise PermissionError("Оператор может вернуть только закреплённую за ним заявку")
+        _claim_stage(session, booking, actor_id, actor_name)
+        nonce = os.urandom(12)
+        aad = f"booking-rework:{booking_id}:{previous}:{target}".encode()
+        encrypted = AESGCM(_master_key()).encrypt(nonce, comment.strip().encode("utf-8"), aad)
+        session.add(BookingRework(booking_id=booking_id, actor_id=actor_id, from_status=previous,
+                                  to_status=target, encrypted_comment=encrypted, nonce=nonce))
+        booking.status = target
+        if previous == "ready":
+            booking.act_signed_at = booking.act_signed_by = None
+        lease = session.get(BookingOperationLease, (booking.id, previous))
+        if lease:
+            session.delete(lease)
+        session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="returned_for_rework"))
+        return booking.status
+
 
 def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
     if customer_id is not None and action != "cancelled":
@@ -1021,7 +986,21 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             if not session.scalar(select(BookingLine.id).where(BookingLine.booking_id == booking.id,
                                                                 BookingLine.deleted_at.is_(None)).limit(1)):
                 raise Conflict("В заявке нет оборудования")
-            booking.identity_status = "required"
+            quantities = session.execute(select(BookingLine.article_id, func.sum(BookingLine.quantity))
+                                         .where(BookingLine.booking_id == booking.id,
+                                                BookingLine.deleted_at.is_(None))
+                                         .group_by(BookingLine.article_id)
+                                         .order_by(BookingLine.article_id)).all()
+            for article_id, _ in quantities:
+                session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
+            for article_id, quantity in quantities:
+                free = _capacity(session, article_id) - _reserved_quantity(
+                    session, article_id, booking.starts_at, booking.ends_at,
+                    exclude_booking_id=booking.id)
+                if free < quantity:
+                    raise Conflict("Оборудование уже занято; подтвердить заявку нельзя")
+            if booking.identity_status == "not_required":
+                booking.identity_status = "required"
         elif action == "ready":
             assigned = session.scalar(select(func.count()).select_from(BookingAsset).where(
                 BookingAsset.booking_id == booking.id, BookingAsset.deleted_at.is_(None)))
@@ -1040,6 +1019,8 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
         elif action == "issued":
             if booking.identity_status != "verified" or not booking.act_signed_at:
                 raise Conflict("Проверьте документы клиента и отметьте подписание акта")
+        elif action == "return_inspection":
+            booking.inspection_cycle_started_at = now()
         elif action == "returned":
             assigned = session.scalar(select(func.count()).select_from(BookingAsset).where(
                 BookingAsset.booking_id == booking.id, BookingAsset.deleted_at.is_(None)))
@@ -1047,6 +1028,12 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
                 BookingAsset, and_(BookingAsset.booking_id == Inspection.booking_id,
                                    BookingAsset.equipment_id == Inspection.equipment_id)).where(
                 Inspection.booking_id == booking.id, BookingAsset.deleted_at.is_(None), Inspection.stage == "check_in"))
+            if booking.inspection_cycle_started_at is not None:
+                checked = session.scalar(select(func.count()).select_from(Inspection).join(
+                    BookingAsset, and_(BookingAsset.booking_id == Inspection.booking_id,
+                                       BookingAsset.equipment_id == Inspection.equipment_id)).where(
+                    Inspection.booking_id == booking.id, BookingAsset.deleted_at.is_(None),
+                    Inspection.stage == "check_in", Inspection.created_at >= booking.inspection_cycle_started_at))
             if checked != assigned:
                 raise Conflict("Проверьте каждый возвращённый экземпляр")
             booking.returned_at = now()
@@ -1054,7 +1041,7 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             if identity:
                 identity.delete_after = now() + timedelta(days=90)
         elif action == "cancelled":
-            # Keep the real return and its buffer, plus the agreed 90-day identity retention.
+            # Keep the agreed identity retention after a completed return.
             if booking.returned_at is None:
                 booking.identity_status = "not_required"
                 identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))

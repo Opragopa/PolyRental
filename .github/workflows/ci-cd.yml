@@ -81,7 +81,7 @@ jobs:
     needs: [test, browser, documents]
     # Production credentials are repository secrets. A successful push to main
     # is the deliberate deployment trigger.
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: [self-hosted, Windows, PolyRental]
     environment: production
     steps:

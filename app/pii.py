@@ -19,7 +19,6 @@ from sqlalchemy import and_, delete, exists, or_, select
 from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyConsent,
                  RepairTicket, Session)
 from .rental import Conflict, now
-from .universities import UNIVERSITY_SET
 from .roles import configured_ids
 from .document_check import check_documents, Verdict
 
@@ -41,8 +40,7 @@ def validate_identity_payload(payload, legacy_institution=None):
     required = {
         "full_name", "birth_date", "passport_series", "passport_number",
         "passport_issued_at", "passport_issuer", "passport_division_code",
-        "registration_address", "residential_address", "student_id_number",
-        "student_institution",
+        "registration_address", "residential_address",
     }
     if not isinstance(payload, dict):
         raise IdentityFieldError("full_name", "Проверьте данные анкеты")
@@ -50,10 +48,11 @@ def validate_identity_payload(payload, legacy_institution=None):
     if missing:
         field = sorted(missing)[0]
         raise IdentityFieldError(field, "Заполните это поле")
-    if set(payload) != required:
+    if set(payload) - required - {"student_id_number", "student_institution"}:
         raise IdentityFieldError("full_name", "Форма устарела. Перезапустите приложение и повторите отправку")
+    payload = {"student_id_number": "", "student_institution": "", **payload}
     for field, value in payload.items():
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or (field in required and not value.strip()):
             raise IdentityFieldError(field, "Заполните это поле")
         if len(value.strip()) > 500:
             raise IdentityFieldError(field, "Слишком длинное значение")
@@ -73,16 +72,21 @@ def validate_identity_payload(payload, legacy_institution=None):
         passport_issued_at = date.fromisoformat(payload["passport_issued_at"])
     except ValueError as exc:
         raise IdentityFieldError("passport_issued_at", "Проверьте дату выдачи паспорта") from exc
-    today = date.today()
+    from zoneinfo import ZoneInfo
+    today = now().astimezone(ZoneInfo("Europe/Moscow")).date()
     if birth_date < date(1900, 1, 1) or birth_date > today:
         raise IdentityFieldError("birth_date", "Дата рождения указана некорректно")
-    if passport_issued_at < birth_date or passport_issued_at > today:
+    def birthday_after_years(years):
+        try:
+            return birth_date.replace(year=birth_date.year + years)
+        except ValueError:
+            return birth_date.replace(year=birth_date.year + years, day=28)
+    if birthday_after_years(16) > today:
+        raise IdentityFieldError("birth_date", "Минимальный возраст — 16 лет")
+    if passport_issued_at < birthday_after_years(14) or passport_issued_at > today:
         raise IdentityFieldError("passport_issued_at", "Дата выдачи паспорта указана некорректно")
-    if not re.fullmatch(r"\d{8}", payload["student_id_number"]):
-        raise IdentityFieldError("student_id_number", "Номер студенческого должен содержать ровно 8 цифр")
-    institution = payload["student_institution"].strip()
-    if institution not in UNIVERSITY_SET and institution != legacy_institution:
-        raise IdentityFieldError("student_institution", "Выберите вуз из списка Санкт-Петербурга")
+    if len(payload["student_id_number"].strip()) > 8:
+        raise IdentityFieldError("student_id_number", "Номер студенческого должен содержать не более 8 символов")
     for field in ("passport_issuer", "registration_address", "residential_address", "student_id_number", "student_institution"):
         if any(ord(char) < 32 for char in payload[field]):
             raise IdentityFieldError(field, "Уберите недопустимые управляющие символы")

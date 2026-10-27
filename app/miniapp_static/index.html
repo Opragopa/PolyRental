@@ -54,7 +54,7 @@
           </div>
           <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p><button id="period-clear" type="button" class="button ghost compact" aria-label="Очистить выбранный период">Сбросить</button></div>
           <p id="period-error" class="period-error" role="status"></p>
-          <details class="period-help"><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><p>Между арендами действует буфер артикула (обычно 24 ч). Доступность с учётом буфера проверяется при выборе техники и отправке заявки.</p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
+          <details class="period-help" hidden><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
         </div>
 
         <div id="step-items" class="panel step-panel" hidden>
@@ -116,8 +116,8 @@
             <label class="field wide"><span>Адрес регистрации</span><div class="address-search"><input id="registration_address" name="registration_address" required maxlength="500" role="combobox" aria-autocomplete="list" aria-controls="address-suggestions" aria-expanded="false"><div id="address-suggestions" class="address-suggestions" role="listbox" hidden></div></div><small>Для подсказок введённый текст адреса передаётся DaData. Если подсказки недоступны, адрес можно ввести вручную.</small></label>
             <label class="check-row wide"><input name="same_address" type="checkbox"><span>Фактический адрес проживания совпадает с адресом регистрации</span></label>
             <label class="field wide"><span>Фактический адрес проживания</span><input name="residential_address" required maxlength="500"></label>
-            <label class="field"><span>Номер студенческого</span><input name="student_id_number" required maxlength="32" pattern="[0-9]{8}" inputmode="numeric" autocomplete="off" placeholder="12345678"></label>
-            <label class="field wide"><span>ВУЗ Санкт-Петербурга</span><input name="student_institution" required maxlength="500" list="university-options" autocomplete="off" placeholder="Начните вводить название"><datalist id="university-options"></datalist><small>Выберите вариант из списка. Вуз, которого нет в каталоге, пока выбрать нельзя.</small></label>
+            <label class="field"><span>Номер студенческого (необязательно)</span><input name="student_id_number" maxlength="8" autocomplete="off" placeholder="12345678"></label>
+            <input name="student_institution" type="hidden"><datalist id="university-options"></datalist>
           </div>
           <h3>Фотографии документов</h3>
           <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
@@ -135,6 +135,14 @@
       </section>
       <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy">
         <div class="dialog-card"><p id="onboarding-progress" class="step-kicker" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
+      </section>
+      <section id="rework-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="rework-title">
+        <form id="rework-form" class="dialog-card">
+          <h2 id="rework-title">Вернуть на доработку</h2>
+          <p id="rework-target"></p>
+          <label class="field"><span>Комментарий (обязательно)</span><textarea name="comment" maxlength="2000" rows="3" required></textarea></label>
+          <div class="action-row"><button id="rework-cancel" class="button ghost" type="button">Отмена</button><button class="button primary" type="submit">Вернуть на доработку</button></div>
+        </form>
       </section>
       <section id="identity-review-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="identity-review-title">
         <form id="identity-review-form" class="dialog-card">

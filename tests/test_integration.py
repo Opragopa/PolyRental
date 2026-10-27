@@ -41,10 +41,19 @@ def test_quantity_booking_concurrency_and_buffer():
                 outcomes.append(future.result())
             except Conflict:
                 outcomes.append("conflict")
-    assert sum(isinstance(value, int) for value in outcomes) == 1
-    assert outcomes.count("conflict") == 1
+    assert sum(isinstance(value, int) for value in outcomes) == 2
+    assert availability(start, end)[0]["available_quantity"] == 2
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(transition, booking_id, "confirmed", 100) for booking_id in outcomes]
+        confirmed = []
+        for future in futures:
+            try:
+                confirmed.append(future.result())
+            except Conflict:
+                confirmed.append("conflict")
+    assert sorted(confirmed) == ["confirmed", "conflict"]
     assert availability(start, end)[0]["available_quantity"] == 0
-    assert availability(end + timedelta(hours=23), end + timedelta(hours=25))[0]["available_quantity"] == 0
+    assert availability(end, end + timedelta(hours=1))[0]["available_quantity"] == 2
     assert availability(end + timedelta(hours=24), end + timedelta(hours=25))[0]["available_quantity"] == 2
 
 
@@ -89,7 +98,7 @@ def test_dependencies_assignment_checks_and_return_repair():
     article_id = cable_id
     still_buffered = availability(returned_at + timedelta(hours=1), returned_at + timedelta(hours=2))
     available_after_buffer = availability(returned_at + timedelta(hours=25), returned_at + timedelta(hours=26))
-    assert next(item for item in still_buffered if item["id"] == article_id)["available_quantity"] == 0
+    assert next(item for item in still_buffered if item["id"] == article_id)["available_quantity"] > 0
     assert next(item for item in available_after_buffer if item["id"] == article_id)["available_quantity"] > 0
     with Session() as session:
         saved = session.query(Inspection).filter_by(booking_id=booking_id, equipment_id=booking.assets[0].equipment_id, stage="check_in").one()

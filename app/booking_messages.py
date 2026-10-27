@@ -4,6 +4,7 @@ import html
 
 
 STATUS_LABELS = {
+    "pending": "возвращена на проверку менеджера",
     "confirmed": "подтверждена — заполните документы в Mini App",
     "preparing": "передана в подготовку",
     "ready": "готова к выдаче",
@@ -16,6 +17,7 @@ STATUS_LABELS = {
 }
 
 STAGE_LABELS = {
+    "pending": "Возврат на доработку",
     "confirmed": "Подтверждение заявки",
     "preparing": "Подготовка оборудования",
     "ready": "Проверка готовности",

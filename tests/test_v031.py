@@ -84,7 +84,7 @@ def test_expired_claim_visible_without_changing_active_lease_contract(monkeypatc
         assert expired["operation_lease_state"]["expired"] is True
         assert expired["operation_lease_state"]["actor_name"] == "Анна"
         assert booking_id not in active_operation_leases()
-        response = client.post(f"/api/miniapp/admin/bookings/{booking_id}/transition", headers=headers(200),
+        response = client.post(f"/api/miniapp/admin/bookings/{booking_id}/transition", headers=headers(100),
                                json={"action": "confirmed"})
         assert response.status_code == 200
         assert item()["operation_lease_state"] is None
@@ -97,7 +97,7 @@ def test_invalid_actions_and_competing_operator_never_create_history(monkeypatch
     url = f"/api/miniapp/admin/bookings/{booking_id}"
     with TestClient(app) as client:
         original = client.get(url + "/history", headers=headers(100)).json()
-        for actor, action, code in ((42, "confirmed", 403), (200, "confirmed", 409),
+        for actor, action, code in ((42, "confirmed", 403), (200, "confirmed", 403),
                                     (100, "ready", 409), (100, "invented-state", 409)):
             response = client.post(url + "/transition", headers=headers(actor), json={"action": action})
             assert response.status_code == code

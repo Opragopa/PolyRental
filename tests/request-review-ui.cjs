@@ -69,6 +69,11 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
     if (url.pathname === "/api/miniapp/me") return route.fulfill({ json: { id: 200, admin: true, pii_admin: pii } });
     if (url.pathname === "/api/miniapp/admin/bookings") return route.fulfill({ json: { items: orders } });
     const bookingId = Number(url.pathname.match(/\/bookings\/(\d+)/)?.[1]);
+    if (url.pathname.endsWith("/rework")) {
+      const payload = route.request().postDataJSON();
+      orders.find(item => item.id === bookingId).status = payload.target;
+      return route.fulfill({json: {status: payload.target}});
+    }
     if (url.pathname.endsWith("/inspection")) {
       const payload = route.request().postDataJSON();
       if (payload.equipment_id === inspectionFailEquipment) return route.fulfill({ status: 409, json: { detail: "QA inspection conflict" } });
@@ -233,6 +238,18 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.match(await selected.locator(".stage-lock").innerText(), /ист[её]к|истекла/i);
       assert.equal(await ready.isDisabled(), true, "Lock expiry must preserve unmet inspection prerequisites");
       assert.deepEqual(errors, []); passed.push("stage-lock expiry preserves workflow guard"); await page.close();
+    }
+    {
+      const { page, errors, requests, orders } = await fixture(browser, { orders: [order(7)] });
+      await openCard(page, 7);
+      await card(page, 7).getByRole("button", {name:"Вернуть на доработку", exact:true}).click();
+      const dialog = page.locator("#rework-dialog");
+      assert.match(await dialog.innerText(), /Ожидает проверки/);
+      await dialog.locator("textarea").fill("  Проверить данные  ");
+      await dialog.getByRole("button", {name:"Вернуть на доработку"}).click();
+      await waitUntil(() => orders[0].status === "pending", "Rework transition did not run");
+      assert.equal(requests.filter(request => request.path.endsWith("/rework")).length, 1);
+      assert.deepEqual(errors, []); passed.push("rework dialog and transition"); await page.close();
     }
     for (const partialFailure of [false, true]) {
       const assets = [{ id: 11, name: "QA camera", serial: "QA-11" }, { id: 12, name: "QA camera", serial: "QA-12" }];

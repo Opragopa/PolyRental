@@ -1,4 +1,4 @@
-"""Server-side roles shared by every entry point; env is the only ID source."""
+"""Server-side access lists and staged staff subroles."""
 
 import logging
 import os
@@ -33,6 +33,33 @@ def role_for(user_id):
 
 def is_staff(user_id):
     return role_for(user_id)["admin"]
+
+
+STAFF_ROLES = frozenset({"operator", "manager", "admin"})
+ROLE_LEVELS = {"operator": 1, "manager": 2, "admin": 3}
+
+
+def staff_subrole(user_id):
+    """Return a configured staff member's persisted role, or None.
+
+    PII membership is deliberately independent. A database row alone never
+    grants staff access when the ID is absent from ADMIN_IDS.
+    """
+    if type(user_id) is not int or user_id not in configured_ids("ADMIN_IDS"):
+        return None
+    from .db import Session, StaffRole
+
+    with Session() as session:
+        staff = session.get(StaffRole, user_id)
+        return staff.role if staff and staff.role in STAFF_ROLES else None
+
+
+def staff_allows(user_id, minimum_role):
+    """Enforce the configured staff list and the agreed role hierarchy."""
+    if minimum_role not in ROLE_LEVELS:
+        raise ValueError("Unknown minimum role")
+    role = staff_subrole(user_id)
+    return role is not None and ROLE_LEVELS[role] >= ROLE_LEVELS[minimum_role]
 
 
 def audit_admin_access(user_id, entry_point):

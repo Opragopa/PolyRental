@@ -28,7 +28,7 @@ def test_soft_delete_restore_is_scoped_idempotent_and_preserves_relations(monkey
     booking = get_booking(booking_id)
     article_id = booking.lines[0].article_id
     before = next(item for item in availability(booking.starts_at, booking.ends_at) if item["id"] == article_id)
-    assert before["available"] is False and before["next_available_start"] is not None
+    assert before["available"] is True
     url = f"/api/miniapp/admin/bookings/{booking_id}"
     with TestClient(app) as client:
         assert client.delete(url, headers=headers(42)).status_code == 403
@@ -47,7 +47,7 @@ def test_soft_delete_restore_is_scoped_idempotent_and_preserves_relations(monkey
         assert client.post(url + '/restore', headers=headers(100)).status_code == 200
         assert client.post(url + '/restore', headers=headers(100)).status_code == 200
         assert get_booking(booking_id).lines[0].article_id == article_id
-        assert availability(booking.starts_at, booking.ends_at)[0]['available_quantity'] == 0
+        assert availability(booking.starts_at, booking.ends_at)[0]['available_quantity'] == 1
         with Session() as session:
             actions = session.scalars(select(Audit.action).where(Audit.booking_id == booking_id)).all()
             assert actions.count('request_deleted') == 1 and actions.count('request_restored') == 1
@@ -62,9 +62,13 @@ def test_restore_rechecks_availability_and_nonpending_delete_fails(monkeypatch):
         finish_scheduled(client.delete(url, headers=headers(100)))
         new_id = create_booking(43, 'Другой', '@other', booking.starts_at, booking.ends_at,
                                 [{'article_id': booking.lines[0].article_id, 'quantity': 1}])
-        assert client.post(url + '/restore', headers=headers(100)).status_code == 409
-        assert get_booking(booking_id) is None
+        assert client.post(url + '/restore', headers=headers(100)).status_code == 200
+        assert get_booking(booking_id) is not None
         transition(new_id, 'confirmed', 100)
+        from app.rental import Conflict
+        import pytest
+        with pytest.raises(Conflict):
+            transition(booking_id, 'confirmed', 100)
         assert client.delete(f'/api/miniapp/admin/bookings/{new_id}', headers=headers(100)).status_code == 409
 
 

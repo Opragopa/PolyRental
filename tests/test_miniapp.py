@@ -173,12 +173,13 @@ def test_identity_sensitive_fields_are_validated():
         invalid = {**valid, key: value}
         with pytest.raises(ValueError):
             validate_identity_payload(invalid)
-    for student_id in ("1234567", "123456789", "1234abcd", "1234 5678"):
-        with pytest.raises(ValueError, match="ровно 8 цифр"):
+    for student_id in ("", "1234567", "1234abcd"):
+        assert validate_identity_payload({**valid, "student_id_number": student_id})["student_id_number"] == student_id
+    for student_id in ("123456789", "1234 5678"):
+        with pytest.raises(ValueError, match="не более 8 символов"):
             validate_identity_payload({**valid, "student_id_number": student_id})
     legacy = {**valid, "student_institution": "Мой старый вуз"}
-    with pytest.raises(ValueError, match="списка Санкт-Петербурга"):
-        validate_identity_payload(legacy)
+    assert validate_identity_payload(legacy)["student_institution"] == "Мой старый вуз"
     assert validate_identity_payload(legacy, legacy_institution="Мой старый вуз")["student_institution"] == "Мой старый вуз"
 
 
@@ -190,13 +191,28 @@ def test_identity_submit_returns_student_field_error(monkeypatch):
         fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
-                  "residential_address": "Санкт-Петербург", "student_id_number": "1234567",
+                  "residential_address": "Санкт-Петербург", "student_id_number": "123456789",
                   "student_institution": "Санкт-Петербургский государственный университет"}
         response = client.post(f"/api/miniapp/bookings/{booking_id}/identity", headers=headers,
                                data={"payload": json.dumps(fields), "policy_version": "test-v1", "text_hash": "test-hash"})
     assert response.status_code == 422
     assert isinstance(response.json()["detail"], dict), response.text
     assert response.json()["detail"]["field"] == "student_id_number"
+
+
+def test_identity_age_and_passport_date_boundaries(monkeypatch):
+    from datetime import datetime, timezone
+    from app import pii
+    monkeypatch.setattr(pii, "now", lambda: datetime(2026, 10, 28, 12, tzinfo=timezone.utc))
+    valid = {"full_name": "Анна Иванова", "birth_date": "2010-10-28", "passport_series": "4510",
+             "passport_number": "123456", "passport_issued_at": "2024-10-28", "passport_issuer": "ОВД",
+             "passport_division_code": "770-001", "registration_address": "Москва",
+             "residential_address": "Москва"}
+    assert validate_identity_payload(valid)["student_id_number"] == ""
+    with pytest.raises(ValueError, match="16 лет"):
+        validate_identity_payload({**valid, "birth_date": "2010-10-29"})
+    with pytest.raises(ValueError, match="Дата выдачи паспорта"):
+        validate_identity_payload({**valid, "passport_issued_at": "2024-10-27"})
 
 
 def test_identity_submit_returns_bad_photo_field(monkeypatch):

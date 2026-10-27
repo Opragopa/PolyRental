@@ -23,9 +23,9 @@ def validate_interval(start, end, enforce_booking_notice=False):
         raise ValueError("Укажите корректные дату и время начала и возврата")
     if enforce_booking_notice:
         moscow = ZoneInfo("Europe/Moscow")
-        earliest_date = now().astimezone(moscow).date() + timedelta(days=4)
+        earliest_date = now().astimezone(moscow).date() + timedelta(days=3)
         if start.astimezone(moscow).date() < earliest_date:
-            raise ValueError("Выдачу можно назначить не раньше чем через 4 календарных дня; дата сегодня + 3 дня недоступна")
+            raise ValueError("Бронирование доступно минимум за 3 дня")
     if start < now() - timedelta(minutes=1):
         raise ValueError("Начало аренды уже прошло")
 
