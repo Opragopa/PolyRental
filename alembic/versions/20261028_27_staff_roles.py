@@ -12,12 +12,13 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        "staff_roles",
-        sa.Column("telegram_id", sa.BigInteger(), primary_key=True),
-        sa.Column("role", sa.String(16), nullable=False),
-        sa.CheckConstraint("role IN ('operator', 'manager', 'admin')", name="staff_roles_role_check"),
-    )
+    if "staff_roles" not in sa.inspect(op.get_bind()).get_table_names():
+        op.create_table(
+            "staff_roles",
+            sa.Column("telegram_id", sa.BigInteger(), primary_key=True),
+            sa.Column("role", sa.String(16), nullable=False),
+            sa.CheckConstraint("role IN ('operator', 'manager', 'admin')", name="staff_roles_role_check"),
+        )
     roles = sa.table("staff_roles", sa.column("telegram_id", sa.BigInteger()),
                      sa.column("role", sa.String(16)))
     for telegram_id in configured_ids("ADMIN_IDS"):
