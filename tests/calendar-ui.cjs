@@ -6,7 +6,8 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
 const assets = path.join(root, "app", "miniapp_static");
-const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll("__APP_VERSION__", "0.3.0");
+const version = fs.readFileSync(path.join(root, "VERSION"), "utf8").trim();
+const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll("__APP_VERSION__", version);
 
 (async () => {
   const engineName = process.env.PLAYWRIGHT_BROWSER || "chromium";
@@ -85,7 +86,10 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         const afterMonth=await page.locator("#range-calendar").boundingBox();
         assert.equal(afterMonth.height,beforeMonth.height);
         await page.getByRole("button",{name:"Предыдущий месяц"}).click();
-        if (engineName === "chromium" && ((width===360&&!dark) || (width===390&&dark))) await page.screenshot({path:path.join(root,"docs","qa",`v0.3.0-calendar-${width}-${dark?"dark":"light"}.png`)});
+        if (process.env.QA_SCREENSHOTS && engineName === "chromium" && ((width===360&&!dark) || (width===390&&dark))) {
+          fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});
+          await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,`v${version}-calendar-${width}-${dark?"dark":"light"}.png`)});
+        }
         await page.locator("#period-clear").click();
         assert.equal(await page.locator(".calendar-day.selected").count(),0);
         await page.locator('[data-date="2026-10-30"]').click();
@@ -122,8 +126,9 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     await page.locator("#tab-new").click();
     assert.equal(await page.locator("#range-calendar").isVisible(),true);
     piiAdmin=true; await page.reload();
+    await page.locator('.request-card[data-booking-id="7"] .request-toggle').click();
     await page.getByRole("button",{name:/^Проверить анкету/}).click();
-    assert.match(await page.locator(".identity-check-review").innerText(),/не документ.*однотонное фото/);
+    assert.match(await page.locator(".identity-check-review").innerText(),/не документ.*однотонное фото/s);
     page.on("dialog",dialog=>dialog.accept());
     await Promise.all([page.waitForResponse(response=>response.url().endsWith("/identity/review")),page.getByRole("button",{name:"Подтвердить документы",exact:true}).click()]);
     assert.equal(reviews[0].approved,true);

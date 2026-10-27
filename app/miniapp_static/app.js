@@ -12,6 +12,9 @@
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders" };
   const catalogView = { query: "", status: "all", expanded: new Set() };
+  let selectedRequestId = null;
+  let adminRenderSequence = 0;
+  let leaseRefreshTimer = null;
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
@@ -300,6 +303,7 @@
   }
 
   function render() {
+    if (state.view !== "admin") document.querySelectorAll(".request-card").forEach(clearRequestReview);
     document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 0);
     const done = state.step === 4;
     $("booking-flow").hidden = state.view !== "flow";
@@ -686,26 +690,134 @@
 
   function actionButton(label, action, bookingId, className = "secondary", refresh = true) {
     const button = document.createElement("button"); button.type = "button"; button.className = `button compact ${className}`; button.textContent = label;
-    button.addEventListener("click", async () => { const scrollTop = window.scrollY; button.disabled = true; try { await action(); if (refresh) { await showAdmin(state.adminMode); window.scrollTo(0, scrollTop); } } catch (error) { showError(error.message); } finally { button.disabled = false; } });
+    button.addEventListener("click", async () => {
+      const mode = state.adminMode; const scrollTop = window.scrollY; button.disabled = true; button.dataset.actionPending = "true";
+      try {
+        await action();
+        if (refresh && state.view === "admin" && state.adminMode === mode) {
+          await showAdmin(mode);
+          if (mode !== "orders" && state.adminMode === mode) window.scrollTo(0, scrollTop);
+        }
+      } catch (error) { showError(error.message); } finally { delete button.dataset.actionPending; button.disabled = false; }
+    });
     return button;
   }
 
+  function reviewSection(title, className = "") {
+    const section = document.createElement("section"); section.className = `request-section ${className}`.trim();
+    const heading = document.createElement("h4"); heading.textContent = title; section.append(heading); return section;
+  }
+
+  function labelledValues(values) {
+    const list = document.createElement("dl"); list.className = "request-fields";
+    for (const [label, value] of values) {
+      const row = document.createElement("div"); const term = document.createElement("dt"); const detail = document.createElement("dd");
+      term.textContent = label; detail.textContent = value || "Не указано"; row.append(term, detail); list.append(row);
+    }
+    return list;
+  }
+
+  function clearRequestReview(card) {
+    card.querySelector(".identity-check-review")?.remove();
+    const host = card.querySelector(".request-form-host");
+    if (host) { host.dataset.reviewSequence = String(Number(host.dataset.reviewSequence || 0) + 1); host.querySelector(".review-loading")?.remove(); }
+    if (documentViewerBookingId === Number(card.dataset.bookingId)) closeDocumentViewer();
+  }
+
+  async function loadRequestHistory(order, card) {
+    const history = card.querySelector(".request-history"); const body = history.querySelector(".request-history-body");
+    const sequence = String(Number(history.dataset.sequence || 0) + 1); history.dataset.sequence = sequence;
+    body.textContent = "Загружаем историю…";
+    try {
+      const result = await api(`/api/miniapp/admin/bookings/${order.id}/history`);
+      if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
+      body.replaceChildren();
+      const names = { created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
+      if (!result.items?.length) { body.textContent = "Записей пока нет."; return; }
+      const list = document.createElement("ol"); list.className = "request-history-list";
+      for (const event of result.items) {
+        const item = document.createElement("li"); const label = document.createElement("strong"); const meta = document.createElement("span");
+        label.textContent = names[event.action] || "Служебное действие";
+        meta.textContent = `${dateText(event.created_at)} МСК · ${event.actor_id ? `ID ${event.actor_id}` : "Система"}`;
+        item.append(label, meta); list.append(item);
+      }
+      body.append(list);
+    } catch (_) {
+      if (card.isConnected && history.dataset.sequence === sequence) {
+        body.textContent = "История временно недоступна. ";
+        body.append(actionButton("Повторить", () => loadRequestHistory(order, card), order.id, "ghost lock-exempt", false));
+      }
+    }
+  }
+
+  function updateRequestLease(order, card) {
+    const lease = order.operation_lease_state || order.operation_lease;
+    const activeStage = ["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status);
+    const ownership = card.querySelector(".stage-lock");
+    if (!activeStage) { ownership.textContent = "Этап завершён. Закрепление не требуется."; return; }
+    const expired = lease && (lease.expired || new Date(lease.expires_at).getTime() <= Date.now());
+    const mine = lease?.actor_id === state.role?.id;
+    ownership.classList.toggle("stage-lock-expired", Boolean(expired));
+    ownership.textContent = !lease ? "Этап свободен. Действие закрепит его за вами на 10 минут."
+      : expired ? `Закрепление истекло: ${lease.actor_name || `ID ${lease.actor_id}`}, до ${dateText(lease.expires_at)} МСК. Этап доступен для обработки.`
+      : `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name || `ID ${lease.actor_id}`}. Закрепление до ${dateText(lease.expires_at)} МСК.`;
+    for (const button of card.querySelectorAll(".request-actions button:not(.document-button):not(.lock-exempt)")) {
+      if (lease && !expired && !mine) {
+        if (!button.dataset.lockBlocked) button.dataset.lockWasDisabled = String(button.disabled);
+        button.dataset.lockBlocked = "true"; button.disabled = true;
+      } else if (button.dataset.lockBlocked) {
+        button.disabled = button.dataset.lockWasDisabled === "true" || button.dataset.actionPending === "true"; delete button.dataset.lockBlocked; delete button.dataset.lockWasDisabled;
+      }
+    }
+  }
+
   async function showAdmin(mode = "orders") {
+    const sequence = ++adminRenderSequence;
+    const anchoredRequestId = selectedRequestId;
+    const previousCard = document.querySelector(`.request-card[data-booking-id="${selectedRequestId}"]`);
+    const previousTop = previousCard?.querySelector(".request-toggle")?.getBoundingClientRect().top;
+    const focused = previousCard?.contains(document.activeElement) ? document.activeElement.textContent : null;
+    if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
+    closeDocumentViewer();
     clearError(); state.view = "admin"; state.adminMode = mode; render();
     document.querySelectorAll(".admin-mode").forEach((button) => { button.className = `button ${button.dataset.mode === mode ? "secondary" : "ghost"} admin-mode`; });
-    const content = $("admin-content"); content.textContent = "Загружаем…";
+    const content = $("admin-content");
+    content.querySelectorAll(".request-card").forEach(clearRequestReview);
+    if (!content.querySelector(".request-card") || mode !== "orders") content.textContent = "Загружаем…";
     try {
-      if (mode === "catalog") return renderAdminCatalog(await api("/api/miniapp/admin/catalog"));
-      if (mode === "repairs") return renderRepairs(await api("/api/miniapp/admin/repairs"));
-      const result = await api("/api/miniapp/admin/bookings"); content.replaceChildren();
+      if (mode === "catalog" || mode === "repairs") {
+        const result = await api(mode === "catalog" ? "/api/miniapp/admin/catalog" : "/api/miniapp/admin/repairs");
+        if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
+        return mode === "catalog" ? renderAdminCatalog(result) : renderRepairs(result);
+      }
+      const result = await api("/api/miniapp/admin/bookings");
+      if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
+      content.replaceChildren();
       if (!result.items.length) { content.textContent = "Заказов пока нет."; return; }
       for (const order of result.items) {
-        const card = document.createElement("article"); card.className = "admin-card";
-        card.innerHTML = `<div class="order-head"><h3>Заказ №${order.id}</h3><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${order.items.map((line) => `${escapeHtml(line.name)} × ${line.quantity}`).join(", ")}</p><p>Анкета: ${escapeHtml(identityStatusNames[order.identity_status] || order.identity_status)}</p>${order.assets.length ? `<ul class="asset-list">${order.assets.map((asset) => `<li>${escapeHtml(asset.location || "Без ячейки")} · ${escapeHtml(asset.name)} · № ${escapeHtml(asset.serial)}</li>`).join("")}</ul>` : ""}`;
+        const card = document.createElement("article"); card.className = "admin-card request-card"; card.dataset.bookingId = String(order.id);
+        const accordion = document.createElement("details"); accordion.className = "request-accordion";
+        const toggle = document.createElement("summary"); toggle.className = "request-toggle";
+        toggle.innerHTML = `<span class="order-head"><strong>Заказ №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span>`;
+        const body = document.createElement("div"); body.className = "request-body";
+        const summary = reviewSection("Заявка", "request-summary");
+        summary.append(labelledValues([["Номер заявки", `№${order.id}`], ["Клиент", order.customer_name], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`], ["Статус", statusNames[order.status] || order.status], ["Анкета", identityStatusNames[order.identity_status] || order.identity_status]]));
+        const equipment = document.createElement("p"); equipment.textContent = order.items.map((line) => `${line.name} × ${line.quantity}`).join(", "); summary.append(equipment);
+        if (order.assets.length) {
+          const assets = document.createElement("ul"); assets.className = "asset-list";
+          for (const asset of order.assets) { const row = document.createElement("li"); row.textContent = `${asset.location || "Без ячейки"} · ${asset.name} · № ${asset.serial}`; assets.append(row); }
+          summary.append(assets);
+        }
+        const formHost = reviewSection("Анкета клиента", "request-form-host");
+        formHost.append(labelledValues([["Имя в заявке", order.customer_name], ["Контакт", order.customer_contact]]));
+        const formHint = document.createElement("p"); formHint.textContent = `Анкета: ${identityStatusNames[order.identity_status] || order.identity_status}. ${state.role?.pii_admin ? "Раскройте проверку, чтобы сверить документы и реквизиты." : "Документы и решение по анкете доступны администратору ПД."}`; formHost.append(formHint);
         const actions = document.createElement("div"); actions.className = "action-row";
-        const summary = document.createElement("p");
-        summary.textContent = `${dateText(order.starts_at)} — ${dateText(order.ends_at)} МСК · ${order.customer_name} · ${order.customer_contact}`;
-        card.append(summary);
+        const processing = reviewSection("Действия по заявке", "request-actions");
+        const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status"); processing.append(ownership);
+        const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
+        nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Следующий шаг: отметить подпись акта и выдать оборудование.", issued: "Следующий шаг: начать приём оборудования.", return_inspection: "Следующий шаг: проверить возврат и закрыть заявку."})[order.status] || "Обработка заявки завершена.";
+        processing.append(nextStep);
+        body.append(summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
         if (order.status === "confirmed") {
@@ -735,16 +847,7 @@
           actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
-          actions.append(actionButton("Проверить анкету", () => reviewIdentity(order.id), order.id,
-            order.identity_status === "verified" ? "secondary lock-exempt" : "primary workflow-next lock-exempt", false));
-          const documents = document.createElement("details"); documents.className = "document-actions";
-          documents.innerHTML = `<summary>Документы анкеты</summary><span class="document-group-caption">Паспорт: 2 страницы · студенческий: лицевая сторона</span>`;
-          const passport = document.createElement("div"); passport.className = "document-group";
-          passport.append(actionButton("Паспорт — страница с фото", () => openDocumentViewer(order.id, "passport_main"), order.id, "ghost document-button"));
-          passport.append(actionButton("Паспорт — регистрация", () => openDocumentViewer(order.id, "passport_registration"), order.id, "ghost document-button"));
-          const student = document.createElement("div"); student.className = "document-group";
-          student.append(actionButton("Студенческий — лицевая сторона", () => openDocumentViewer(order.id, "student_front"), order.id, "ghost document-button"));
-          documents.append(passport, student); actions.append(documents);
+          formHost.append(actionButton("Проверить анкету", () => reviewIdentity(order, card), order.id, "secondary lock-exempt", false));
         }
         const canSeeDocuments = ["confirmed", "preparing", "ready", "issued", "return_inspection", "returned"].includes(order.status)
           || (order.status === "cancelled" && (order.archived_documents || []).length > 0);
@@ -794,17 +897,8 @@
           });
           updateReturnHint(); actions.append(returnHint, finishReturn);
         }
-        if (["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status)) {
-          const lease = order.operation_lease;
-          const mine = lease?.actor_id === state.role?.id;
-          if (lease) {
-            const ownership = document.createElement("p"); ownership.className = "workflow-hint";
-            ownership.textContent = `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name}. До ${dateText(lease.expires_at)} МСК.`;
-            card.append(ownership);
-            if (!mine) actions.querySelectorAll("button:not(.document-button):not(.lock-exempt)").forEach((button) => { button.disabled = true; });
-          }
-        }
-        card.append(actions);
+        processing.append(actions); updateRequestLease(order, card);
+        card.requestOrder = order;
         if (state.role?.admin) {
           const maintenance = document.createElement("details"); maintenance.className = "booking-maintenance";
           const summary = document.createElement("summary"); summary.textContent = "Дополнительные действия";
@@ -819,11 +913,41 @@
               if (!content.querySelector(".admin-card")) content.textContent = "Заказов пока нет.";
             } catch (error) { showError(error.message); remove.disabled = false; }
           });
-          maintenance.append(summary, remove); card.append(maintenance);
+          maintenance.append(summary, remove); processing.append(maintenance);
         }
+        const history = reviewSection("История действий", "request-history");
+        const historyBody = document.createElement("div"); historyBody.className = "request-history-body"; history.append(historyBody); body.append(history);
+        const setOpen = (open) => {
+          accordion.open = open;
+          if (open) { selectedRequestId = order.id; loadRequestHistory(order, card); }
+          else { clearRequestReview(card); history.dataset.sequence = String(Number(history.dataset.sequence || 0) + 1); if (selectedRequestId === order.id) selectedRequestId = null; }
+        };
+        toggle.addEventListener("click", (event) => {
+          event.preventDefault(); const top = toggle.getBoundingClientRect().top; const opening = !accordion.open;
+          if (opening) for (const other of content.querySelectorAll(".request-card")) {
+            if (other === card) continue;
+            other.querySelector(".request-accordion").open = false; clearRequestReview(other);
+          }
+          setOpen(opening); window.scrollBy(0, toggle.getBoundingClientRect().top - top);
+        });
+        accordion.addEventListener("toggle", () => {
+          if (!accordion.open) { clearRequestReview(card); if (selectedRequestId === order.id) selectedRequestId = null; }
+        });
         content.append(card);
+        if (selectedRequestId === order.id) setOpen(true);
       }
-    } catch (error) { content.textContent = "Не удалось загрузить раздел."; showError(error.message); }
+      leaseRefreshTimer = setInterval(() => {
+        if (state.view !== "admin" || state.adminMode !== "orders") { clearInterval(leaseRefreshTimer); return; }
+        content.querySelectorAll(".request-card").forEach((card) => updateRequestLease(card.requestOrder, card));
+      }, 1000);
+      const selectedCard = content.querySelector(`.request-card[data-booking-id="${selectedRequestId}"]`);
+      const selectedToggle = selectedCard?.querySelector(".request-toggle");
+      if (anchoredRequestId === selectedRequestId && previousTop != null && selectedToggle) window.scrollTo(0, window.scrollY + selectedToggle.getBoundingClientRect().top - previousTop);
+      if (anchoredRequestId === selectedRequestId && focused && selectedCard) ([...selectedCard.querySelectorAll("button, summary")].find((node) => node.textContent === focused) || selectedToggle)?.focus({ preventScroll: true });
+    } catch (error) {
+      if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
+      content.textContent = "Не удалось загрузить раздел."; showError(error.message);
+    }
   }
 
   function inspectionFor(order, asset, stage) {
@@ -870,25 +994,41 @@
       const toMark = pending();
       if (!toMark.length) return;
       markAll.disabled = true;
+      let savedAny = false; let failure = null;
       try {
         for (const asset of toMark) {
           await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method: "POST", body: JSON.stringify({ equipment_id: asset.id, stage, result: "pass", checklist: {}, notes: "", defect: "", estimated_cost: 0, charge_customer: false }) });
           order.inspections ||= [];
           order.inspections.push({ equipment_id: asset.id, stage, result: "pass" });
+          savedAny = true;
           const row = group.querySelector(`[data-equipment-id="${asset.id}"]`);
           const status = row?.querySelector(".inspection-state");
           if (status) { status.textContent = "Исправно"; status.classList.add("checked"); }
         }
         updateProgress(); updateButton(); onInspectionChange();
       } catch (error) {
-        updateProgress(); updateButton(); onInspectionChange(); showError(error.message);
-      } finally { markAll.disabled = false; }
+        updateProgress(); updateButton(); onInspectionChange(); failure = error.message;
+      } finally {
+        markAll.disabled = false;
+        if (savedAny && state.view === "admin" && state.adminMode === "orders") await showAdmin("orders");
+        if (failure) showError(failure);
+      }
     });
     group.append(markAll); actions.append(group);
   }
 
-  async function reviewIdentity(bookingId) {
-    const masked = await api(`/api/miniapp/admin/bookings/${bookingId}/identity`);
+  async function reviewIdentity(order, requestCard) {
+    if (!state.role?.pii_admin) return;
+    const bookingId = order.id;
+    const host = requestCard.querySelector(".request-form-host");
+    const sequence = String(Number(host.dataset.reviewSequence || 0) + 1); host.dataset.reviewSequence = sequence;
+    host.querySelector(".identity-check-review")?.remove();
+    const loading = document.createElement("p"); loading.className = "review-loading"; loading.setAttribute("role", "status"); loading.textContent = "Загружаем защищённую анкету…"; host.append(loading);
+    const isCurrent = () => requestCard.isConnected && requestCard.querySelector(".request-accordion").open && host.dataset.reviewSequence === sequence && state.view === "admin" && state.adminMode === "orders";
+    let masked;
+    try { masked = await api(`/api/miniapp/admin/bookings/${bookingId}/identity`); }
+    finally { loading.remove(); }
+    if (!isCurrent()) return;
     const reasons = {
       manual_review: "Нужна ручная проверка", student_text: "Найдены признаки студенческого билета",
       other_document: "Найдены признаки другого документа", blank_image: "Признаки документа не обнаружены: однотонное фото",
@@ -896,31 +1036,49 @@
       unavailable: "Локальная проверка недоступна", timeout: "Время проверки истекло",
     };
     const labels = {passport_main: "Паспорт: фото", passport_registration: "Паспорт: регистрация", student_front: "Студенческий"};
-    document.querySelector(".identity-check-review")?.remove();
-    const card = document.createElement("section"); card.className = "admin-card identity-check-review";
+    const card = document.createElement("div"); card.className = "identity-check-review";
     card.setAttribute("aria-label", "Результаты проверки документов");
-    const title = document.createElement("h3"); title.textContent = `Проверка анкеты · №${bookingId}`; card.append(title);
-    for (const [kind, check] of Object.entries(masked.document_checks || {})) {
-      const row = document.createElement("p");
-      row.textContent = `${labels[kind] || kind}: ${check.document === "document" ? "документ" : check.document === "not_document" ? "не документ" : "не определено"}, ${check.student === "student" ? "студенческий" : check.student === "other" ? "другой документ" : "тип не определён"}. ${reasons[check.reason] || reasons.manual_review}.`;
-      card.append(row);
-    }
-    const notice = document.createElement("p"); notice.textContent = "Предварительный результат. Сверьте фотографии и реквизиты перед ручным решением."; card.append(notice);
-    const actions = document.createElement("div"); actions.className = "action-row";
-    actions.append(actionButton("Раскрыть реквизиты", async () => {
+    const personal = reviewSection("Личные данные", "review-personal-data");
+    personal.append(labelledValues([["ФИО", masked.full_name || order.customer_name], ["Контакт", order.customer_contact]]));
+    const documentSection = reviewSection("Документ", "review-document-data");
+    documentSection.append(labelledValues([["Тип документа", "Паспорт РФ и студенческий билет"], ["Номер паспорта · скрыт", masked.passport || "Скрыт до раскрытия реквизитов"], ["Номер студенческого · скрыт", masked.student_id || "Скрыт до раскрытия реквизитов"]]));
+    const reveal = actionButton("Раскрыть реквизиты", async () => {
       const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
-      const details = document.createElement("p"); details.className = "identity-revealed";
-      details.textContent = `ФИО: ${full.full_name}. Дата рождения: ${full.birth_date}. Паспорт: ${full.passport_series} ${full.passport_number}. Выдан: ${full.passport_issued_at}, ${full.passport_issuer}. Код: ${full.passport_division_code}. Регистрация: ${full.registration_address}. Проживание: ${full.residential_address}. Студенческий: ${full.student_id_number}, ${full.student_institution}.`;
-      card.querySelector(".identity-revealed")?.remove(); card.append(details);
-    }, bookingId, "secondary", false));
-    actions.append(actionButton("Подтвердить документы", async () => {
+      if (!isCurrent() || !card.isConnected) return;
+      personal.querySelector("dl")?.remove(); documentSection.querySelector("dl")?.remove();
+      personal.append(labelledValues([["ФИО", full.full_name], ["Контакт", order.customer_contact], ["Дата рождения", full.birth_date], ["Адрес регистрации", full.registration_address], ["Адрес проживания", full.residential_address]]));
+      const values = labelledValues([["Тип документа", "Паспорт РФ"], ["Серия и номер", `${full.passport_series || ""} ${full.passport_number || ""}`.trim()], ["Дата выдачи", full.passport_issued_at], ["Кем выдан", full.passport_issuer], ["Код подразделения", full.passport_division_code], ["Номер студенческого", full.student_id_number], ["Учебное заведение", full.student_institution]]);
+      values.classList.add("identity-revealed"); documentSection.insertBefore(values, reveal);
+      reveal.hidden = true;
+    }, bookingId, "secondary lock-exempt", false);
+    documentSection.append(reveal);
+    const checks = reviewSection("Результат проверки документов", "review-document-checks");
+    const documentKinds = [...new Set([...(masked.documents || []), ...Object.keys(masked.document_checks || {})])];
+    if (!documentKinds.length) { const note = document.createElement("p"); note.textContent = "Автоматическая проверка отсутствует. Требуется ручная проверка документов."; checks.append(note); }
+    for (const kind of documentKinds) {
+      const check = masked.document_checks?.[kind] || {};
+      const group = document.createElement("div"); group.className = "document-verdict";
+      const title = document.createElement("h5"); title.textContent = labels[kind] || "Документ"; group.append(title);
+      group.append(labelledValues([["Автоматический результат", `${check.document === "document" ? "документ" : check.document === "not_document" ? "не документ" : "не определено"}, ${check.student === "student" ? "студенческий" : check.student === "other" ? "другой документ" : "тип не определён"}`], ["Причина / ручная проверка", reasons[check.reason] || reasons.manual_review]]));
+      if ((masked.documents || documentKinds).includes(kind)) group.append(actionButton(`Открыть фото · ${labels[kind] || "документ"}`, () => openDocumentViewer(bookingId, kind), bookingId, "ghost document-button lock-exempt", false));
+      checks.append(group);
+    }
+    const notice = document.createElement("p"); notice.className = "review-advisory"; notice.textContent = "Предварительный результат. Сверьте фотографии и реквизиты перед ручным решением. Сбой или таймаут автоматической проверки допускает ручное решение."; checks.append(notice);
+    const decision = reviewSection("Решение по анкете", "review-decision");
+    if (masked.review_comment) { const comment = document.createElement("p"); comment.textContent = `Комментарий к исправлениям: ${masked.review_comment}`; decision.append(comment); }
+    const actions = document.createElement("div"); actions.className = "action-row";
+    const approve = actionButton("Подтвердить документы", async () => {
       if (!window.confirm("Фотографии и реквизиты сверены? Подтвердить документы?")) return;
       await api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
-    }, bookingId, "primary"));
-    actions.append(actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost"));
+    }, bookingId, "primary lock-exempt");
+    const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost lock-exempt");
+    const canReview = ["confirmed", "preparing", "ready"].includes(order.status) && ["submitted", "needs_changes", "verified"].includes(order.identity_status);
+    approve.disabled = changes.disabled = !canReview;
+    actions.append(approve, changes);
+    if (!canReview) { const note = document.createElement("p"); note.textContent = "Решение по анкете доступно на этапах подтверждения, подготовки и готовности к выдаче."; decision.append(note); }
     const close = document.createElement("button"); close.className = "button ghost"; close.type = "button"; close.textContent = "Закрыть";
-    close.addEventListener("click", () => card.remove()); actions.append(close); card.append(actions);
-    $("admin-content").prepend(card); card.scrollIntoView({behavior:"smooth", block:"start"});
+    close.addEventListener("click", () => { clearRequestReview(requestCard); [...host.querySelectorAll("button")].find((button) => button.textContent === "Проверить анкету")?.focus({ preventScroll: true }); });
+    actions.append(close); decision.append(actions); card.append(personal, documentSection, checks, decision); host.append(card);
   }
 
   function requestIdentityChanges(bookingId) {
@@ -941,22 +1099,30 @@
       const text = document.createElement("span"); text.textContent = label;
       row.append(checkbox, text); choices.append(row);
     }
-    form.reset(); dialog.hidden = false; dialog.querySelector("input")?.focus();
+    const returnFocus = document.activeElement;
+    form.reset(); $("identity-review-submit").disabled = false; dialog.hidden = false; dialog.querySelector("input")?.focus();
     return new Promise((resolve, reject) => {
-      const finish = () => { dialog.hidden = true; form.removeEventListener("submit", submit); $("identity-review-cancel").removeEventListener("click", cancel); };
-      const cancel = () => { finish(); resolve(); };
+      let submitting = false;
+      const keydown = (event) => {
+        if (event.key === "Escape") { event.preventDefault(); cancel(); }
+        if (event.key === "Tab") trapDialogFocus(event, dialog);
+      };
+      const finish = () => { dialog.hidden = true; form.reset(); $("identity-review-cancel").disabled = false; form.removeEventListener("submit", submit); dialog.removeEventListener("keydown", keydown); $("identity-review-cancel").removeEventListener("click", cancel); if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); };
+      const cancel = () => { if (submitting) return; finish(); resolve(); };
       const submit = async (event) => {
         event.preventDefault();
+        if (submitting) return;
         const button = $("identity-review-submit"); button.disabled = true;
         const selected = [...form.querySelectorAll('input[name="fields"]:checked')].map((input) => input.value);
         const comment = String(new FormData(form).get("comment") || "").trim();
         if (!selected.length && !comment) { showError("Выберите поля для исправления или добавьте комментарий."); button.disabled = false; return; }
+        submitting = true; $("identity-review-cancel").disabled = true;
         try {
           const result = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: false, comment: comment || "Нужны исправления", fields: selected }) });
           finish(); resolve(result);
-        } catch (error) { showError(error.message); button.disabled = false; }
+        } catch (error) { showError(error.message); submitting = false; $("identity-review-cancel").disabled = false; button.disabled = false; }
       };
-      form.addEventListener("submit", submit); $("identity-review-cancel").addEventListener("click", cancel);
+      form.addEventListener("submit", submit); dialog.addEventListener("keydown", keydown); $("identity-review-cancel").addEventListener("click", cancel);
     });
   }
 
@@ -1001,7 +1167,17 @@
   let documentViewerItems = [];
   let documentViewerIndex = 0;
   let documentViewerBookingId = null;
+  let documentViewerSequence = 0;
+  let documentViewerReturnFocus = null;
+  function trapDialogFocus(event, dialog) {
+    const focusable = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex='0']")].filter((node) => !node.hidden && node.getClientRects().length);
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
   async function openDocumentViewer(bookingId, kind) {
+    if (!state.role?.pii_admin) return;
+    documentViewerReturnFocus = document.activeElement;
     documentViewerBookingId = bookingId;
     documentViewerItems = ["passport_main", "passport_registration", "student_front"];
     documentViewerIndex = Math.max(0, documentViewerItems.indexOf(kind));
@@ -1010,17 +1186,26 @@
     await loadDocumentViewerImage(bookingId);
   }
   async function loadDocumentViewerImage(bookingId) {
+    const sequence = ++documentViewerSequence;
     const kind = documentViewerItems[documentViewerIndex];
     const labels = { passport_main: "Паспорт — страница с фото", passport_registration: "Паспорт — регистрация", student_front: "Студенческий — лицевая сторона" };
     const response = await fetch(`/api/miniapp/admin/bookings/${bookingId}/identity/documents/${kind}`, { headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store" });
+    if (sequence !== documentViewerSequence || $("document-viewer").hidden || documentViewerBookingId !== bookingId) return;
     if (!response.ok) { closeDocumentViewer(); throw new Error("Не удалось открыть фотографию"); }
+    const blob = await response.blob();
+    if (sequence !== documentViewerSequence || $("document-viewer").hidden || documentViewerBookingId !== bookingId) return;
     if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl);
-    documentViewerUrl = URL.createObjectURL(await response.blob()); $("document-viewer-image").src = documentViewerUrl; $("document-viewer-title").textContent = labels[kind] || "Документ";
+    documentViewerUrl = URL.createObjectURL(blob); $("document-viewer-image").src = documentViewerUrl; $("document-viewer-title").textContent = labels[kind] || "Документ";
     $("document-viewer-image").alt = labels[kind] || "Документ";
     $("document-viewer-prev").disabled = documentViewerIndex === 0;
     $("document-viewer-next").disabled = documentViewerIndex === documentViewerItems.length - 1;
   }
-  function closeDocumentViewer() { $("document-viewer").hidden = true; $("document-viewer-image").removeAttribute("src"); if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl); documentViewerUrl = ""; }
+  function closeDocumentViewer() {
+    const wasOpen = !$("document-viewer").hidden;
+    documentViewerSequence += 1; documentViewerBookingId = null; $("document-viewer").hidden = true; $("document-viewer-image").removeAttribute("src"); if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl); documentViewerUrl = "";
+    if (wasOpen && documentViewerReturnFocus?.isConnected) documentViewerReturnFocus.focus({ preventScroll: true });
+    documentViewerReturnFocus = null;
+  }
 
   function renderAdminCatalog(result, editor = null) {
     const content = $("admin-content"); content.replaceChildren();
@@ -1290,6 +1475,7 @@
   $("identity-close").addEventListener("click", () => { $("identity-form").reset(); state.consent = null; state.identityBookingId = null; showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer();  });
+  $("document-viewer").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("document-viewer")); });
   $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("consent-next").addEventListener("click", async () => {

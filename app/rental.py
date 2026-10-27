@@ -71,14 +71,56 @@ def release_booking_operation(booking_id, actor_id, stage=None):
             raise Conflict("Этап обрабатывает другой оператор")
 
 
-def active_operation_leases():
+def operation_lease_states():
+    """Current-stage claims including expired ones, for transparent handoff UI."""
+    current = now()
     with Session() as session:
         rows = session.execute(select(BookingOperationLease, Booking.status).join(
             Booking, Booking.id == BookingOperationLease.booking_id).where(
-            BookingOperationLease.expires_at > now())).all()
+            Booking.status.in_(ACTIVE_STATUSES),
+            BookingOperationLease.stage == Booking.status)).all()
         return {lease.booking_id: {"stage": lease.stage, "actor_id": lease.actor_id,
-                                   "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat()}
-                for lease, status in rows if lease.stage == status}
+                                   "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat(),
+                                   "expired": lease.expires_at <= current}
+                for lease, _ in rows}
+
+
+def active_operation_leases():
+    # Preserve the v0.3.0 shape and its active-only semantics for older callers.
+    return {booking_id: {key: value for key, value in lease.items() if key != "expired"}
+            for booking_id, lease in operation_lease_states().items() if not lease["expired"]}
+
+
+_HISTORY_STATUS_ACTIONS = {"created", "pending", "confirmed", "preparing", "ready", "issued",
+                           "return_inspection", "returned", "cancelled", "expired"}
+_HISTORY_OPERATION_ACTIONS = {"act_signed", "contact_updated", "repair_closed"}
+_HISTORY_IDENTITY_ACTIONS = {"verified", "changes_requested", "blocked", "unblocked",
+                             "manual_delete", "subject_request", "retention_purge"}
+
+
+def booking_history(booking_id):
+    """Merge existing audit trails using a strict, content-free event allowlist.
+
+    Review comments, field names, document verdicts and access/download events
+    never enter the staff history response. Actor IDs identify who acted without
+    copying names or other personal data into the log.
+    """
+    with Session() as session:
+        if session.get(Booking, booking_id) is None:
+            raise ValueError("Заявка не найдена")
+        items = []
+        for row in session.scalars(select(Audit).where(
+            Audit.booking_id == booking_id,
+            Audit.action.in_(_HISTORY_STATUS_ACTIONS | _HISTORY_OPERATION_ACTIONS))):
+            items.append({"id": f"audit:{row.id}", "action": row.action, "actor_id": row.actor_id,
+                          "created_at": row.created_at.isoformat(),
+                          "category": "status" if row.action in _HISTORY_STATUS_ACTIONS else "operation"})
+        for row in session.scalars(select(PIIAudit).where(
+            PIIAudit.booking_id == booking_id, PIIAudit.action.in_(_HISTORY_IDENTITY_ACTIONS))):
+            items.append({"id": f"pii:{row.id}", "action": row.action, "actor_id": row.actor_id,
+                          "created_at": row.created_at.isoformat(), "category": "identity"})
+        return sorted(items, key=lambda item: (item["created_at"], item["id"].split(":")[0],
+                                               int(item["id"].split(":")[1])))
 
 
 def validated_rate(value):

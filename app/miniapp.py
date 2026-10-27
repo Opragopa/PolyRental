@@ -41,8 +41,8 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identit
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
-from .rental import (Conflict, active_operation_leases, assign_booking_assets, availability,
-                     claim_booking_operation, create_booking,
+from .rental import (Conflict, assign_booking_assets, availability, booking_history,
+                     claim_booking_operation, create_booking, operation_lease_states,
                      close_repair, delete_booking, delete_dependency, delete_equipment, get_booking,
                      list_articles, list_bookings, list_customer_bookings,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
@@ -523,9 +523,27 @@ def admin_booking_view(booking):
 @router.get("/api/miniapp/admin/bookings")
 async def admin_bookings(user=Depends(require_admin)):
     bookings, leases = await asyncio.gather(asyncio.to_thread(list_bookings),
-                                            asyncio.to_thread(active_operation_leases))
-    return {"items": [admin_booking_view(booking) | {"operation_lease": leases.get(booking.id)}
-                      for booking in bookings]}
+                                            asyncio.to_thread(operation_lease_states))
+    items = []
+    for booking in bookings:
+        state = leases.get(booking.id)
+        # Reads may straddle another operator's transition; never show a claim
+        # from a different stage alongside this request snapshot.
+        if state and state["stage"] != booking.status:
+            state = None
+        active = ({key: value for key, value in state.items() if key != "expired"}
+                  if state and not state["expired"] else None)
+        items.append(admin_booking_view(booking) | {"operation_lease": active,
+                                                   "operation_lease_state": state})
+    return {"items": items}
+
+
+@router.get("/api/miniapp/admin/bookings/{booking_id}/history")
+async def admin_booking_history(booking_id: int, user=Depends(require_admin)):
+    try:
+        return {"items": await asyncio.to_thread(booking_history, booking_id)}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/operation")
