@@ -206,7 +206,9 @@ def archived_document(booking_id, kind, actor_id, refresh=False):
             return body, saved.filename
 
     body = render_document(booking_id, kind, include_identity=True, actor_id=actor_id)
-    filename = f"{'act' if kind == 'issue' else 'receipt'}-{booking_id}.docx"
+    booking = get_booking(booking_id)
+    public_id = (booking.human_number or "request").replace("ТС", "TS")
+    filename = f"{'act' if kind == 'issue' else 'receipt'}-{public_id}.docx"
     nonce = os.urandom(12)
     aad = f"{booking_id}:{kind}:doc-v1".encode()
     encrypted = AESGCM(_master_key()).encrypt(nonce, body, aad)
@@ -238,7 +240,7 @@ def operator_document(booking_id, kind, actor_id):
         raise ValueError("Заявка не найдена")
     if booking.status in {"confirmed", "preparing"} or (booking.status == "ready" and not booking.act_signed_at):
         return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
-            f"{'act' if kind == 'issue' else kind}-{booking_id}.docx"
+            f"{'act' if kind == 'issue' else kind}-{(booking.human_number or 'request').replace('ТС', 'TS')}.docx"
     if kind == "receipt":
         with Session() as session:
             damaged_photo = session.scalar(select(Inspection.id).where(

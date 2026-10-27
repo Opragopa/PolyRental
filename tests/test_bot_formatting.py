@@ -17,28 +17,33 @@ def test_booking_message_waits_for_operator_without_deadline():
     assert "до подтверждения или отмены" in text
 
 
-def test_support_message_escapes_user_text(monkeypatch):
+def test_support_question_is_not_broadcast_to_admins(monkeypatch):
+    import app.bot as bot_module
     monkeypatch.setenv("ADMIN_IDS", "100")
+    saved = []
+    monkeypatch.setattr(bot_module, "submit_question", lambda *args: (saved.append(args) or {"id": 1, "owner_id": None}))
     message = SimpleNamespace(text="<b>важно</b> & вопрос", from_user=SimpleNamespace(
         id=42, full_name="Анна <script>"), answer=AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock())
     state = SimpleNamespace(clear=AsyncMock())
     asyncio.run(support_message(message, state, bot))
-    text = bot.send_message.call_args.args[1]
-    assert "&lt;b&gt;важно&lt;/b&gt; &amp; вопрос" in text
-    assert "Анна &lt;script&gt;" in text
-    assert bot.send_message.call_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert saved[0][-1] == message.text
+    bot.send_message.assert_not_called()
 
 
-def test_manager_reply_escapes_dynamic_body(monkeypatch):
+def test_manager_reply_uses_protected_support_queue(monkeypatch):
+    import app.bot as bot_module
     monkeypatch.setenv("ADMIN_IDS", "100")
+    monkeypatch.setenv("PII_ADMIN_IDS", "100")
+    saved = []
+    monkeypatch.setattr(bot_module, "support_reply", lambda *args: (saved.append(args) or 5))
+    monkeypatch.setattr(bot_module, "deliver_reply", AsyncMock(return_value=True))
     message = SimpleNamespace(text="/reply 42 <u>текст</u> & ещё", from_user=SimpleNamespace(id=100),
                               answer=AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock())
     asyncio.run(reply_to_customer(message, bot))
-    text = bot.send_message.call_args.args[1]
-    assert "&lt;u&gt;текст&lt;/u&gt; &amp; ещё" in text
-    assert bot.send_message.call_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert saved == [(42, 100, "<u>текст</u> & ещё")]
+    bot.send_message.assert_not_called()
 
 
 def test_status_update_names_stage_and_escapes_operator():
@@ -50,7 +55,7 @@ def test_status_update_names_stage_and_escapes_operator():
     assert "Статус: документы проверены." in booking_status_text(14, "identity_verified", "Анна")
 
 
-def test_bot_command_sends_operator_and_stage_to_customer(monkeypatch):
+def test_bot_command_reports_status_to_operator_without_customer_push(monkeypatch):
     import app.bot as bot_module
     monkeypatch.setenv("ADMIN_IDS", "100")
     monkeypatch.setattr(bot_module, "transition", lambda *_: "confirmed")
@@ -59,14 +64,13 @@ def test_bot_command_sends_operator_and_stage_to_customer(monkeypatch):
                               answer=AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock())
     asyncio.run(change(message, bot))
-    text = bot.send_message.call_args.args[1]
+    text = message.answer.call_args.args[0]
     assert "Этап: <b>Подтверждение заявки</b>" in text
     assert "Оператор: <b>Анна &amp; Олег</b>" in text
-    assert message.answer.call_args.args[0] == text
-    assert bot.send_message.call_args.kwargs["parse_mode"] == ParseMode.HTML
+    bot.send_message.assert_not_called()
 
 
-def test_miniapp_status_notification_names_operator_and_stage(monkeypatch):
+def test_miniapp_status_does_not_send_push(monkeypatch):
     import app.bot as bot_module
 
     class FakeBot:
@@ -82,8 +86,4 @@ def test_miniapp_status_notification_names_operator_and_stage(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123:test-secret")
     monkeypatch.setattr(bot_module, "make_bot", lambda _: fake_bot)
     asyncio.run(notify_booking_status(14, 42, "return_inspection", "Иван <Петров>"))
-    text = fake_bot.send_message.call_args.args[1]
-    assert fake_bot.send_message.call_args.args[0] == 42
-    assert "Этап: <b>Приём оборудования</b>" in text
-    assert "Оператор: <b>Иван &lt;Петров&gt;</b>" in text
-    assert fake_bot.send_message.call_args.kwargs["parse_mode"] == ParseMode.HTML
+    fake_bot.send_message.assert_not_called()

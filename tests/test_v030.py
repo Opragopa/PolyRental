@@ -77,8 +77,8 @@ def test_bot_launches_authenticated_inline_app(monkeypatch, user_id, staff):
     message = SimpleNamespace(from_user=SimpleNamespace(id=user_id), answer=AsyncMock())
     asyncio.run(bot.book(message, AsyncMock()))
     button = message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.web_app.url == "https://example.test/miniapp"
-    assert ("управление" in button.text) == staff
+    assert button.web_app.url == "https://example.test/miniapp?startapp=booking"
+    assert button.text == "Открыть каталог"
     assert bot.main_keyboard().keyboard[0][0].web_app is None
 
 

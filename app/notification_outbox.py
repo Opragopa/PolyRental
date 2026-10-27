@@ -18,53 +18,46 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def enqueue_notification(booking_id: int | None, recipient_id: int, event: str, message: str) -> int:
+def enqueue_notification(booking_id: int | None, recipient_id: int, event: str, message: str, due=None) -> int:
     """Write before delivery so a process restart cannot silently lose a message."""
     with Session.begin() as session:
         existing_booking_id = booking_id if booking_id is not None and session.get(Booking, booking_id) else None
         delivery = NotificationDelivery(booking_id=existing_booking_id, recipient_id=recipient_id,
-                                        event=event[:50], message=message, next_retry_at=_now())
+                                        event=event[:50], message=message, next_retry_at=due or _now())
         session.add(delivery)
         session.flush()
         return delivery.id
 
 
 async def deliver_notification(delivery_id: int) -> bool:
-    """Attempt one send and persist either success or the reason and retry time."""
+    """Serialize attempts per outbox row; record failures without message content."""
     token = os.getenv("BOT_TOKEN", "")
     if not token:
         return False
-    with Session() as session:
-        delivery = session.get(NotificationDelivery, delivery_id)
-        if delivery is None or delivery.sent_at is not None:
-            return delivery is not None
-        recipient_id, message = delivery.recipient_id, delivery.message
-    try:
-        from .bot import make_bot
-        from aiogram.enums import ParseMode
-        async with make_bot(token) as bot:
-            await bot.send_message(recipient_id, message, parse_mode=ParseMode.HTML)
-    except Exception as exc:  # Telegram and network failures must remain observable and retriable.
-        error = f"{type(exc).__name__}: {exc}"[:1000]
-        with Session.begin() as session:
-            delivery = session.get(NotificationDelivery, delivery_id, with_for_update=True)
-            if delivery is None or delivery.sent_at is not None:
-                return delivery is not None
+    with Session.begin() as session:
+        delivery = session.scalar(select(NotificationDelivery).where(
+            NotificationDelivery.id == delivery_id).with_for_update(skip_locked=True))
+        if delivery is None:
+            return False
+        if delivery.sent_at is not None or delivery.cancelled_at is not None:
+            return delivery.cancelled_at is None
+        try:
+            from .bot import make_bot
+            from aiogram.enums import ParseMode
+            async with make_bot(token) as bot:
+                await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery.message, parse_mode=ParseMode.HTML), timeout=10)
+        except Exception as exc:
             delivery.attempts += 1
             delay = min(2 ** min(delivery.attempts, 10), MAX_BACKOFF_SECONDS)
-            delivery.last_error = error
+            delivery.last_error = type(exc).__name__
             delivery.next_retry_at = _now() + timedelta(seconds=delay)
-        logger.warning("Telegram notification %s to %s failed (will retry): %s",
-                       delivery_id, recipient_id, error)
-        return False
-    with Session.begin() as session:
-        delivery = session.get(NotificationDelivery, delivery_id, with_for_update=True)
-        if delivery is not None:
-            delivery.attempts += 1
-            delivery.last_error = None
-            delivery.next_retry_at = None
-            delivery.sent_at = _now()
-    return True
+            logger.warning("Telegram notification %s failed (%s); retry scheduled", delivery_id, type(exc).__name__)
+            return False
+        delivery.attempts += 1
+        delivery.last_error = None
+        delivery.next_retry_at = None
+        delivery.sent_at = _now()
+        return True
 
 
 async def notify(booking_id: int | None, recipient_id: int, event: str, message: str) -> bool:
@@ -75,10 +68,23 @@ async def notify(booking_id: int | None, recipient_id: int, event: str, message:
     return await deliver_notification(delivery_id)
 
 
+async def notify_actionable(booking_id: int | None, recipient_id: int, event: str, message: str) -> bool:
+    """Persist immediately, but deliver after the recipient's quiet hours."""
+    if not os.getenv("BOT_TOKEN", ""):
+        return False
+    from .operator_preferences import next_actionable_time
+    current = _now()
+    due = await asyncio.to_thread(next_actionable_time, recipient_id, current)
+    delivery_id = await asyncio.to_thread(enqueue_notification, booking_id, recipient_id, event, message, due)
+    if due > current + timedelta(seconds=1):
+        return True
+    return await deliver_notification(delivery_id)
+
+
 def pending_notification_ids(limit=100):
     with Session() as session:
         return session.scalars(select(NotificationDelivery.id).where(
-            NotificationDelivery.sent_at.is_(None),
+            NotificationDelivery.sent_at.is_(None), NotificationDelivery.cancelled_at.is_(None),
             or_(NotificationDelivery.next_retry_at.is_(None), NotificationDelivery.next_retry_at <= _now())
         ).order_by(NotificationDelivery.id).limit(limit)).all()
 

@@ -134,7 +134,13 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
                            json={"approved": True, "comment": ""}).status_code == 200
         assert reveal_identity(booking_id, 200)["passport_number"] == "123456"
         assign_booking_assets(booking_id, 100)
-        assert render_document(booking_id, "receipt", True, 200)[:2] == b"PK"
+        receipt = render_document(booking_id, "receipt", True, 200)
+        assert receipt[:2] == b"PK"
+        from docx import Document
+        from app.rental import get_booking
+        document = Document(io.BytesIO(receipt))
+        receipt_text = "\n".join([p.text for p in document.paragraphs] + [cell.text for table in document.tables for row in table.rows for cell in row.cells])
+        assert get_booking(booking_id).human_number in receipt_text
 
 
 def test_bad_mime_rejected(monkeypatch):

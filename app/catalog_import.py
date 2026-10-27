@@ -217,6 +217,7 @@ def import_catalog_csv(data: bytes):
             else:
                 fields = DEFAULTS | model["fields"]
                 article = Article(sku=sku, name=model["name"], hourly_rate=Decimal("0"),
+                                  is_test=sku.upper().startswith("TEST-"),
                                   description=fields["description"], composition=fields["composition"],
                                   category=fields["category"], inspection_profile=fields["inspection_profile"],
                                   buffer_hours=fields["buffer_hours"], image_url=fields["image_url"],

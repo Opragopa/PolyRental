@@ -18,11 +18,13 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import init_db
 from .booking_messages import booking_status_text
-from .notification_outbox import notify
+from .notification_outbox import notify, notify_actionable
 from .miniapp import BookingRequest
 from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
-from .rental import resolve_booking_number
+from .rental import resolve_booking_number, ClientBlocked
+from .support import submit_question, reply as support_reply, deliver_reply, SupportConflict
+from .catalog_titles import catalog_title
 
 router = Router()
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -111,12 +113,8 @@ def equipment_keyboard(items, selected):
 
 
 async def notify_managers(_bot, booking_id):
-    booking = await asyncio.to_thread(get_booking, booking_id)
-    message = (f"<b>Новая заявка {booking.human_number or f'№{booking_id}'}</b>\n"
-               f"<code>/confirm {booking.human_number or booking_id}</code> или <code>/cancel {booking.human_number or booking_id}</code>")
-    recipients = configured_ids("ADMIN_IDS")
-    await asyncio.gather(*(notify(booking_id, recipient_id, "booking_created", message)
-                           for recipient_id in recipients))
+    # Unassigned requests appear in the shared queue without a push.
+    return None
 
 
 async def show_equipment(message, state):
@@ -150,7 +148,7 @@ async def show_review(message, state):
         await message.answer("Выбранное оборудование уже занято. Выберите другое или измените сроки.", reply_markup=flow_keyboard())
         return await show_equipment(message, state)
     await state.update_data(expected_total=None, editing=None)
-    items_text = "\n".join(f"• {html.escape(item['name'])}" for item in chosen)
+    items_text = "\n".join(f"• {html.escape(item.get('title') or item['name'])}" for item in chosen)
     text = (f"<b>Проверьте заявку</b>\n\n<u>Период</u>: {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
             f"<u>Оборудование</u>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> <tg-spoiler>{html.escape(data['contact'])}</tg-spoiler>\n\n"
             "<i>После отправки заявка будет ждать решения оператора без ограничения по времени.</i>")
@@ -168,7 +166,7 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     text = "<b>Политех.АРЕНДА</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
     if not miniapp_url():
-        text += " Пока PUBLIC_URL не указывает на HTTPS, бронирование доступно в чате."
+        text += " Приложение бронирования временно недоступно."
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
@@ -179,12 +177,11 @@ async def book(message: Message, state: FSMContext):
         staff = is_staff(message.from_user.id)
         if staff:
             audit_admin_access(message.from_user.id, "bot_book")
-        await message.answer("Откройте удобную форму бронирования или продолжите в чате.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть управление" if staff else "Открыть приложение", web_app=WebAppInfo(url=miniapp_url()))],
-            [InlineKeyboardButton(text="Бронировать в чате", callback_data="rent:chat")],
+        await message.answer("Выберите даты и оборудование в приложении.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть каталог", web_app=WebAppInfo(url=f"{miniapp_url()}?startapp=booking"))],
         ]))
         return
-    await begin_chat_booking(message, state)
+    await message.answer("Приложение бронирования временно недоступно. Обратитесь к оператору.")
 
 
 @router.message(F.web_app_data)
@@ -200,7 +197,7 @@ async def booking_from_miniapp(message: Message, bot: Bot):
             create_booking, message.from_user.id, payload.name.strip(), payload.contact.strip(), payload.start,
             payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total, return_created=True,
         )
-    except (ValueError, Conflict) as exc:
+    except (ValueError, Conflict, ClientBlocked) as exc:
         return await message.answer(f"Не удалось создать заявку: {exc}. Откройте приложение и проверьте сроки, оборудование и контакты.", reply_markup=main_keyboard())
     booking = await asyncio.to_thread(get_booking, booking_id)
     await message.answer(booking_created_text(booking), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
@@ -217,13 +214,18 @@ async def begin_chat_booking(message, state):
 
 @router.message(Command("book_chat"))
 async def book_chat(message: Message, state: FSMContext):
-    await begin_chat_booking(message, state)
+    await book(message, state)
 
 
 @router.callback_query(F.data == "rent:chat")
 async def book_chat_button(query: CallbackQuery, state: FSMContext):
     await query.answer()
-    await begin_chat_booking(query.message, state)
+    await state.clear()
+    if miniapp_url():
+        await query.message.answer("Выберите даты и оборудование в приложении.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть каталог", web_app=WebAppInfo(url=f"{miniapp_url()}?startapp=booking"))]]))
+    else:
+        await query.message.answer("Приложение бронирования временно недоступно. Обратитесь к оператору.")
 
 
 @router.message(F.text == "Отмена")
@@ -415,6 +417,22 @@ async def my_bookings(message: Message):
     await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
+@router.message(Command("find"))
+async def find_request(message: Message):
+    _, _, number = (message.text or "").partition(" ")
+    try:
+        booking_id = await asyncio.to_thread(resolve_booking_number, number)
+        booking = await asyncio.to_thread(get_booking, booking_id)
+        if not booking or (booking.customer_id != message.from_user.id and not is_staff(message.from_user.id)):
+            raise ValueError("Заявка не найдена")
+        status = {"pending": "ожидает оператора", "confirmed": "подтверждена", "preparing": "подготавливается",
+                  "ready": "готова к выдаче", "issued": "в аренде", "return_inspection": "проверка возврата",
+                  "returned": "завершена", "cancelled": "отменена", "expired": "истекла"}.get(booking.status, "в обработке")
+        await message.answer(f"Заявка {html.escape(booking.human_number)} · {status}")
+    except ValueError:
+        await message.answer("Заявка не найдена. Укажите полный номер или однозначные последние четыре цифры.")
+
+
 @router.message(F.text == "Связаться с менеджером")
 async def contact_manager(message: Message, state: FSMContext):
     await state.set_state(Support.message)
@@ -425,27 +443,29 @@ async def contact_manager(message: Message, state: FSMContext):
 async def support_message(message: Message, state: FSMContext, bot: Bot):
     if not message.text or not message.text.strip():
         return await message.answer("Отправьте вопрос текстом.")
-    name = message.from_user.full_name or "Клиент"
-    for admin_id in configured_ids("ADMIN_IDS"):
-        if admin_id:
-            try:
-                await bot.send_message(int(admin_id), f"<b>Вопрос от клиента</b> · {html.escape(name)} (Telegram ID <code>{message.from_user.id}</code>)\n{html.escape(message.text[:3000])}\nОтветить: <code>/reply {message.from_user.id} ТЕКСТ</code>", parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
+    try:
+        result = await asyncio.to_thread(submit_question, message.from_user.id, None, "bot", message.text)
+    except ValueError as exc:
+        return await message.answer(str(exc))
+    except Conflict:
+        return await message.answer("Поддержка временно недоступна. Попробуйте позже.")
+    if result["owner_id"]:
+        await notify_actionable(None, result["owner_id"], "support_action", f"Новое обращение №{result['id']}. Откройте поддержку в Mini App.")
     await state.clear()
-    await message.answer("Вопрос передан менеджеру.", reply_markup=main_keyboard())
+    await message.answer("Обращение получено.", reply_markup=main_keyboard())
 
 
 @router.message(Command("reply"))
 async def reply_to_customer(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
+    if message.from_user.id not in configured_ids("PII_ADMIN_IDS"):
         return
     try:
-        _, customer_id, body = (message.text or "").split(" ", 2)
-        await bot.send_message(int(customer_id), f"<b>Ответ менеджера</b>\n{html.escape(body[:3000])}", parse_mode=ParseMode.HTML)
-        await message.answer("Ответ отправлен.")
-    except Exception:
-        await message.answer("Формат: /reply TELEGRAM_ID ТЕКСТ")
+        _, thread_id, body = (message.text or "").split(" ", 2)
+        message_id = await asyncio.to_thread(support_reply, int(thread_id), message.from_user.id, body)
+        await deliver_reply(message_id)
+        await message.answer("Ответ поставлен в очередь доставки.")
+    except (ValueError, SupportConflict, Conflict):
+        await message.answer("Формат: /reply НОМЕР_ОБРАЩЕНИЯ ТЕКСТ. Ответ доступен владельцу обращения.")
 
 
 @router.message(Command("equipment"))
@@ -453,7 +473,7 @@ async def equipment(message: Message):
     if not is_admin(message.from_user.id):
         return
     items = await asyncio.to_thread(list_equipment)
-    await message.answer("\n".join(f"{e.id}: {e.name} ({e.inventory_number}), {e.condition}" for e in items) or "Пусто")
+    await message.answer("\n".join(f"{e.id}: {catalog_title(e.article.name, e.article.kind, e.article.brand, e.article.key_spec) if e.article else e.name} ({e.inventory_number}), {e.condition}" for e in items) or "Пусто")
 
 
 @router.message(Command("add"))
@@ -466,7 +486,7 @@ async def add_equipment(message: Message):
         await message.answer(f"Экземпляр #{item_id} добавлен. Изменение и состояние доступны в веб-панели.")
     except IntegrityError:
         await message.answer("Экземпляр с таким серийным номером уже существует.")
-    except (ValueError, Conflict) as exc:
+    except (ValueError, Conflict, ClientBlocked) as exc:
         await message.answer(f"Формат: /add НОМЕР НАЗВАНИЕ. {exc}")
 
 
@@ -480,7 +500,7 @@ async def set_equipment(message: Message):
         await message.answer(f"Экземпляр #{item_id} обновлен")
     except IntegrityError:
         await message.answer("Экземпляр с таким серийным номером уже существует.")
-    except (ValueError, Conflict) as exc:
+    except (ValueError, Conflict, ClientBlocked) as exc:
         await message.answer(f"Формат: /set ID НОМЕР available|maintenance|retired НАЗВАНИЕ. {exc}")
 
 
@@ -512,8 +532,7 @@ async def change(message: Message, bot: Bot):
         booking = await asyncio.to_thread(get_booking, booking_id)
         update_text = booking_status_text(getattr(booking, "human_number", None) or booking_id, status, operator)
         await message.answer(update_text, parse_mode=ParseMode.HTML)
-        await bot.send_message(booking.customer_id, update_text, parse_mode=ParseMode.HTML)
-    except (ValueError, Conflict) as exc:
+    except (ValueError, Conflict, ClientBlocked) as exc:
         await message.answer(f"Ошибка: {exc}. Формат: {command} НОМЕР")
 
 

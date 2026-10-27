@@ -83,7 +83,7 @@ def test_failed_telegram_notification_is_logged_and_retried(monkeypatch):
     with Session.begin() as session:
         delivery = session.scalar(select(NotificationDelivery))
         delivery.next_retry_at = outbox._now()
-        assert delivery.attempts == 1 and "temporary Telegram outage" in delivery.last_error
+        assert delivery.attempts == 1 and delivery.last_error == "RuntimeError"
     asyncio.run(outbox.retry_pending_notifications())
     with Session() as session:
         delivery = session.scalar(select(NotificationDelivery))

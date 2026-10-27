@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
@@ -20,7 +20,9 @@ from . import __version__
 from .db import Session, init_db
 from .documents import ensure_templates, render_document
 from .miniapp import STATIC_DIR, router as miniapp_router
-from .rental import TRANSITIONS
+from .rental import TRANSITIONS, expire_deletion_intents
+from .catalog_titles import catalog_title
+from .availability_events import listen_for_availability
 from .roles import is_staff, audit_admin_access, validate_role_config
 from .service import Conflict, expire_holds, list_bookings, list_equipment, save_equipment, transition
 
@@ -29,10 +31,11 @@ MOSCOW = ZoneInfo("Europe/Moscow")
 
 async def expiry_loop():
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(1)
         def expire():
             with Session.begin() as session:
                 expire_holds(session)
+            expire_deletion_intents()
         await asyncio.to_thread(expire)
 
 
@@ -57,8 +60,16 @@ async def lifespan(app):
     init_db()
     ensure_templates()
     task = asyncio.create_task(expiry_loop())
-    yield
-    task.cancel()
+    availability_task = asyncio.create_task(listen_for_availability())
+    try:
+        yield
+    finally:
+        task.cancel()
+        availability_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        with suppress(asyncio.CancelledError):
+            await availability_task
 
 
 app = FastAPI(lifespan=lifespan, version=__version__)
@@ -117,12 +128,12 @@ def dashboard(request: Request):
     parts = ['<p><a href="/admin/calendar">Календарь</a> · <a href="/admin/equipment">Оборудование</a></p><form method="post" action="/logout"><button>Выйти</button></form>']
     parts.append('<section><h2>Заявки</h2><table><tr><th>№</th><th>Клиент</th><th>Период</th><th>Оборудование</th><th>Статус</th><th>Действия</th></tr>')
     for booking in list_bookings():
-        items = ", ".join(f"{escape(line.article.name)} × {line.quantity}" for line in booking.lines)
+        items = ", ".join(f"{escape(catalog_title(line.article.name, line.article.kind, line.article.brand, line.article.key_spec))} × {line.quantity}" for line in booking.lines)
         labels = {"confirmed": "Подтвердить", "cancelled": "Отменить", "preparing": "Подготовить",
                   "ready": "Готов", "issued": "Выдать", "return_inspection": "Начать возврат", "returned": "Завершить возврат"}
         actions = " ".join(f'<form style="display:inline" method="post" action="/admin/bookings/{booking.id}/{action}"><button>{labels[action]}</button></form>' for action in sorted(TRANSITIONS.get(booking.status, set())))
         docs = " ".join(f'<a href="/admin/bookings/{booking.id}/documents/{kind}">{label}</a>' for kind, label in (("contract", "Договор"), ("issue", "Акт выдачи"), ("return", "Акт возврата")))
-        parts.append(f'<tr><td>{booking.id}</td><td>{escape(booking.customer_name)}<br>{escape(booking.customer_contact)}</td><td>{booking.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК</td><td>{items}</td><td>{booking.status}</td><td>{actions}<br>{docs}</td></tr>')
+        parts.append(f'<tr><td>{escape(booking.human_number or "Заявка")}</td><td>{escape(booking.customer_name)}<br>{escape(booking.customer_contact)}</td><td>{booking.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК</td><td>{items}</td><td>{booking.status}</td><td>{actions}<br>{docs}</td></tr>')
     parts.append('</table></section>')
     return page("PolyRental — менеджер", "".join(parts))
 
@@ -136,16 +147,6 @@ async def change_booking(request: Request, booking_id: int, action: str):
         raise HTTPException(409, str(exc))
     if status == "expired":
         raise HTTPException(409, "Удержание истекло; создайте новую заявку")
-    token = os.getenv("BOT_TOKEN", "")
-    if token:
-        from .bot import make_bot
-        from .service import get_booking
-        booking = await asyncio.to_thread(get_booking, booking_id)
-        try:
-            async with make_bot(token) as bot:
-                await bot.send_message(booking.customer_id, f"Статус заявки №{booking_id}: {status}")
-        except Exception:
-            pass
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -193,7 +194,7 @@ def calendar_feed(token: str):
         event = Event()
         event.add("uid", f"booking-{booking.id}@polyrental")
         equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
-        event.add("summary", f"Аренда №{booking.id}: {equipment or 'оборудование'}")
+        event.add("summary", f"Аренда {booking.human_number or 'заявка'}: {equipment or 'оборудование'}")
         event.add("description", f"PolyRental · статус: {booking.status}")
         event.add("dtstart", booking.starts_at)
         event.add("dtend", booking.ends_at)

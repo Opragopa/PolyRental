@@ -388,3 +388,11 @@ html.role-pending main, html.role-pending .action-bar { visibility: hidden; }
 #profile-name { font-weight: 700; }
 #return-to-management, #operator-book { margin: 12px 0; }
 #onboarding-dialog .button { min-height: 44px; }
+
+.delete-snackbar { position: fixed; z-index: 50; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(94vw, 560px); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 6px 24px #0004; }
+.delete-snackbar .button { min-height: 44px; }
+
+.request-equipment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.request-equipment { position: relative; min-height: 1.5em; }
+.request-equipment-empty { position: absolute; inset: 0 auto auto 0; margin: 0; }

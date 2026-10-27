@@ -120,7 +120,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       return route.fulfill({body:html,contentType:"text/html"});
     });
     await page.goto("http://polyrental.test/miniapp");
-    await page.locator("#admin-panel").waitFor({state:"visible"});
+    try { await page.locator("#admin-panel").waitFor({state:"visible"}); }
+    catch (error) { console.error("Page errors:", errors); throw error; }
     await page.locator(".admin-card").waitFor();
     assert.equal(await page.getByRole("button",{name:/^Проверить анкету/}).count(),0);
     await page.locator("#tab-new").click();

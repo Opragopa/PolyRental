@@ -92,8 +92,8 @@ if __name__ == "__main__":
                   "passport_series": "0000", "passport_number": "000000",
                   "passport_issued_at": "2020-01-01", "passport_issuer": "Тест",
                   "passport_division_code": "000-000", "registration_address": "Тестовый адрес",
-                  "residential_address": "Тестовый адрес", "student_id_number": "TEST",
-                  "student_institution": "Тест"}
+                  "residential_address": "Тестовый адрес", "student_id_number": "12345678",
+                  "student_institution": "Санкт-Петербургский государственный университет"}
         submit_identity(booking_id, 42, fields,
                         {kind: (photo.getvalue(), "image/jpeg") for kind in
                          ("passport_main", "passport_registration", "student_front")},

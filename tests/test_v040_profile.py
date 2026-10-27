@@ -77,3 +77,36 @@ def test_profile_history_is_paginated_filtered_and_customer_scoped(monkeypatch):
         assert len(completed["items"]) == 2 and all(x["status"] == "returned" for x in completed["items"])
         assert not ({x["id"] for x in first["items"]} & {x["id"] for x in second["items"]})
         assert client.get("/api/miniapp/profile/history?category=other", headers=headers(42)).status_code == 422
+
+
+def test_search_accepts_full_numbers_and_only_four_digit_sequences(monkeypatch):
+    configure(monkeypatch)
+    with Session.begin() as session:
+        for customer_id, number in ((42, "ТС260001"), (42, "ТС2610001"), (43, "ТС260002")):
+            session.add(Booking(customer_id=customer_id, human_number=number, customer_name="QA", customer_contact="@qa",
+                                starts_at=now(), ends_at=now() + timedelta(hours=1), status="pending"))
+    with TestClient(app) as client:
+        base = "/api/miniapp/profile/history?category=all&number="
+        assert [row["human_number"] for row in client.get(base + "0001", headers=headers(42)).json()["items"]] == ["ТС260001"]
+        assert [row["human_number"] for row in client.get(base + "ТС2610001", headers=headers(42)).json()["items"]] == ["ТС2610001"]
+        assert client.get(base + "ТС260002", headers=headers(42)).json()["items"] == []
+        assert client.get(base + "10001", headers=headers(42)).status_code == 422
+
+
+def test_blocked_client_cannot_create_but_can_open_profile(monkeypatch):
+    configure(monkeypatch)
+    from uuid import uuid4
+    from tests.test_integration import article_with_assets
+    article = article_with_assets("RIGHTS", 1)
+    start = now() + timedelta(days=5)
+    with TestClient(app) as client:
+        url = "/api/miniapp/admin/clients/42/booking-block"
+        assert client.put(url, headers=headers(200), json={"blocked": True}).status_code == 403
+        assert client.put(url, headers=headers(100), json={"blocked": True}).status_code == 200
+        assert client.get("/api/miniapp/profile", headers=headers(42)).json()["start_screen"] == "blocked"
+        payload = {"request_id": str(uuid4()), "start": start.isoformat(), "end": (start + timedelta(hours=1)).isoformat(),
+                   "lines": [{"article_id": article, "quantity": 1}], "name": "QA", "contact": "@qa_user"}
+        assert client.post("/api/miniapp/bookings", headers=headers(42), json=payload).status_code == 403
+        assert client.get("/api/miniapp/profile/history", headers=headers(42)).status_code == 200
+        assert client.put(url, headers=headers(100), json={"blocked": False}).status_code == 200
+        assert client.post("/api/miniapp/bookings", headers=headers(42), json=payload).status_code == 201

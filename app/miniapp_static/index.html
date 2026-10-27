@@ -36,11 +36,12 @@
       <div id="global-error" class="notice error" role="alert" hidden></div>
       <button id="return-to-management" class="button secondary" type="button" hidden>Вернуться в управление</button>
 
+      <section id="booking-blocked" class="panel" hidden><h2>Бронирование недоступно</h2><p>Обратитесь в поддержку, чтобы уточнить причину.</p><button id="blocked-support" class="button secondary" type="button">Поддержка</button></section>
       <section id="booking-flow" aria-label="Оформление бронирования">
         <ol id="steps" class="steps" aria-label="Шаги оформления">
           <li class="current"><button class="step-button" type="button" data-step="0"><span>01</span><b>Сроки</b></button></li>
           <li><button class="step-button" type="button" data-step="1"><span>02</span><b>Оборудование</b></button></li>
-          <li><button class="step-button" type="button" data-step="2"><span>03</span><b>Контакты</b></button></li>
+          <li><button class="step-button" type="button" data-step="2"><span>03</span><b>Подборка</b></button></li>
           <li><button class="step-button" type="button" data-step="3"><span>04</span><b>Проверка</b></button></li>
         </ol>
 
@@ -58,17 +59,17 @@
 
         <div id="step-items" class="panel step-panel" hidden>
           <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Что возьмёте в аренду?</h2></div><span class="panel-icon" aria-hidden="true">▦</span></div>
-          <p id="period-label" class="supporting"></p>
+          <p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты</button>
           <div id="items-status" class="notice" role="status" hidden></div>
           <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button>
-          <div id="items-grid" class="items-grid" aria-label="Доступное оборудование"></div>
+          <label class="field"><span>Поиск в каталоге</span><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"></label><div id="items-grid" class="items-grid" aria-label="Оборудование"></div>
           <details id="unavailable-details" class="unavailable-details" hidden><summary>Занятые интервалы и недоступные экземпляры</summary><div id="unavailable-list"></div></details>
           <div class="selection-bar"><span>Выбрано <strong id="selected-count">0</strong></span></div>
         </div>
 
         <div id="step-contact" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Как с вами связаться?</h2></div><span class="panel-icon" aria-hidden="true">✳</span></div>
-          <p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Подборка и контакт</h2></div><span class="panel-icon" aria-hidden="true">✳</span></div>
+          <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p><h3>Как с вами связаться?</h3><p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
           <label class="field"><span>Имя для заявки (не ФИО из анкеты)</span><input id="customer-name" type="text" autocomplete="nickname" maxlength="200" placeholder="Например, Анна" aria-describedby="name-error"><small id="name-error" class="field-error" role="alert" hidden></small></label>
           <label class="field"><span>Телефон или Telegram</span><input id="customer-contact" type="text" autocomplete="tel" maxlength="200" placeholder="+7 999 123-45-67 или @username" aria-describedby="contact-error"><small id="contact-error" class="field-error" role="alert" hidden></small></label>
           <p class="privacy-note">Имя и контакт сохраняются на этом устройстве для следующей заявки. Их можно исправить перед отправкой.</p>
@@ -90,7 +91,7 @@
 
       <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
         <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2>Мои заявки</h2></div><span class="panel-icon" aria-hidden="true">≡</span></div>
-        <div id="profile-header"><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Важные сообщения о заявках от этой настройки не зависят.</p></div><label class="field"><span>История заявок</span><select id="profile-filter"><option value="active">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
+        <div id="profile-header"><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><button id="profile-support" class="button secondary" type="button">Поддержка</button><div id="profile-support-status" aria-live="polite"></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Важные сообщения о заявках от этой настройки не зависят.</p></div><label class="field"><span>История заявок</span><select id="profile-filter"><option value="all">Все</option><option value="active" selected>Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><form id="profile-search" class="action-row"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260001 или 0001"></label><button class="button secondary" type="submit">Найти</button></form><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
       </section>
 
       <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
@@ -129,6 +130,9 @@
         </form>
       </section>
 
+      <section id="support-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="support-title">
+        <div class="dialog-card"><h2 id="support-title">Поддержка</h2><p>Частые вопросы</p><div id="support-faq"></div><form id="support-form"><label class="field"><span>Написать оператору</span><textarea id="support-question" maxlength="3000" required></textarea></label><div class="action-row"><button id="support-close" class="button ghost" type="button">Закрыть</button><button class="button primary" type="submit">Отправить вопрос</button></div><p id="support-result" role="status"></p></form></div>
+      </section>
       <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy">
         <div class="dialog-card"><p id="onboarding-progress" class="step-kicker" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
       </section>
@@ -154,8 +158,9 @@
         <div class="admin-tabs">
           <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
-          <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button>
+          <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button><button id="admin-hidden-tests" class="button ghost admin-mode" data-mode="hidden_tests" type="button" hidden>Скрытые тестовые</button>
         </div>
+        <details id="operator-notification-settings" class="calendar-sync"><summary>Тихие часы уведомлений</summary><p>Обязательные уведомления будут доставлены после тихих часов. Пустые поля означают доставку в рабочее время.</p><form id="operator-quiet-form" class="form-grid"><label class="field"><span>Начало</span><input name="quiet_start" type="time"></label><label class="field"><span>Конец</span><input name="quiet_end" type="time"></label><button class="button secondary" type="submit">Сохранить</button><p id="operator-quiet-status" role="status"></p></form></details>
         <details class="calendar-sync">
           <summary>Подписка Google Calendar</summary>
           <p>Добавьте ленту в Google Calendar через «Другие календари → Добавить по URL». Будут отображаться подтверждённые аренды, выдачи и возвраты. Google обновляет подписку с задержкой.</p>
@@ -163,10 +168,11 @@
           <label id="calendar-feed-field" class="field wide" hidden><span>Ссылка подписки — доступна операторам</span><input id="calendar-feed-url" type="url" readonly></label>
           <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
         </details>
-        <div id="admin-content" role="status"></div>
+        <label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без владельца</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><div id="admin-content" role="status"></div>
       </section>
     </main>
 
+    <div id="delete-snackbar" class="delete-snackbar" role="status" aria-live="polite" hidden><span id="delete-message"></span><button id="delete-undo" class="button secondary" type="button">Отменить</button><button id="delete-retry" class="button secondary" type="button" hidden>Повторить</button></div>
     <footer id="action-bar" class="action-bar"><button id="back-button" class="button ghost" type="button" hidden>Назад</button><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
   </div>
 </body>
