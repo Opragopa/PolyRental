@@ -466,7 +466,7 @@
     try {
       const booking = await api("/api/miniapp/bookings", { method: "POST", body: JSON.stringify(payload) });
       state.booking = booking; state.step = 4; clearDraft();
-      $("done-title").textContent = `Заявка №${booking.id} создана`;
+      $("done-title").textContent = `Заявка ${booking.human_number || `№${booking.id}`} создана`;
       $("done-description").textContent = "Заявка будет ждать решения оператора без ограничения по времени. Статус придёт в Telegram.";
       tg?.HapticFeedback?.notificationOccurred("success");
     } catch (error) {
@@ -511,7 +511,7 @@
       if (!result.items.length) { $("orders-content").textContent = "Заявок пока нет. Начните с выбора сроков аренды."; return; }
       for (const order of result.items) {
         const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? "<p>Ожидает решения оператора без ограничения по времени.</p>" : ""}`;
+        card.innerHTML = `<div class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ")}</p>${order.status === "pending" ? "<p>Ожидает решения оператора без ограничения по времени.</p>" : ""}`;
         if (order.status === "pending") appendPendingContactEditor(card, order);
         if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
@@ -798,10 +798,10 @@
         const card = document.createElement("article"); card.className = "admin-card request-card"; card.dataset.bookingId = String(order.id);
         const accordion = document.createElement("details"); accordion.className = "request-accordion";
         const toggle = document.createElement("summary"); toggle.className = "request-toggle";
-        toggle.innerHTML = `<span class="order-head"><strong>Заказ №${order.id}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span>`;
+        toggle.innerHTML = `<span class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span>`;
         const body = document.createElement("div"); body.className = "request-body";
         const summary = reviewSection("Заявка", "request-summary");
-        summary.append(labelledValues([["Номер заявки", `№${order.id}`], ["Клиент", order.customer_name], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`], ["Статус", statusNames[order.status] || order.status], ["Анкета", identityStatusNames[order.identity_status] || order.identity_status]]));
+        summary.append(labelledValues([["Номер заявки", order.human_number || `№${order.id}`], ["Клиент", order.customer_name], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`], ["Статус", statusNames[order.status] || order.status], ["Анкета", identityStatusNames[order.identity_status] || order.identity_status]]));
         const equipment = document.createElement("p"); equipment.textContent = order.items.map((line) => `${line.name} × ${line.quantity}`).join(", "); summary.append(equipment);
         if (order.assets.length) {
           const assets = document.createElement("ul"); assets.className = "asset-list";

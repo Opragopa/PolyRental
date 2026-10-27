@@ -138,6 +138,7 @@ def require_pii_admin(user=Depends(require_customer)):
 def booking_view(booking):
     return {
         "id": booking.id,
+        "human_number": booking.human_number,
         "status": booking.status,
         "starts_at": booking.starts_at.isoformat(),
         "ends_at": booking.ends_at.isoformat(),
@@ -201,23 +202,27 @@ class BookingContactUpdate(BaseModel):
 
 
 async def notify_new_booking(booking_id: int, customer_id: int):
-    manager_message = (f"<b>Новая заявка №{booking_id}</b>\n"
-                       f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    number = booking.human_number or f"№{booking_id}"
+    manager_message = (f"<b>Новая заявка {number}</b>\n"
+                       f"<code>/confirm {booking.human_number or booking_id}</code> или <code>/cancel {booking.human_number or booking_id}</code>")
     await asyncio.gather(*(notify(booking_id, admin_id, "booking_created", manager_message)
                            for admin_id in _ids("ADMIN_IDS")),
                          notify(booking_id, customer_id, "booking_created_customer",
-                                f"<b>Заявка №{booking_id} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены."))
+                                f"<b>Заявка {number} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены."))
 
 
 async def notify_cancelled_booking(booking_id: int):
-    message = f"Клиент отменил заявку №{booking_id}."
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    message = f"Клиент отменил заявку {booking.human_number or f'№{booking_id}'}."
     await asyncio.gather(*(notify(booking_id, admin_id, "booking_cancelled", message)
                            for admin_id in _ids("ADMIN_IDS")))
 
 
 async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
+    booking = await asyncio.to_thread(get_booking, booking_id)
     await notify(booking_id, customer_id, f"booking_{status}",
-                 booking_status_text(booking_id, status, operator))
+                 booking_status_text(getattr(booking, "human_number", None) or booking_id, status, operator))
 
 
 async def notify_identity_submitted(booking_id: int):
@@ -225,7 +230,9 @@ async def notify_identity_submitted(booking_id: int):
     recipient_ids = _ids("ADMIN_IDS") | pii_admin_ids()
     if not recipient_ids:
         return
-    message = f"<b>Анкета обновлена · заявка №{booking_id}</b>\nПроверьте документы клиента в Mini App."
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    number = getattr(booking, "human_number", None) or f"№{booking_id}"
+    message = f"<b>Анкета обновлена · заявка {number}</b>\nПроверьте документы клиента в Mini App."
     await asyncio.gather(*(notify(booking_id, recipient_id, "identity_submitted", message)
                            for recipient_id in recipient_ids))
 

@@ -22,6 +22,7 @@ from .notification_outbox import notify
 from .miniapp import BookingRequest
 from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
+from .rental import resolve_booking_number
 
 router = Router()
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -65,7 +66,7 @@ def parse_time(value):
 
 
 def booking_created_text(booking):
-    return (f"<b>Заявка №{booking.id} создана</b>\n"
+    return (f"<b>Заявка {getattr(booking, 'human_number', None) or f'№{booking.id}'} создана</b>\n"
             "<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.")
 
 
@@ -110,8 +111,9 @@ def equipment_keyboard(items, selected):
 
 
 async def notify_managers(_bot, booking_id):
-    message = (f"<b>Новая заявка №{booking_id}</b>\n"
-               f"<code>/confirm {booking_id}</code> или <code>/cancel {booking_id}</code>")
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    message = (f"<b>Новая заявка {booking.human_number or f'№{booking_id}'}</b>\n"
+               f"<code>/confirm {booking.human_number or booking_id}</code> или <code>/cancel {booking.human_number or booking_id}</code>")
     recipients = configured_ids("ADMIN_IDS")
     await asyncio.gather(*(notify(booking_id, recipient_id, "booking_created", message)
                            for recipient_id in recipients))
@@ -409,7 +411,7 @@ async def my_bookings(message: Message):
         status = html.escape(names.get(booking.status, booking.status))
         if booking.status in {"cancelled", "expired"}:
             status = f"<s>{status}</s>"
-        lines.append(f"• <b>№{booking.id}</b> · {status} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
+        lines.append(f"• <b>{getattr(booking, 'human_number', None) or f'№{booking.id}'}</b> · {status} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
     await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
@@ -487,7 +489,7 @@ async def bookings(message: Message):
     if not is_admin(message.from_user.id):
         return
     data = await asyncio.to_thread(list_bookings)
-    await message.answer("\n".join(f"<b>№{b.id}</b> · {html.escape(b.status)} · <tg-spoiler>{html.escape(b.customer_name)}</tg-spoiler>: {b.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{b.ends_at.astimezone(MOSCOW):%d.%m %H:%M}" for b in data[:30]) or "Заявок нет", parse_mode=ParseMode.HTML)
+    await message.answer("\n".join(f"<b>{b.human_number or f'№{b.id}'}</b> · {html.escape(b.status)} · <tg-spoiler>{html.escape(b.customer_name)}</tg-spoiler>: {b.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{b.ends_at.astimezone(MOSCOW):%d.%m %H:%M}" for b in data[:30]) or "Заявок нет", parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("confirm", "cancel", "prepare", "ready", "issue", "checkin", "return"))
@@ -499,16 +501,17 @@ async def change(message: Message, bot: Bot):
               "/ready": "ready", "/issue": "issued", "/checkin": "return_inspection",
               "/return": "returned"}.get(command.split("@")[0])
     try:
-        booking_id = int(number.strip())
+        key = number.strip()
+        booking_id = int(key) if key.isascii() and key.isdigit() and len(key) != 4 else await asyncio.to_thread(resolve_booking_number, key)
         status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id)
         if status == "expired":
             return await message.answer("Удержание истекло; создайте новую заявку")
         operator = (getattr(message.from_user, "full_name", "") or "").strip()
         operator = operator or (f"@{message.from_user.username}" if getattr(message.from_user, "username", None)
                                 else f"оператор {message.from_user.id}")
-        update_text = booking_status_text(booking_id, status, operator)
-        await message.answer(update_text, parse_mode=ParseMode.HTML)
         booking = await asyncio.to_thread(get_booking, booking_id)
+        update_text = booking_status_text(getattr(booking, "human_number", None) or booking_id, status, operator)
+        await message.answer(update_text, parse_mode=ParseMode.HTML)
         await bot.send_message(booking.customer_id, update_text, parse_mode=ParseMode.HTML)
     except (ValueError, Conflict) as exc:
         await message.answer(f"Ошибка: {exc}. Формат: {command} НОМЕР")

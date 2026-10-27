@@ -66,6 +66,7 @@ class Booking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[int] = mapped_column(BigInteger)
     client_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    human_number: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_contact: Mapped[str] = mapped_column(String(200))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -82,6 +83,12 @@ class Booking(Base):
     lines: Mapped[list["BookingLine"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     assets: Mapped[list["BookingAsset"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     inspections: Mapped[list["Inspection"]] = relationship(cascade="all, delete-orphan")
+
+
+class RequestNumberCounter(Base):
+    __tablename__ = "request_number_counters"
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class BookingOperationLease(Base):
@@ -346,6 +353,7 @@ def init_db():
                 "identity_status": "VARCHAR(30) NOT NULL DEFAULT 'not_required'",
                 "act_signed_at": "TIMESTAMPTZ", "act_signed_by": "BIGINT",
                 "returned_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",
+                "human_number": "VARCHAR(32)",
             }
             for name, ddl in additions.items():
                 if name not in columns:
@@ -368,5 +376,6 @@ def init_db():
     with engine.begin() as connection:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_customer_request_unique ON bookings (customer_id, client_request_id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_number_unique ON bookings (receipt_number)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_human_number_unique ON bookings (human_number)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS equipment_article_idx ON equipment (article_id)"))
     _legacy_backfill()

@@ -16,6 +16,7 @@ from .db import (Article, ArticleDependency, Audit, Booking, BookingAsset, Booki
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, IdentityDocument, Inspection, Occupancy, PIIAudit,
                  PrivacyConsent, RepairTicket, Session)
+from .request_numbers import format_request_number, parse_request_number
 
 
 class Conflict(Exception):
@@ -286,8 +287,16 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                 free = _capacity(session, article.id) - _reserved_quantity(session, article.id, start, end)
                 if free < quantity:
                     raise Conflict(f"Недостаточно свободных единиц: {article.name}")
+            created_at = now()
+            year = created_at.astimezone(ZoneInfo("Europe/Moscow")).year
+            sequence = session.execute(text("""
+                INSERT INTO request_number_counters (year, last_sequence) VALUES (:year, 1)
+                ON CONFLICT (year) DO UPDATE SET last_sequence = request_number_counters.last_sequence + 1
+                RETURNING last_sequence
+            """), {"year": year}).scalar_one()
             booking = Booking(
                 customer_id=customer_id, client_request_id=request_id,
+                human_number=format_request_number(year, sequence), created_at=created_at,
                 customer_name=customer_name.strip(), customer_contact=customer_contact.strip(),
                 starts_at=start, ends_at=end, status="pending",
                 hold_expires_at=None, identity_status="not_required",
@@ -299,6 +308,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                                         quantity=quantity, billable_quantity=billable_quantity,
                                         hourly_rate=rate, auto_added=auto_added))
             session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="created"))
+            session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="number_assigned"))
             session.flush()
             return (booking.id, True) if return_created else booking.id
     except IntegrityError as exc:
@@ -324,6 +334,25 @@ def _booking_query():
 def get_booking(booking_id):
     with Session() as session:
         return session.scalar(_booking_query().where(Booking.id == booking_id))
+
+
+def resolve_booking_number(value):
+    """Resolve a full number or an unambiguous four-digit sequence to an ID."""
+    value = value.strip().upper()
+    with Session() as session:
+        if len(value) == 4 and value.isascii() and value.isdigit():
+            matches = session.scalars(select(Booking.id).where(
+                func.length(Booking.human_number) == 8,
+                func.right(Booking.human_number, 4) == value).limit(2)).all()
+            if len(matches) > 1:
+                raise ValueError("Номер неоднозначен; укажите номер заявки целиком")
+            booking_id = matches[0] if matches else None
+        else:
+            parse_request_number(value)
+            booking_id = session.scalar(select(Booking.id).where(Booking.human_number == value))
+        if booking_id is None:
+            raise ValueError("Заявка не найдена")
+        return booking_id
 
 
 def delete_booking(booking_id, actor_id):
