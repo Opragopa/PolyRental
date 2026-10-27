@@ -117,5 +117,9 @@ def test_migration_seeds_admins_without_importing_pii_roles(monkeypatch):
             migration.upgrade()
             rows = connection.execute(text("SELECT telegram_id, role FROM staff_roles ORDER BY telegram_id")).all()
             assert rows == [(910011, "admin"), (910012, "admin")]
+            connection.execute(text("UPDATE staff_roles SET role='operator' WHERE telegram_id=910011"))
+            migration.upgrade()
+            rows = connection.execute(text("SELECT telegram_id, role FROM staff_roles ORDER BY telegram_id")).all()
+            assert rows == [(910011, "operator"), (910012, "admin")]
         finally:
             transaction.rollback()
