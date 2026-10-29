@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import delete, func, select, text
 from .db import Audit, Booking, PIIAudit, RepairTicket, Session, SupportActivity, SupportMessage, SupportThread
 from .pii import _master_key
-from .roles import is_staff, configured_ids
+from .roles import staff_allows, configured_ids
 
 
 class SupportConflict(Exception):
@@ -36,9 +36,10 @@ def submit_question(customer_id, booking_id, screen, question):
         session.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))'), {'key':f'support:{customer_id}:{number}'})
         thread = session.scalar(select(SupportThread).where(SupportThread.customer_id == customer_id,
                                                             SupportThread.request_number == number).with_for_update())
+        eligible_assignee = booking.assignee_id if booking and booking.assignee_id in configured_ids("PII_ADMIN_IDS") and staff_allows(booking.assignee_id, "operator") else None
         if thread is None:
             thread = SupportThread(customer_id=customer_id, booking_id=booking_id, request_number=number,
-                                   screen=screen, owner_id=booking.assignee_id if booking else None, status='new')
+                                   screen=screen, owner_id=eligible_assignee, status='new')
             session.add(thread)
             session.flush()
             session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='created'))
@@ -46,8 +47,8 @@ def submit_question(customer_id, booking_id, screen, question):
             thread.status = 'new'
             thread.resolved_at = None
             session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='reopened'))
-        if thread.owner_id is None and booking and booking.assignee_id:
-            thread.owner_id = booking.assignee_id
+        if thread.owner_id is None and eligible_assignee:
+            thread.owner_id = eligible_assignee
             session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='routed_to_assignee'))
         encrypted, nonce = _seal(thread.id, customer_id, 'client', question)
         session.add(SupportMessage(thread_id=thread.id, sender_id=customer_id, direction='client', ciphertext=encrypted, nonce=nonce))
@@ -80,8 +81,8 @@ def claim_thread(thread_id, actor_id):
 
 
 def reassign_thread(thread_id, actor_id, new_owner):
-    if not is_staff(new_owner):
-        raise ValueError('Назначить можно только сотрудника')
+    if new_owner not in configured_ids("PII_ADMIN_IDS") or not staff_allows(new_owner, "operator"):
+        raise ValueError("Назначить можно только сотрудника с доступом к персональным данным")
     with Session.begin() as session:
         thread = session.scalar(select(SupportThread).where(SupportThread.id == thread_id).with_for_update())
         if not thread:
@@ -135,6 +136,10 @@ def resolve_thread(thread_id, actor_id):
         if thread.owner_id != actor_id:
             raise SupportConflict('Закрыть обращение может его владелец')
         if thread.status != 'resolved':
+            latest_client = session.scalar(select(func.max(SupportMessage.id)).where(SupportMessage.thread_id == thread_id, SupportMessage.direction == "client"))
+            answered = session.scalar(select(SupportMessage.id).where(SupportMessage.thread_id == thread_id, SupportMessage.direction == "operator", SupportMessage.id > (latest_client or 0), SupportMessage.delivered_at.is_not(None)).limit(1))
+            if not answered:
+                raise SupportConflict("Сначала отправьте ответ клиенту или передайте обращение")
             thread.status = 'resolved'
             thread.resolved_at = datetime.now(timezone.utc)
             session.add(SupportActivity(thread_id=thread.id, actor_id=actor_id, action='resolved'))

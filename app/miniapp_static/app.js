@@ -1314,7 +1314,23 @@
     const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost lock-exempt");
     const canReview = ["confirmed", "preparing", "ready"].includes(order.status) && ["submitted", "needs_changes", "verified"].includes(order.identity_status);
     approve.disabled = changes.disabled = !canReview;
-    actions.append(approve, changes);
+    actions.append(approve);
+    if (order.status === "ready") {
+      const note = document.createElement("p"); note.textContent = "Получатель расписки зафиксирован. Верните заявку в подготовку для исправления анкеты; после проверки потребуется новая расписка."; decision.append(note);
+      actions.append(actionButton("Вернуть в подготовку", async () => {
+        const comment = await requestReworkComment("Подготовка");
+        if (comment === null) return;
+        await api(`/api/miniapp/admin/bookings/${bookingId}/rework`, {method:"POST", body:JSON.stringify({target:"preparing", comment})});
+        await showAdmin("orders");
+        const refreshed = document.querySelector(`.request-card[data-booking-id="${bookingId}"]`);
+        if (refreshed) {
+          await reviewIdentity({...order, status:"preparing"}, refreshed);
+          const note = document.createElement("p"); note.setAttribute("role", "status"); note.textContent = "Заявка возвращена в подготовку. После проверки потребуется новая расписка.";
+          refreshed.querySelector(".review-decision")?.prepend(note);
+          refreshed.querySelector('.review-decision button[aria-label="Отклонить / исправить"]')?.focus({preventScroll:true});
+        }
+      }, bookingId, "secondary lock-exempt", false));
+    } else actions.append(changes);
     if (!canReview) { const note = document.createElement("p"); note.textContent = "Решение по анкете доступно на этапах подтверждения, подготовки и готовности к выдаче."; decision.append(note); }
     const close = document.createElement("button"); close.className = "button ghost"; close.type = "button"; close.textContent = "Закрыть";
     close.addEventListener("click", () => { clearRequestReview(requestCard); [...host.querySelectorAll("button")].find((button) => button.textContent === "Проверить анкету")?.focus({ preventScroll: true }); });
@@ -1786,7 +1802,7 @@
     },order.id,"secondary lock-exempt"));
     const point = order.status === "ready" ? "issue" : order.status === "return_inspection" ? "return" : null;
     for(const signedPoint of ["issue","return"])if(order.handover?.[`${signedPoint}_signature`]){const signed=document.createElement("p");signed.textContent=`${signedPoint==="issue"?"Выдача":"Приём"}: подписал ${order.handover[`${signedPoint}_signature`].full_name}`;actions.append(signed);}
-    if (point && !order.handover?.[`${point}_signature`] && state.role?.trusted_signer !== false) actions.append(actionButton(point === "issue" ? "Подписал: выдача" : "Отметить приём оборудования", async () => {
+    if (point && !order.handover?.[`${point}_signature`] && state.role?.trusted_signer === true) actions.append(actionButton(point === "issue" ? "Подписал: выдача" : "Отметить приём оборудования", async () => {
       const data = await workflowDialog(point === "issue" ? "Подтвердить выдачу" : "Отметить приём оборудования", receiptSummary(order) + `<label class="check-row"><input type="checkbox" name="identity" required><span>${point === "issue" ? "Личность сверена" : "Личность сверена, совпадает с получателем"}</span></label><label class="check-row"><input type="checkbox" name="paper" required><span>Бумажная расписка подписана мной</span></label><p>Подписывать может доверенный сотрудник. Отметка в приложении не заменяет бумажную подпись.</p>`,"Подтвердить",null,async()=>api(`/api/miniapp/admin/bookings/${order.id}/paper-signature`,{method:"POST",body:JSON.stringify({point,identity_matches:true,paper_signed:true})}));
     },order.id,"primary lock-exempt"));
     if (order.status === "ready" && order.handover?.received_at && order.handover?.issue_signature) actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next"));
@@ -2078,7 +2094,7 @@
       const card = document.createElement("article"); card.className = "admin-card";
       const heading = document.createElement("h3"); heading.textContent = `Обращение №${thread.id}${thread.request_number ? ` · ${thread.request_number}` : ""}`; card.append(heading);
       const meta = document.createElement("p"); meta.textContent = `${thread.status === "resolved" ? "Закрыто" : thread.owner_id ? `Владелец ID ${thread.owner_id}` : "Без владельца"} · ${dateText(thread.created_at)} МСК`; card.append(meta);
-      if (!thread.owner_id) {
+      if (!thread.owner_id && thread.status !== "resolved" && state.role?.pii_admin) {
         const claim = document.createElement("button"); claim.type = "button"; claim.className = "button secondary"; claim.textContent = "Взять обращение";
         claim.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/claim`, {method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(claim);
       }
@@ -2095,8 +2111,8 @@
           } catch (error) { showError(error.message); }
         });
       }
-      if (thread.owner_id === state.role?.id && thread.status !== "resolved") { const done = document.createElement("button"); done.type="button"; done.className="button ghost"; done.textContent="Закрыть обращение"; done.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/resolve`,{method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(done); }
-      if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Telegram ID сотрудника</span><input type="number" min="1" required></label><button class="button ghost" type="submit">Передать</button>`; form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("input").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
+      if (state.role?.pii_admin && thread.owner_id === state.role?.id && thread.status !== "resolved") { const done = document.createElement("button"); done.type="button"; done.className="button ghost"; done.textContent="Закрыть обращение"; done.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/resolve`,{method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(done); }
+      if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>`; for (const id of (result.eligible_owners || [])) { const option = document.createElement("option"); option.value = id; option.textContent = `Telegram ID ${id}`; form.querySelector("select").append(option); } form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("select").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
       content.append(card);
     }
   }

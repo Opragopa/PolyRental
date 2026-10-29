@@ -154,6 +154,18 @@ def require_pii_admin(user=Depends(require_customer)):
     return user
 
 
+def require_signer_staff(user=Depends(require_customer)):
+    if not staff_allows(user["id"], "operator"):
+        raise HTTPException(403, "Подтверждать бумажную подпись может только доверенный сотрудник")
+    return user
+
+
+def require_support_staff(user=Depends(require_admin)):
+    if user["id"] not in pii_admin_ids():
+        raise HTTPException(403, "Для работы с обращениями нужен доступ к персональным данным")
+    return user
+
+
 def require_reviewer(user=Depends(require_customer)):
     if not staff_allows(user["id"], "operator") and user["id"] not in pii_admin_ids():
         raise HTTPException(403, "Доступ только для сотрудников")
@@ -483,11 +495,11 @@ async def customer_support_threads(user=Depends(require_customer)):
 
 @router.get("/api/miniapp/admin/support")
 async def admin_support_threads(user=Depends(require_admin)):
-    return {"items": await asyncio.to_thread(list_support_threads)}
+    return {"items": await asyncio.to_thread(list_support_threads), "eligible_owners": sorted(uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator"))}
 
 
 @router.post("/api/miniapp/admin/support/{thread_id}/claim")
-async def admin_claim_support(thread_id: int, user=Depends(require_admin)):
+async def admin_claim_support(thread_id: int, user=Depends(require_support_staff)):
     try:
         await asyncio.to_thread(claim_thread, thread_id, user["id"])
     except ValueError as exc:
@@ -524,7 +536,7 @@ async def admin_support_reply(thread_id: int, payload: SupportReply, tasks: Back
 
 
 @router.post("/api/miniapp/admin/support/{thread_id}/resolve")
-async def admin_resolve_support(thread_id: int, user=Depends(require_admin)):
+async def admin_resolve_support(thread_id: int, user=Depends(require_support_staff)):
     try:
         await asyncio.to_thread(resolve_thread, thread_id, user["id"])
     except ValueError as exc:
@@ -925,9 +937,10 @@ async def admin_reassign_booking(booking_id: int, payload: ReassignRequest, user
 
 
 @router.put("/api/miniapp/admin/support/{thread_id}/owner")
-async def admin_reassign_support(thread_id: int, payload: ReassignRequest, user=Depends(require_admin)):
+async def admin_reassign_support(thread_id: int, payload: ReassignRequest, tasks: BackgroundTasks, user=Depends(require_admin)):
     try:
         await asyncio.to_thread(reassign_thread, thread_id, user["id"], payload.assignee_id)
+        tasks.add_task(notify_support_owner, payload.assignee_id, thread_id, "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except SupportConflict as exc:
@@ -1283,13 +1296,15 @@ class ReworkRequest(BaseModel):
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/rework")
 async def admin_return_for_rework(booking_id: int, payload: ReworkRequest,
-                                  background_tasks: BackgroundTasks, user=Depends(require_admin)):
+                                  background_tasks: BackgroundTasks, user=Depends(require_reviewer)):
     try:
         status = await asyncio.to_thread(return_for_rework, booking_id, payload.target, payload.comment,
                                          user["id"], operator_name(user))
         booking = await asyncio.to_thread(get_booking, booking_id)
         background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id, status,
                                   operator_name(user))
+        if booking.assignee_id and booking.assignee_id != user["id"]:
+            background_tasks.add_task(notify_actionable, booking_id, booking.assignee_id, "identity_rework", "Заявка возвращена в подготовку для исправления анкеты. После проверки потребуется новая расписка.")
         return admin_booking_view(booking)
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
@@ -1714,7 +1729,7 @@ async def operator_last_section(payload:StaffSectionRequest,user=Depends(require
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/paper-signature")
-async def admin_paper_signature(booking_id: int, payload: PaperSignatureRequest, user=Depends(require_admin)):
+async def admin_paper_signature(booking_id: int, payload: PaperSignatureRequest, user=Depends(require_signer_staff)):
     from .handover import attest_paper_signature
     await workflow_call(attest_paper_signature, booking_id, user["id"], payload.point,
                         payload.identity_matches, payload.paper_signed)
