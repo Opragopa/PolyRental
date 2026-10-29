@@ -7,6 +7,7 @@ from docx import Document
 
 from app.db import Article, Booking, Inspection, RepairTicket, Session
 from app.documents import render_document
+from tests.workflow_helpers import verified_identity, paper, returning
 from app.service import (Conflict, assign_booking_assets, availability, create_booking,
                          get_booking, mark_act_signed, now, record_inspection,
                          save_dependency, save_equipment, transition)
@@ -68,32 +69,35 @@ def test_dependencies_assignment_checks_and_return_repair():
     booking = get_booking(booking_id)
     assert len(booking.lines) == 2
     assert next(line for line in booking.lines if line.article_id == cable_id).hourly_rate == 0
-    assert transition(booking_id, "confirmed", 10) == "confirmed"
+    assert transition(booking_id, "confirmed", 100) == "confirmed"
     with pytest.raises(Conflict, match="заполнить документы"):
-        assign_booking_assets(booking_id, 10)
+        assign_booking_assets(booking_id, 100)
     with Session.begin() as session:
         session.get(Booking, booking_id).identity_status = "verified"
-    assert assign_booking_assets(booking_id, 10) == "preparing"
+    assert assign_booking_assets(booking_id, 100) == "preparing"
     booking = get_booking(booking_id)
     assert len(booking.assets) == 2
     with pytest.raises(Conflict):
-        transition(booking_id, "ready", 10)
+        transition(booking_id, "ready", 100)
     for asset in booking.assets:
-        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 10)
-    assert transition(booking_id, "ready", 10) == "ready"
+        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 100)
+    verified_identity(booking_id)
+    assert transition(booking_id, "ready", 100) == "ready"
     with pytest.raises(Conflict):
-        transition(booking_id, "issued", 10)
+        transition(booking_id, "issued", 100)
     with Session.begin() as session:
         session.get(Booking, booking_id).identity_status = "verified"
-    mark_act_signed(booking_id, 99)
-    assert transition(booking_id, "issued", 10) == "issued"
-    assert transition(booking_id, "return_inspection", 10) == "return_inspection"
+    paper(booking_id)
+    assert transition(booking_id, "issued", 100) == "issued"
+    returning(booking_id)
+    assert transition(booking_id, "return_inspection", 100) == "return_inspection"
     booking = get_booking(booking_id)
     for index, asset in enumerate(booking.assets):
         record_inspection(booking_id, asset.equipment_id, "check_in",
-                          "fail" if index == 0 else "pass", {"visual": index != 0}, "", 10,
+                          "fail" if index == 0 else "pass", {"visual": index != 0}, "", 100,
                           defect="Повреждён разъём", estimated_cost=500, charge_customer=True)
-    assert transition(booking_id, "returned", 10) == "returned"
+    paper(booking_id,point="return")
+    assert transition(booking_id, "returned", 100) == "returned"
     returned_at = get_booking(booking_id).returned_at
     article_id = cable_id
     still_buffered = availability(returned_at + timedelta(hours=1), returned_at + timedelta(hours=2))
@@ -106,13 +110,10 @@ def test_dependencies_assignment_checks_and_return_repair():
         assert session.query(RepairTicket).filter_by(booking_id=booking_id, equipment_id=booking.assets[0].equipment_id).count() == 1
     contract_text = "\n".join(paragraph.text for paragraph in Document(io.BytesIO(
         render_document(booking_id, "contract"))).paragraphs)
-    issue_text = "\n".join(paragraph.text for paragraph in Document(io.BytesIO(
-        render_document(booking_id, "issue"))).paragraphs)
-    return_text = "\n".join(paragraph.text for paragraph in Document(io.BytesIO(
-        render_document(booking_id, "return"))).paragraphs)
     assert "серийный №" not in contract_text
-    assert "CAMERA-1" in issue_text
-    assert "дефект/ремонт" in return_text
+    for kind in ("issue","return"):
+        with pytest.raises(Conflict,match="Новые акты не формируются"):
+            render_document(booking_id,kind)
 
 
 def test_each_selected_item_is_booked_separately():
@@ -140,6 +141,6 @@ def test_low_battery_cannot_be_assigned():
     end = start + timedelta(hours=1)
     booking_id = create_booking(1, "Клиент", "@client", start, end,
                                 [{"article_id": article_id, "quantity": 1}])
-    transition(booking_id, "confirmed", 10)
+    transition(booking_id, "confirmed", 100)
     with pytest.raises(Conflict):
-        assign_booking_assets(booking_id, 10)
+        assign_booking_assets(booking_id, 100)

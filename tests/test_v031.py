@@ -97,7 +97,7 @@ def test_invalid_actions_and_competing_operator_never_create_history(monkeypatch
     url = f"/api/miniapp/admin/bookings/{booking_id}"
     with TestClient(app) as client:
         original = client.get(url + "/history", headers=headers(100)).json()
-        for actor, action, code in ((42, "confirmed", 403), (200, "confirmed", 403),
+        for actor, action, code in ((42, "confirmed", 403), (200, "confirmed", 409),
                                     (100, "ready", 409), (100, "invented-state", 409)):
             response = client.post(url + "/transition", headers=headers(actor), json={"action": action})
             assert response.status_code == code
@@ -129,7 +129,9 @@ def test_manual_correction_and_approval_persist_safe_history_without_claiming_st
             identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
             assert identity.status == "needs_changes"
             assert json.loads(identity.review_fields) == ["student_front"]
-            assert identity.review_comment == correction["comment"]
+            from app.pii import _review_comment
+            assert _review_comment(identity) == correction["comment"]
+            assert correction["comment"] not in identity.review_comment
         response = client.post(url + "/identity/review", headers=headers(200), json={"approved": True})
         assert response.json() == {"status": "verified"}
         assert get_booking(booking_id).identity_status == "verified"

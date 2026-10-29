@@ -12,13 +12,15 @@ from .db import init_db
 from .miniapp import STATIC_DIR, router
 from .documents import archive_completed_documents
 from .notification_outbox import retry_pending_notifications
-from .pii import purge_expired_identities
+from .pii import purge_expired_identities, encrypt_legacy_review_comments
 from .receipt_archive import purge_expired_receipts
 from .roles import validate_role_config
 from .rental import expire_deletion_intents
 from .availability_events import listen_for_availability
 from .sla_escalations import queue_sla_escalations
 from .support import retry_support_replies, purge_expired_support
+from .booking_changes import process_change_deadlines
+from .roadmap import queue_optional_reminders
 
 
 async def retention_loop():
@@ -31,6 +33,8 @@ async def retention_loop():
             await asyncio.to_thread(purge_expired_support)
             last_purge = date.today()
         await asyncio.to_thread(queue_sla_escalations)
+        await asyncio.to_thread(process_change_deadlines)
+        await asyncio.to_thread(queue_optional_reminders)
         await retry_pending_notifications()
         await retry_support_replies()
 
@@ -45,6 +49,7 @@ async def deletion_loop():
 async def lifespan(_app):
     validate_role_config()
     await asyncio.to_thread(init_db)
+    await asyncio.to_thread(encrypt_legacy_review_comments)
     await asyncio.to_thread(archive_completed_documents)
     await asyncio.to_thread(purge_expired_identities)
     await asyncio.to_thread(purge_expired_receipts)

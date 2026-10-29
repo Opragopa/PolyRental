@@ -53,7 +53,7 @@ def test_unclaimed_escalations_are_idempotent_and_content_free(monkeypatch):
         events = session.scalars(select(SlaEscalation).where(SlaEscalation.booking_id == booking_id)).all()
         deliveries = session.scalars(select(NotificationDelivery).where(NotificationDelivery.booking_id == booking_id)).all()
         assert {row.tier for row in events} == {'claim_shared', 'unclaimed_admin'}
-        assert {row.recipient_id for row in deliveries} == {-12345, 100}
+        assert {row.recipient_id for row in deliveries} == {-12345, 100, 200}
         assert all('@client' not in row.message and 'Клиент' not in row.message for row in deliveries)
         assert session.scalar(select(Audit.id).where(Audit.booking_id == booking_id, Audit.action == 'sla_claim_shared'))
 

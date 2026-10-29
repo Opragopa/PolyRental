@@ -18,6 +18,12 @@ def set_reminders_enabled(user_id, enabled):
         session.execute(text("INSERT INTO client_profiles (telegram_id, created_at) VALUES (:id, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT DO NOTHING"), {"id": user_id})
         profile = session.get(ClientProfile, user_id, with_for_update=True)
         profile.reminders_enabled = enabled
+        if not enabled:
+            from .db import NotificationDelivery
+            from datetime import datetime, timezone
+            for delivery in session.scalars(select(NotificationDelivery).where(NotificationDelivery.recipient_id==user_id,
+                NotificationDelivery.event.like("optional_reminder_%"),NotificationDelivery.sent_at.is_(None),NotificationDelivery.cancelled_at.is_(None))):
+                delivery.cancelled_at=datetime.now(timezone.utc)
 
 
 def mark_onboarding_shown(user_id):

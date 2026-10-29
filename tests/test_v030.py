@@ -54,7 +54,7 @@ def test_every_entry_uses_same_role_and_runtime_env(monkeypatch, caplog):
         for user_id in (42, 100, 200):
             headers = {"X-Telegram-Init-Data": signed_init_data(user_id)}
             result = client.get("/api/miniapp/me", headers=headers)
-            assert result.json() == role_for(user_id)
+            assert {key:value for key,value in result.json().items() if key not in {"staff_role","trusted_signer"}} == role_for(user_id)
             assert bot.is_admin(user_id) == result.json()["admin"]
             if result.json()["admin"]:
                 assert web_admin(SimpleNamespace(session={"admin_id": user_id})) == user_id
@@ -63,7 +63,7 @@ def test_every_entry_uses_same_role_and_runtime_env(monkeypatch, caplog):
                     web_admin(SimpleNamespace(session={"admin_id": user_id}))
                 assert denied.value.status_code == 403
         monkeypatch.setenv("ADMIN_IDS", "42")
-        assert client.get("/api/miniapp/me", headers={"X-Telegram-Init-Data": signed_init_data(42)}).json()["admin"]
+        assert not client.get("/api/miniapp/me", headers={"X-Telegram-Init-Data": signed_init_data(42)}).json()["admin"]  # Missing stored role fails closed.
         assert not bot.is_admin(100)
         assert not role_for("42")["admin"]
         assert "id=200" in caplog.text and "entry=miniapp" in caplog.text

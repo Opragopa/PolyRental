@@ -14,6 +14,24 @@ logger = logging.getLogger(__name__)
 MAX_BACKOFF_SECONDS = 30 * 60
 
 
+def encrypt_message(booking_id, recipient_id, event, message):
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from .pii import _master_key
+    nonce=os.urandom(12)
+    body=AESGCM(_master_key()).encrypt(nonce,message.encode(),f"notification:{booking_id}:{recipient_id}:{event[:50]}".encode())
+    return "enc-v1:"+base64.urlsafe_b64encode(nonce+body).decode()
+
+
+def delivery_message(delivery):
+    if not delivery.message.startswith("enc-v1:"): return delivery.message
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from .pii import _master_key
+    raw=base64.urlsafe_b64decode(delivery.message[7:])
+    return AESGCM(_master_key()).decrypt(raw[:12],raw[12:],f"notification:{delivery.booking_id}:{delivery.recipient_id}:{delivery.event}".encode()).decode()
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -41,11 +59,21 @@ async def deliver_notification(delivery_id: int) -> bool:
             return False
         if delivery.sent_at is not None or delivery.cancelled_at is not None:
             return delivery.cancelled_at is None
+        if delivery.event.startswith("optional_reminder_"):
+            from .db import ClientProfile
+            booking=session.get(Booking,delivery.booking_id)
+            profile=session.get(ClientProfile,delivery.recipient_id)
+            returning="_return_" in delivery.event
+            valid=({"issued"} if returning else {"confirmed","preparing","ready"})
+            moment=(booking.ends_at if returning else booking.starts_at) if booking else None
+            if not booking or booking.deleted_at or booking.status not in valid or moment<=_now() or (profile and not profile.reminders_enabled):
+                delivery.cancelled_at=_now()
+                return False
         try:
             from .bot import make_bot
             from aiogram.enums import ParseMode
             async with make_bot(token) as bot:
-                await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery.message, parse_mode=ParseMode.HTML), timeout=10)
+                await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML), timeout=10)
         except Exception as exc:
             delivery.attempts += 1
             delay = min(2 ** min(delivery.attempts, 10), MAX_BACKOFF_SECONDS)

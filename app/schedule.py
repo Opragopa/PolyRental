@@ -1,7 +1,8 @@
 """Moscow working calendar for planned issue and return schedules."""
 
 import os
-from datetime import date, time
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 
 FEDERAL_HOLIDAYS = {(1, day) for day in range(1, 9)} | {
@@ -32,3 +33,46 @@ def is_working_day(day):
 def working_hours(day):
     """Weekdays: 09:00–17:30; June through August: 08:30–17:00."""
     return (time(8, 30), time(17, 0)) if 6 <= day.month <= 8 else (time(9, 0), time(17, 30))
+
+
+def current_time():
+    return datetime.now(timezone.utc)
+
+
+def schedule_enforced():
+    return os.getenv("ENFORCE_HANDOVER_SCHEDULE", "true").lower() not in {"false", "0", "no"}
+
+
+def validate_planned_slot(value, label="Выдача или приём"):
+    if not schedule_enforced():
+        return
+    local = value.astimezone(ZoneInfo("Europe/Moscow"))
+    opening, closing = working_hours(local.date())
+    if not is_working_day(local.date()) or not opening <= local.time() <= closing:
+        raise ValueError(f"{label}: выберите рабочий день и время {opening:%H:%M}–{closing:%H:%M} по Москве")
+
+
+def validate_operation_window():
+    try:
+        validate_planned_slot(current_time())
+    except ValueError as exc:
+        from .rental import Conflict
+        raise Conflict(str(exc)) from exc
+
+
+def next_working_slot(value):
+    local = value.astimezone(ZoneInfo("Europe/Moscow"))
+    for _ in range(370):
+        opening, closing = working_hours(local.date())
+        if is_working_day(local.date()) and local.time() <= closing:
+            return max(local, datetime.combine(local.date(), opening, tzinfo=local.tzinfo))
+        local = datetime.combine(local.date() + timedelta(days=1), time(), tzinfo=local.tzinfo)
+    raise ValueError("Рабочее окно не найдено; проверьте календарь")
+
+
+def schedule_policy():
+    return {"enforced": schedule_enforced(),
+            "closed_dates": sorted(day.isoformat() for day in NON_WORKING_2026 | _dates_from_env("NON_WORKING_DATES")),
+            "working_dates": sorted(day.isoformat() for day in _dates_from_env("WORKING_DATES")),
+            "annual_holidays": sorted(f"{month:02d}-{day:02d}" for month, day in FEDERAL_HOLIDAYS),
+            "normal": {"start":"09:00","end":"17:30"}, "summer":{"start":"08:30","end":"17:00"}}

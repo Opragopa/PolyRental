@@ -65,6 +65,6 @@ def test_legacy_panel_shows_articles_and_handles_document_conflict(monkeypatch):
     response = client.get("/admin")
     assert response.status_code == 200 and "WEB-CAMERA × 1" in response.text
     assert f'/admin/bookings/{booking_id}/issued' not in response.text
-    assert client.get(f"/admin/bookings/{booking_id}/documents/issue").status_code == 409
+    assert client.get(f"/admin/bookings/{booking_id}/documents/issue").status_code == 403
     assert client.post("/admin/equipment", data={"number":"NEW", "name":"Тест",
                                                 "condition":"unknown"}).status_code == 409

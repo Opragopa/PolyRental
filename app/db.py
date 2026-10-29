@@ -24,6 +24,92 @@ class StaffRole(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
+class TrustedSigner(Base):
+    __tablename__ = "trusted_signers"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class EquipmentOwner(Base):
+    __tablename__ = "equipment_owners"
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id", ondelete="CASCADE"), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    contact: Mapped[str] = mapped_column(String(300), default="")
+
+
+class EquipmentBlock(Base):
+    __tablename__ = "equipment_blocks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id", ondelete="CASCADE"), index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StaffNavigation(Base):
+    __tablename__ = "staff_navigation"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    section: Mapped[str] = mapped_column(String(30), default="orders")
+
+
+class BookingReminder(Base):
+    __tablename__ = "booking_reminders"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    event: Mapped[str] = mapped_column(String(50), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class EquipmentFeature(Base):
+    __tablename__ = "equipment_features"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id", ondelete="CASCADE"), index=True)
+    description: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(30), default="catalog")
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class InventoryAudit(Base):
+    __tablename__ = "inventory_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    action: Mapped[str] = mapped_column(String(40))
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BookingHandover(Base):
+    """Operational attestations contain no client identity fields.
+
+    A recipient copy is encrypted independently of the short-lived identity key.
+    Snapshots and paper-signature metadata survive identity/photo retention.
+    """
+    __tablename__ = "booking_handovers"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    encrypted_recipient: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    recipient_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+
+class BookingChange(Base):
+    __tablename__ = "booking_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    change_type: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
 class Article(Base):
     __tablename__ = "articles"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -42,6 +128,13 @@ class Article(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     equipment: Mapped[list["Equipment"]] = relationship(back_populates="article")
+
+
+class ArticleImage(Base):
+    __tablename__ = "article_images"
+    article_id: Mapped[int] = mapped_column(ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True)
+    webp: Mapped[bytes] = mapped_column(LargeBinary)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class ArticleTitleAudit(Base):

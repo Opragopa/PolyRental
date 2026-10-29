@@ -54,3 +54,14 @@ def test_receipt_pdf_handles_multiple_pages_and_special_characters(monkeypatch):
     assert "Свет <Тест> & лампа" in text
     assert all(f"QA-{index:03d}" in text for index in range(80))
     assert text.count("Подпись сотрудника") == 2
+
+
+def test_one_asset_with_long_features_can_split_across_pages(monkeypatch):
+    booking=SimpleNamespace(id=7,human_number="ТС260007",identity_status="verified",assets=[object()],
+        starts_at=datetime(2026,11,5,9,tzinfo=timezone.utc),ends_at=datetime(2026,11,6,9,tzinfo=timezone.utc),customer_contact="@synthetic")
+    features=[{"description":f"Особенность {index}: "+"Тестовое описание корпуса. "*35} for index in range(12)]
+    body=receipt_pdf.render_receipt_pdf(7,100,booking=booking,identity={"full_name":"Тестовый Получатель"},
+        snapshot=[{"id":21,"name":"Тестовая камера","code":"TEST-21","features":features}])
+    reader=PdfReader(BytesIO(body));text="\n".join(page.extract_text() for page in reader.pages)
+    assert len(reader.pages)>1 and "Особенность 0:" in text and "Особенность 11:" in text
+    assert text.count("Подпись сотрудника")==2

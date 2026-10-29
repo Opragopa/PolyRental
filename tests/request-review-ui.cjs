@@ -35,6 +35,8 @@ const openCard = async (page, id) => {
   await card(page, id).locator(".request-body").waitFor({ state: "visible" });
 };
 const assertHistory = async (page, id) => {
+  const history=card(page,id).locator("details.request-history");
+  if (!await history.evaluate(node=>node.open)) await history.locator("summary").click();
   const entries = card(page, id).locator(".request-history-list li");
   // Opening the accordion starts a separate fetch; visible request details do
   // not mean its asynchronously loaded audit history has rendered yet.
@@ -66,7 +68,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const file = path.join(assets, path.basename(url.pathname));
       return route.fulfill({ body: fs.readFileSync(file), contentType: file.endsWith("css") ? "text/css" : "text/javascript" });
     }
-    if (url.pathname === "/api/miniapp/me") return route.fulfill({ json: { id: 200, admin: true, pii_admin: pii } });
+    if (url.pathname === "/api/miniapp/me") return route.fulfill({ json: { id: 200, admin: true, staff_role: "admin", pii_admin: pii } });
     if (url.pathname === "/api/miniapp/admin/bookings") return route.fulfill({ json: { items: orders } });
     const bookingId = Number(url.pathname.match(/\/bookings\/(\d+)/)?.[1]);
     if (url.pathname.endsWith("/rework")) {
@@ -256,7 +258,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const { page, errors, requests } = await fixture(browser, { orders: [order(7, { status: "preparing", identity_status: "verified", assets })], inspectionFailEquipment: partialFailure ? 12 : undefined });
       await openCard(page, 7);
       const selected = card(page, 7);
-      assert.match(await selected.locator(".stage-lock").innerText(), /свободен/);
+      assert.match(await selected.locator(".stage-lock").innerText(), /Ожидает сотрудника/);
       await selected.getByRole("button", { name: "Все исправны", exact: true }).click();
       await waitUntil(async () => (await selected.locator(".stage-lock").innerText()).includes("QA self"), "Bulk inspection did not refresh the lock holder");
       assert.match(await selected.locator(".stage-lock").innerText(), /Вы обрабатываете/);

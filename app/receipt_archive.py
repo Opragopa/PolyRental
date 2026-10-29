@@ -9,7 +9,7 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select, text
 
-from .db import Booking, BookingDocument, PIIAudit, ReceiptArchive, Session
+from .db import Booking, BookingDocument, BookingHandover, PIIAudit, ReceiptArchive, Session
 from .pii import _master_key
 from .receipt_pdf import render_receipt_pdf
 
@@ -48,6 +48,9 @@ def archived_receipt_pdf(booking_id, actor_id):
         document = session.get(BookingDocument, (booking_id, "receipt_pdf"), with_for_update=True)
         timestamp = now()
         if lifecycle is not None and (lifecycle.expired_at is not None or lifecycle.expires_at <= timestamp):
+            handover = session.get(BookingHandover, booking_id)
+            if handover:
+                handover.encrypted_recipient = handover.recipient_nonce = None
             if document is not None:
                 session.delete(document)
             if lifecycle.expired_at is None:
@@ -78,7 +81,7 @@ def archived_receipt_pdf(booking_id, actor_id):
     return result
 
 
-def customer_receipt_pdf(booking_id, customer_id):
+def customer_receipt_pdf(booking_id, customer_id, actor_id=None):
     """Read an existing PDF for its owner; never create one from a read request."""
     expired = False
     result = None
@@ -88,10 +91,18 @@ def customer_receipt_pdf(booking_id, customer_id):
             raise ValueError("Расписка не найдена")
         lifecycle = session.get(ReceiptArchive, booking_id, with_for_update=True)
         if lifecycle is None:
+            draft=session.get(BookingDocument,(booking_id,"receipt_pdf"))
+            handover=session.get(BookingHandover,booking_id)
+            if booking.status=="ready" and booking.deleted_at is None and draft and handover and handover.data.get("snapshot"):
+                session.add(PIIAudit(booking_id=booking_id,actor_id=actor_id if actor_id is not None else customer_id,action="document_previewed"))
+                return _decrypt(draft),draft.filename
             raise ValueError("Расписка не найдена")
         document = session.get(BookingDocument, (booking_id, "receipt_pdf"), with_for_update=True)
         timestamp = now()
         if lifecycle.expired_at is not None or lifecycle.expires_at <= timestamp:
+            handover = session.get(BookingHandover, booking_id)
+            if handover:
+                handover.encrypted_recipient = handover.recipient_nonce = None
             if document is not None:
                 session.delete(document)
             if lifecycle.expired_at is None:
@@ -102,7 +113,7 @@ def customer_receipt_pdf(booking_id, customer_id):
             raise ValueError("Расписка не найдена")
         else:
             result = (_decrypt(document), document.filename)
-            session.add(PIIAudit(booking_id=booking_id, actor_id=customer_id, action="document_downloaded"))
+            session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id if actor_id is not None else customer_id, action="document_downloaded"))
     if expired:
         raise ReceiptExpired("Срок хранения расписки истёк")
     return result
@@ -119,6 +130,9 @@ def purge_expired_receipts(at=None):
             document = session.get(BookingDocument, (lifecycle.booking_id, "receipt_pdf"), with_for_update=True)
             if document is not None:
                 session.delete(document)
+            handover = session.get(BookingHandover, lifecycle.booking_id)
+            if handover:
+                handover.encrypted_recipient = handover.recipient_nonce = None
             lifecycle.expired_at = timestamp
             session.add(PIIAudit(booking_id=lifecycle.booking_id, actor_id=0, action="receipt_retention_purge"))
         return len(rows)
