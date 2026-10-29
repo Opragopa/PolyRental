@@ -73,7 +73,7 @@ def booking_created_text(booking):
 
 
 def is_admin(user_id):
-    return is_staff(user_id)
+    return staff_allows(user_id, "operator")
 
 
 def format_items(items):

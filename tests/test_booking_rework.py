@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from app.db import Audit, Booking, BookingRework, Session, StaffRole
 from app.rental import Conflict, get_booking, mark_act_signed, record_inspection, return_for_rework, transition
 from tests.test_integration import article_with_assets
+from tests.workflow_helpers import verified_identity, paper, returning
 from tests.test_miniapp import configure
 from tests.test_operation_lease import pending_booking
 
@@ -57,16 +58,20 @@ def test_return_rework_requires_fresh_inspection(roles):
     assign_booking_assets(booking_id, 100)
     equipment_id = get_booking(booking_id).assets[0].equipment_id
     record_inspection(booking_id, equipment_id, "pre_issue", "pass", {}, "", 100)
+    verified_identity(booking_id)
     transition(booking_id, "ready", 100)
-    mark_act_signed(booking_id, 100)
+    paper(booking_id)
     transition(booking_id, "issued", 100)
+    returning(booking_id)
     transition(booking_id, "return_inspection", 100)
     record_inspection(booking_id, equipment_id, "check_in", "pass", {}, "", 100)
     assert return_for_rework(booking_id, "issued", "Нужна повторная проверка", 100) == "issued"
+    returning(booking_id)
     transition(booking_id, "return_inspection", 100)
     with pytest.raises(Conflict, match="Проверьте каждый"):
         transition(booking_id, "returned", 100)
     record_inspection(booking_id, equipment_id, "check_in", "pass", {}, "", 100)
+    paper(booking_id,point="return")
     assert transition(booking_id, "returned", 100) == "returned"
 
 

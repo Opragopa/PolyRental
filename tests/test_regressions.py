@@ -9,6 +9,7 @@ from app.rental import (Conflict, assign_booking_assets, availability, create_bo
                         delete_equipment, get_booking, record_inspection, save_article, save_equipment,
                         transition)
 from tests.test_integration import article_with_assets
+from tests.workflow_helpers import verified_identity
 
 
 def prepared_booking(prefix="QA", count=2):
@@ -40,6 +41,7 @@ def test_reassignment_invalidates_old_inspection():
     with pytest.raises(Conflict):
         transition(booking_id, "ready", 100)
     record_inspection(booking_id, replacement, "pre_issue", "pass", {}, "", 100)
+    verified_identity(booking_id)
     assert transition(booking_id, "ready", 100) == "ready"
 
 
@@ -303,9 +305,12 @@ def test_review_rejection_invalidates_act_signature(identity_case):
     asset_id = get_booking(booking_id).assets[0].equipment_id
     record_inspection(booking_id, asset_id, "pre_issue", "pass", {}, "", 100)
     transition(booking_id, "ready", 100)
-    mark_act_signed(booking_id, 200)
+    with pytest.raises(Conflict, match="зафиксирован"):
+        review_identity(booking_id, 200, False, "Исправить адрес", ["residential_address"])
+    from app.rental import return_for_rework
+    return_for_rework(booking_id,"preparing","Нужно исправить анкету",100)
     review_identity(booking_id, 200, False, "Исправить адрес", ["residential_address"])
-    assert get_booking(booking_id).act_signed_at is None
+    assert get_booking(booking_id).identity_status == "needs_changes"
 
 
 def test_admin_catalog_crud_and_validation(monkeypatch):

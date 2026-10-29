@@ -10,7 +10,7 @@ STATUS_LABELS = {
     "ready": "готова к выдаче",
     "issued": "оборудование выдано",
     "return_inspection": "оборудование принято на проверку",
-    "returned": "возврат завершён",
+    "returned": "Заявка завершена",
     "cancelled": "отменена",
     "identity_verified": "документы проверены",
     "identity_needs_changes": "документы требуют исправления — откройте Mini App",

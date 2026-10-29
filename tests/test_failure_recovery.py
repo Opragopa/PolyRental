@@ -10,7 +10,7 @@ from app.miniapp_server import app
 from tests.test_miniapp import configure, signed_init_data
 
 
-def test_act_is_not_marked_when_document_archive_fails(monkeypatch):
+def test_deprecated_act_endpoint_never_attempts_archival(monkeypatch):
     import app.miniapp as miniapp
 
     configure(monkeypatch)
@@ -25,11 +25,11 @@ def test_act_is_not_marked_when_document_archive_fails(monkeypatch):
     with TestClient(app) as client:
         response = client.post("/api/miniapp/admin/bookings/999/act-signed",
                                headers={"X-Telegram-Init-Data": signed_init_data(200)})
-    assert response.status_code == 409
-    assert calls == ["archive"]
+    assert response.status_code == 410
+    assert calls == []
 
 
-def test_act_is_marked_only_after_both_archives(monkeypatch):
+def test_deprecated_act_endpoint_never_marks_signature(monkeypatch):
     import app.miniapp as miniapp
 
     configure(monkeypatch)
@@ -39,8 +39,8 @@ def test_act_is_marked_only_after_both_archives(monkeypatch):
     with TestClient(app) as client:
         response = client.post("/api/miniapp/admin/bookings/999/act-signed",
                                headers={"X-Telegram-Init-Data": signed_init_data(200)})
-    assert response.status_code == 200
-    assert calls == ["issue", "receipt", "signed"]
+    assert response.status_code == 410
+    assert calls == []
 
 
 def test_failed_damage_photo_releases_its_stage_claim(monkeypatch):

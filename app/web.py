@@ -32,6 +32,7 @@ MOSCOW = ZoneInfo("Europe/Moscow")
 
 async def expiry_loop():
     last_receipt_purge = None
+    last_workflow_tick = None
     while True:
         await asyncio.sleep(1)
         def expire():
@@ -39,8 +40,24 @@ async def expiry_loop():
                 expire_holds(session)
             expire_deletion_intents()
         await asyncio.to_thread(expire)
+        if last_workflow_tick is None or time.monotonic()-last_workflow_tick>=60:
+            from .booking_changes import process_change_deadlines
+            from .roadmap import queue_optional_reminders
+            from .notification_outbox import retry_pending_notifications
+            from .sla_escalations import queue_sla_escalations
+            from .support import retry_support_replies
+            await asyncio.to_thread(process_change_deadlines)
+            await asyncio.to_thread(queue_optional_reminders)
+            await asyncio.to_thread(queue_sla_escalations)
+            await retry_pending_notifications()
+            await retry_support_replies()
+            last_workflow_tick=time.monotonic()
         if last_receipt_purge is None or time.monotonic() - last_receipt_purge >= 86400:
             await asyncio.to_thread(purge_expired_receipts)
+            from .pii import purge_expired_identities
+            from .support import purge_expired_support
+            await asyncio.to_thread(purge_expired_identities)
+            await asyncio.to_thread(purge_expired_support)
             last_receipt_purge = time.monotonic()
 
 
@@ -63,6 +80,8 @@ def verify_telegram(data):
 async def lifespan(app):
     validate_role_config()
     init_db()
+    from .pii import encrypt_legacy_review_comments
+    encrypt_legacy_review_comments()
     ensure_templates()
     task = asyncio.create_task(expiry_loop())
     availability_task = asyncio.create_task(listen_for_availability())
@@ -85,7 +104,7 @@ app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-st
 
 def require_admin(request):
     admin = request.session.get("admin_id")
-    if not is_staff(admin):
+    if not staff_allows(admin, "operator"):
         raise HTTPException(403, "Войдите через Telegram как менеджер")
     audit_admin_access(admin, "web")
     return admin
@@ -211,11 +230,15 @@ def calendar_feed(token: str):
 
 @app.get("/admin/bookings/{booking_id}/documents/{kind}")
 def document(request: Request, booking_id: int, kind: str):
-    require_admin(request)
+    actor_id = require_admin(request)
+    from .documents import operator_document
+    from .roles import configured_ids
+    if actor_id not in configured_ids("PII_ADMIN_IDS"):
+        raise HTTPException(403, "Нет доступа к персональным данным")
     try:
-        body = render_document(booking_id, kind)
+        body, filename = operator_document(booking_id, kind, actor_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
     except Conflict as exc:
         raise HTTPException(409, str(exc))
-    return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{kind}-{booking_id}.docx"'})
+    return Response(body, media_type="application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{filename}"'})

@@ -42,7 +42,7 @@ from .booking_messages import booking_status_text
 from .notification_outbox import notify, notify_actionable
 from .operator_preferences import preferences as operator_preferences, save_preferences as save_operator_preferences
 from . import __version__
-from .roles import configured_ids, is_staff, role_for, audit_admin_access, staff_allows
+from .roles import configured_ids, is_staff, role_for, audit_admin_access, staff_allows, staff_subrole
 from .db import BookingDocument, Inspection, ReceiptArchive, Session, SupportMessage, SupportThread
 from .receipt_archive import ReceiptExpired, customer_receipt_pdf
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
@@ -65,7 +65,10 @@ class PrivateRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def no_store(request):
-            response = await handler(request)
+            try:
+                response = await handler(request)
+            except PermissionError as exc:
+                raise HTTPException(403, str(exc)) from exc
             response.headers["Cache-Control"] = "no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -129,13 +132,13 @@ def _ids(name):
 
 
 def require_admin(user=Depends(require_customer)):
-    if not is_staff(user["id"]):
+    if not staff_allows(user["id"], "operator"):
         raise HTTPException(403, "Доступ только для сотрудников")
     return user
 
 
 def require_system_admin(user=Depends(require_customer)):
-    if user["id"] not in configured_ids("ADMIN_IDS"):
+    if not staff_allows(user["id"], "admin"):
         raise HTTPException(403, "Доступ только для администратора")
     return user
 
@@ -151,8 +154,30 @@ def require_pii_admin(user=Depends(require_customer)):
     return user
 
 
+def require_reviewer(user=Depends(require_customer)):
+    if not staff_allows(user["id"], "operator") and user["id"] not in pii_admin_ids():
+        raise HTTPException(403, "Доступ только для сотрудников")
+    return user
+
+
 def booking_view(booking):
+    from .handover import handover_state
+    handover = handover_state(booking.id)
+    # Customer JSON never includes manufacturer serials or internal asset codes.
+    handover = {**handover,
+        "snapshot": [{key: value for key, value in row.items() if key != "code"} for row in handover.get("snapshot", [])],
+        "exceptions": [{**row, "replacement_name": row.get("replacement_name","") if row.get("component") else row.get("replacement_title", "")} for row in handover.get("exceptions", [])]}
+    from .db import BookingChange
+    with Session() as session:
+        change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id).order_by(BookingChange.id.desc()).limit(1))
+        from .db import BookingRework
+        rework=session.scalar(select(BookingRework).where(BookingRework.booking_id==booking.id).order_by(BookingRework.id.desc()).limit(1))
     return {
+        "rework_available":bool(rework and rework.to_status==booking.status),
+        "change_status": change.status if change else None,
+        "receipt_preview_available":booking.status=="ready" and bool(handover.get("snapshot")),
+        "handover": handover,
+        "partial_issue": bool(handover.get("exceptions")),
         "id": booking.id,
         "is_test": booking.is_test,
         "human_number": booking.human_number,
@@ -233,7 +258,11 @@ async def notify_cancelled_booking(booking_id: int):
 
 
 async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
-    return None
+    if not status.startswith("identity_"):
+        return None  # The service writes stage events transactionally to the outbox.
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    return await notify(booking_id, customer_id, f"status_{status}",
+                        booking_status_text(booking.human_number or booking_id, status, operator))
 
 
 async def notify_identity_submitted(booking_id: int):
@@ -311,6 +340,8 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
         items = await asyncio.to_thread(availability, start, end)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
     available = [item for item in items if item["available"]]
     return {
         "items": available,
@@ -320,6 +351,12 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
                         for item in items if not item["available"]],
         "duration_hours": round((end - start).total_seconds() / 3600, 2),
     }
+
+
+@router.get("/api/miniapp/schedule")
+async def handover_schedule():
+    from .schedule import schedule_policy
+    return schedule_policy()
 
 
 @router.post("/api/miniapp/bookings", status_code=201)
@@ -347,6 +384,16 @@ async def create_customer_booking(payload: BookingRequest, background_tasks: Bac
 @router.get("/api/miniapp/me")
 async def current_role(user=Depends(require_customer)):
     role = role_for(user["id"])
+    subrole = staff_subrole(user["id"])
+    if subrole:
+        role["staff_role"] = subrole
+        from .db import TrustedSigner
+        with Session() as session:
+            signer=session.get(TrustedSigner,user["id"])
+            role["trusted_signer"]=bool(signer and signer.active)
+    elif role["pii_admin"]:
+        role["pii_only"] = True
+    role["admin"] = subrole is not None or role["pii_admin"]
     if role["admin"]:
         audit_admin_access(user["id"], "miniapp")
     return role
@@ -504,7 +551,11 @@ async def admin_set_client_booking_block(customer_id: int, payload: ClientBlockR
 async def client_profile(user=Depends(require_customer)):
     state = await asyncio.to_thread(profile_state, user["id"])
     role = role_for(user["id"])
-    return {**state, "display_name": operator_name(user), "system_admin": user["id"] in configured_ids("ADMIN_IDS"),
+    from .db import StaffNavigation
+    with Session() as session:
+        navigation=session.get(StaffNavigation,user["id"])
+    return {**state, "display_name": operator_name(user), "system_admin": staff_allows(user["id"], "admin"),
+            "last_section": navigation.section if navigation and staff_subrole(user["id"]) else None,
             "start_screen": "management" if role["admin"] else ("booking" if state["client_allowed"] else "blocked")}
 
 
@@ -766,18 +817,25 @@ async def customer_identity_submit(
 
 def admin_booking_view(booking):
     result = booking_view(booking)
+    from .handover import handover_state
+    result["handover"] = handover_state(booking.id)
     result["assignee_id"] = booking.assignee_id
     result["sla"] = request_sla(booking)
     ordered_assets = sorted(booking.assets, key=lambda row: (
         row.equipment.storage_location or "", row.equipment.article.name if row.equipment.article else row.equipment.name,
         row.equipment.inventory_number))
     result["assets"] = [{"id": asset.equipment.id,
+                         "line_id":asset.booking_line_id,
                          "serial": asset.equipment.inventory_number,
                          "article_id": asset.equipment.article_id,
                          "name": catalog_title(asset.equipment.article.name, asset.equipment.article.kind, asset.equipment.article.brand, asset.equipment.article.key_spec) if asset.equipment.article else asset.equipment.name,
                          "location": asset.equipment.storage_location,
                          "inspection_profile": asset.equipment.article.inspection_profile if asset.equipment.article else "generic"}
                         for asset in ordered_assets]
+    from .handover import asset_components
+    with Session() as session:
+        for item in result["assets"]:
+            item["components"]=asset_components(session,booking.id,item["id"])
     result["pick_list"] = result["assets"]
     result["inspections"] = [{"equipment_id": inspection.equipment_id, "stage": inspection.stage,
                               "result": inspection.result, "notes": inspection.notes,
@@ -805,7 +863,7 @@ def admin_booking_view(booking):
 
 
 @router.get("/api/miniapp/admin/bookings")
-async def admin_bookings(user=Depends(require_admin)):
+async def admin_bookings(user=Depends(require_reviewer)):
     bookings, leases = await asyncio.gather(asyncio.to_thread(list_bookings),
                                             asyncio.to_thread(operation_lease_states))
     items = []
@@ -823,7 +881,7 @@ async def admin_bookings(user=Depends(require_admin)):
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/history")
-async def admin_booking_history(booking_id: int, user=Depends(require_admin)):
+async def admin_booking_history(booking_id: int, user=Depends(require_reviewer)):
     try:
         return {"items": await asyncio.to_thread(booking_history, booking_id)}
     except ValueError as exc:
@@ -1057,7 +1115,11 @@ async def admin_hidden_test_bookings(user=Depends(require_system_admin)):
 
 @router.get("/api/miniapp/admin/catalog")
 async def admin_catalog(user=Depends(require_admin)):
+    from .inventory import inventory_details
+    from .catalog_images import image_data
     articles = await asyncio.to_thread(list_articles)
+    with Session() as session:
+        previews = image_data(session, [article.id for article in articles])
     dependencies = await asyncio.to_thread(list_dependencies)
     return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
                            "is_test": article.is_test,
@@ -1068,19 +1130,43 @@ async def admin_catalog(user=Depends(require_admin)):
                            "composition": article.composition or "",
                            "inspection_profile": article.inspection_profile,
                            "image_url": article.image_url,
+                           "image_data": previews.get(article.id, ""),
                            "active": article.is_active,
                            "buffer_hours": article.buffer_hours,
                            "equipment": [{"id": asset.id, "serial": asset.serial_number or "",
                                           "asset_code": asset.inventory_number,
                                           "inventory_code": asset.asset_inventory_code or "",
                                           "condition": asset.condition, "location": asset.storage_location,
-                                          "health": asset.health_percent, "charge": asset.charge_percent}
+                                          "health": asset.health_percent, "charge": asset.charge_percent,
+                                          **inventory_details(asset.id)}
                                          for asset in article.equipment]}
                           for article in articles],
             "dependencies": [{"parent_article_id": item.parent_article_id,
                                "child_article_id": item.child_article_id,
                                "quantity": item.quantity, "billable": item.billable}
                               for item in dependencies]}
+
+
+@router.put("/api/miniapp/admin/catalog/articles/{article_id}/photo")
+async def admin_catalog_photo(article_id: int, photo: UploadFile = File(...), user=Depends(require_admin)):
+    from .catalog_images import MAX_UPLOAD, save_image
+    raw = await photo.read(MAX_UPLOAD + 1)
+    await photo.close()
+    try:
+        await asyncio.to_thread(save_image, article_id, raw, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.delete("/api/miniapp/admin/catalog/articles/{article_id}/photo")
+async def admin_delete_catalog_photo(article_id: int, user=Depends(require_admin)):
+    from .catalog_images import save_image
+    try:
+        await asyncio.to_thread(save_image, article_id, None, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/api/miniapp/admin/catalog/import-csv")
@@ -1234,6 +1320,21 @@ async def admin_transition(booking_id: int, payload: TransitionRequest,
 
 class AssignmentRequest(BaseModel):
     assignments: dict[str, list[int]] = Field(default_factory=dict)
+    exceptions: list[dict] = Field(default_factory=list, max_length=900)
+
+    @field_validator("exceptions")
+    @classmethod
+    def validate_exceptions(cls, value):
+        for row in value:
+            if (set(row) - {"line_id", "reason", "note", "replacement_id","component","equipment_id","replacement_name"} or
+                    type(row.get("line_id")) is not int or row["line_id"] <= 0 or
+                    row.get("reason") not in {"missing", "faulty", "replacement"} or
+                    not isinstance(row.get("note", ""), str) or len(row.get("note", "")) > 2000 or
+                    (row.get("component") and (not isinstance(row["component"],str) or len(row["component"])>4000 or type(row.get("equipment_id")) is not int)) or
+                    (row.get("component") and row.get("reason")=="replacement" and (not isinstance(row.get("replacement_name"),str) or not row["replacement_name"].strip() or len(row["replacement_name"])>200)) or
+                    (not row.get("component") and row.get("reason") == "replacement" and (type(row.get("replacement_id")) is not int or row["replacement_id"] <= 0))):
+                raise ValueError("Неверные данные исключения выдачи")
+        return value
 
 
 @router.put("/api/miniapp/admin/bookings/{booking_id}/assignments")
@@ -1242,7 +1343,7 @@ async def admin_assign(booking_id: int, payload: AssignmentRequest, user=Depends
         raise HTTPException(403, "Недостаточно прав для этого действия")
     try:
         await asyncio.to_thread(assign_booking_assets, booking_id, user["id"], payload.assignments or None,
-                                operator_name(user))
+                                operator_name(user), payload.exceptions)
         return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -1314,14 +1415,7 @@ async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/act-signed")
 async def admin_act_signed(booking_id: int, user=Depends(require_pii_admin)):
-    try:
-        await asyncio.to_thread(archived_document, booking_id, "issue", user["id"])
-        await asyncio.to_thread(archived_document, booking_id, "receipt", user["id"])
-        # The irreversible signature marker is written only after both durable copies exist.
-        await asyncio.to_thread(mark_act_signed, booking_id, user["id"])
-        return {"status": "signed"}
-    except (Conflict, ValueError) as exc:
-        raise HTTPException(409, str(exc)) from exc
+    raise HTTPException(410, "Используйте подтверждение бумажной подписи расписки")
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/identity")
@@ -1385,11 +1479,11 @@ async def admin_identity_document(booking_id: int, kind: str, user=Depends(requi
 @router.get("/api/miniapp/admin/bookings/{booking_id}/documents/{kind}")
 async def admin_generated_document(booking_id: int, kind: str, user=Depends(require_pii_admin)):
     _limit_pii(user["id"], "admin_pii")
-    if kind not in {"issue", "receipt"}:
+    if kind not in {"issue", "return","contract","legacy_receipt", "receipt"}:
         raise HTTPException(404, "Документ не найден")
     try:
         body, filename = await asyncio.to_thread(operator_document, booking_id, kind, user["id"])
-        return Response(body, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        return Response(body, media_type="application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Cache-Control": "no-store",
                                  "Content-Disposition": f'attachment; filename="{filename}"'})
     except (ValueError, Conflict) as exc:
@@ -1398,7 +1492,7 @@ async def admin_generated_document(booking_id: int, kind: str, user=Depends(requ
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/documents/{kind}/download-link")
 async def admin_generated_document_download_link(booking_id: int, kind: str, user=Depends(require_pii_admin)):
-    if kind not in {"issue", "receipt"}:
+    if kind not in {"issue", "return","contract","legacy_receipt", "receipt"}:
         raise HTTPException(404, "Документ не найден")
     _limit_pii(user["id"], "admin_document_download", 20)
     public_url = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
@@ -1416,7 +1510,7 @@ async def admin_generated_document_download_link(booking_id: int, kind: str, use
     token = secrets.token_urlsafe(32)
     _DOCUMENT_DOWNLOAD_TOKENS[token] = (booking_id, kind, user["id"], current + 120)
     public_id = (booking.human_number or "request").replace("ТС", "TS")
-    filename = f"{'act' if kind == 'issue' else 'receipt'}-{public_id}.docx"
+    filename = f"{kind}-{public_id}.{'pdf' if kind == 'receipt' else 'docx'}"
     return {"url": f"{public_url}/api/miniapp/document-download/{token}", "file_name": filename}
 
 
@@ -1434,7 +1528,7 @@ async def download_generated_document(token: str):
             media_type = "application/pdf"
         else:
             body, filename = await asyncio.to_thread(operator_document, booking_id, kind, actor_id)
-            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            media_type = "application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         return Response(body, media_type=media_type,
                         headers={"Cache-Control": "no-store, max-age=0",
                                  "Content-Disposition": f'attachment; filename="{filename}"',
@@ -1485,3 +1579,277 @@ async def admin_identity_operation(booking_id: int, payload: IdentityOperationRe
         return {"status": payload.operation}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+async def workflow_call(function, *args, **kwargs):
+    try:
+        return await asyncio.to_thread(function, *args, **kwargs)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class SignerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    full_name: str = Field(min_length=1, max_length=200)
+    active: bool = True
+
+
+@router.get("/api/miniapp/admin/staff")
+async def admin_staff(user=Depends(require_system_admin)):
+    from .db import StaffRole, TrustedSigner
+    with Session() as session:
+        rows = []
+        for telegram_id in sorted(configured_ids("ADMIN_IDS")):
+            role, signer = session.get(StaffRole, telegram_id), session.get(TrustedSigner, telegram_id)
+            rows.append({"telegram_id": telegram_id, "role": role.role if role else None,
+                         "full_name": signer.full_name if signer else "", "trusted": bool(signer and signer.active)})
+        return {"items": rows}
+
+
+@router.get("/api/miniapp/admin/assignees")
+async def admin_assignees(user=Depends(require_admin)):
+    if not staff_allows(user["id"], "manager"):
+        raise HTTPException(403, "Передавать заявки может менеджер")
+    from .db import StaffRole, TrustedSigner
+    with Session() as session:
+        return {"items": [{"id": row.telegram_id, "role": row.role,
+                 "name": signer.full_name if (signer := session.get(TrustedSigner, row.telegram_id)) else str(row.telegram_id)}
+                for row in session.scalars(select(StaffRole).where(StaffRole.telegram_id.in_(configured_ids("ADMIN_IDS"))))]}
+
+
+class StaffRoleRequest(BaseModel):
+    role: str
+
+
+@router.put("/api/miniapp/admin/staff/{telegram_id}/role")
+async def admin_staff_role(telegram_id: int, payload: StaffRoleRequest, user=Depends(require_system_admin)):
+    from .db import StaffRole, PIIAudit
+    if telegram_id not in configured_ids("ADMIN_IDS") or payload.role not in {"operator", "manager", "admin"}:
+        raise HTTPException(422, "Укажите ID из ADMIN_IDS и допустимую роль")
+    if telegram_id == user["id"] and payload.role != "admin":
+        raise HTTPException(409, "Собственную роль администратора понизить нельзя")
+    with Session.begin() as session:
+        row = session.get(StaffRole, telegram_id, with_for_update=True)
+        if row is None:
+            row = StaffRole(telegram_id=telegram_id)
+            session.add(row)
+        row.role = payload.role
+        session.add(PIIAudit(booking_id=None, actor_id=user["id"], action="staff_role_updated"))
+    return {"status": "saved"}
+
+
+@router.put("/api/miniapp/admin/staff/{telegram_id}/signer")
+async def admin_signer(telegram_id: int, payload: SignerRequest, user=Depends(require_system_admin)):
+    from .handover import set_trusted_signer
+    await workflow_call(set_trusted_signer, user["id"], telegram_id, payload.full_name, payload.active)
+    return {"status": "saved"}
+
+
+class AttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: str
+    acknowledged: bool = False
+
+
+@router.post("/api/miniapp/bookings/{booking_id}/attest")
+async def customer_attestation(booking_id: int, payload: AttestationRequest, user=Depends(require_customer)):
+    from .handover import customer_attest
+    await workflow_call(customer_attest, booking_id, user["id"], payload.action, payload.acknowledged)
+    return booking_view(await asyncio.to_thread(get_booking, booking_id))
+
+
+class PaperSignatureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    point: str
+    identity_matches: bool
+    paper_signed: bool
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/migrate-receipt")
+async def admin_migrate_receipt(booking_id: int, user=Depends(require_pii_admin)):
+    from .handover import migrate_legacy_receipt
+    await workflow_call(migrate_legacy_receipt, booking_id, user["id"])
+    return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
+
+
+class ExternalBlockRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    start: datetime
+    end: datetime
+    reason: str=Field(min_length=1,max_length=2000)
+
+
+@router.get("/api/miniapp/admin/catalog/equipment/{equipment_id}/blocks")
+async def admin_external_blocks(equipment_id:int,user=Depends(require_admin)):
+    from .roadmap import external_blocks
+    return {"items":await workflow_call(external_blocks,equipment_id)}
+
+
+@router.post("/api/miniapp/admin/catalog/equipment/{equipment_id}/blocks")
+async def admin_external_block(equipment_id:int,payload:ExternalBlockRequest,user=Depends(require_admin)):
+    from .roadmap import save_external_block
+    return {"id":await workflow_call(save_external_block,equipment_id,payload.start,payload.end,payload.reason,user["id"])}
+
+
+@router.delete("/api/miniapp/admin/catalog/blocks/{block_id}")
+async def admin_release_external_block(block_id:int,user=Depends(require_admin)):
+    from .roadmap import release_external_block
+    await workflow_call(release_external_block,block_id,user["id"])
+    return {"status":"released"}
+
+
+class StaffSectionRequest(BaseModel):
+    section:str=Field(max_length=30)
+
+
+@router.put("/api/miniapp/operator/last-section")
+async def operator_last_section(payload:StaffSectionRequest,user=Depends(require_admin)):
+    from .roadmap import save_staff_section
+    await workflow_call(save_staff_section,user["id"],payload.section)
+    return {"section":payload.section}
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/paper-signature")
+async def admin_paper_signature(booking_id: int, payload: PaperSignatureRequest, user=Depends(require_admin)):
+    from .handover import attest_paper_signature
+    await workflow_call(attest_paper_signature, booking_id, user["id"], payload.point,
+                        payload.identity_matches, payload.paper_signed)
+    return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
+
+
+class OwnerRequest(BaseModel):
+    name: str = Field(default="", max_length=200)
+    contact: str = Field(default="", max_length=300)
+
+
+@router.put("/api/miniapp/admin/catalog/equipment/{equipment_id}/owner")
+async def admin_owner(equipment_id: int, payload: OwnerRequest, user=Depends(require_admin)):
+    from .inventory import save_owner
+    await workflow_call(save_owner, equipment_id, payload.name, payload.contact, user["id"])
+    return {"status": "saved"}
+
+
+class FeatureRequest(BaseModel):
+    description: str = Field(min_length=1, max_length=2000)
+
+
+@router.get("/api/miniapp/admin/catalog/equipment/{equipment_id}/features")
+async def admin_features(equipment_id: int, user=Depends(require_admin)):
+    from .inventory import inventory_details
+    return await asyncio.to_thread(inventory_details, equipment_id)
+
+
+@router.post("/api/miniapp/admin/catalog/equipment/{equipment_id}/features")
+async def admin_add_feature(equipment_id: int, payload: FeatureRequest, user=Depends(require_admin)):
+    from .inventory import save_feature
+    return {"id": await workflow_call(save_feature, equipment_id, payload.description, user["id"])}
+
+
+@router.put("/api/miniapp/admin/catalog/equipment/{equipment_id}/features/{feature_id}")
+async def admin_edit_feature(equipment_id: int, feature_id: int, payload: FeatureRequest, user=Depends(require_admin)):
+    from .inventory import save_feature
+    return {"id": await workflow_call(save_feature, equipment_id, payload.description, user["id"], feature_id)}
+
+
+@router.delete("/api/miniapp/admin/catalog/equipment/{equipment_id}/features/{feature_id}")
+async def admin_remove_feature(equipment_id: int, feature_id: int, user=Depends(require_system_admin)):
+    from .inventory import save_feature
+    await workflow_call(save_feature, equipment_id, "", user["id"], feature_id, True)
+    return {"status": "deleted"}
+
+
+class FindingRequest(BaseModel):
+    equipment_id: int
+    kind: str
+    description: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/return-finding")
+async def admin_return_finding(booking_id: int, payload: FindingRequest, user=Depends(require_admin)):
+    from .handover import record_return_finding
+    await workflow_call(record_return_finding, booking_id, payload.equipment_id, user["id"], payload.kind, payload.description)
+    return {"status": "saved"}
+
+
+class RequestEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: datetime
+    end: datetime
+    lines: list[BookingLineRequest] = Field(min_length=1, max_length=30)
+
+
+class ChangeProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    change_type: str
+    comment: str = Field(min_length=1, max_length=2000)
+    proposed: RequestEdit | None = None
+
+
+class DeclineRequest(BaseModel):
+    comment:str=Field(min_length=1,max_length=2000)
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/decline")
+async def admin_decline_request(booking_id:int,payload:DeclineRequest,user=Depends(require_admin)):
+    from .booking_changes import decline_request
+    await workflow_call(decline_request,booking_id,user["id"],payload.comment)
+    return admin_booking_view(await asyncio.to_thread(get_booking,booking_id))
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/changes")
+async def admin_propose_change(booking_id: int, payload: ChangeProposal, user=Depends(require_admin)):
+    from .booking_changes import propose_change
+    proposed = payload.proposed.model_dump(mode="json") if payload.proposed else None
+    return {"id": await workflow_call(propose_change, booking_id, user["id"], payload.change_type, payload.comment, proposed)}
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/changes")
+async def customer_change_view(booking_id: int, user=Depends(require_customer)):
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    if booking is None or booking.customer_id != user["id"]:
+        raise HTTPException(404, "Заявка не найдена")
+    from .booking_changes import change_view
+    return await workflow_call(change_view, booking_id, user["id"])
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/rework-reason")
+async def booking_rework_reason(booking_id:int,user=Depends(require_customer)):
+    from .rental import rework_reason
+    return await workflow_call(rework_reason,booking_id,user["id"])
+
+
+@router.get("/api/miniapp/admin/bookings/{booking_id}/changes")
+async def admin_change_view(booking_id: int, user=Depends(require_admin)):
+    from .booking_changes import change_view
+    return await workflow_call(change_view, booking_id, user["id"], user["id"] in pii_admin_ids())
+
+
+@router.put("/api/miniapp/bookings/{booking_id}")
+async def customer_edit_request(booking_id: int, payload: RequestEdit, user=Depends(require_customer)):
+    from .booking_changes import update_request
+    await workflow_call(update_request, booking_id, user["id"], payload.start, payload.end,
+                        [row.model_dump() for row in payload.lines])
+    return booking_view(await asyncio.to_thread(get_booking, booking_id))
+
+
+class ChangeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    change_id: int
+    accept: bool
+    comment: str = Field(default="", max_length=2000)
+    corrected: RequestEdit | None = None
+
+
+@router.post("/api/miniapp/bookings/{booking_id}/changes/respond")
+async def customer_respond_change(booking_id: int, payload: ChangeResponse, user=Depends(require_customer)):
+    from .booking_changes import update_request
+    correction = payload.corrected
+    await workflow_call(update_request, booking_id, user["id"], correction.start if correction else None,
+                        correction.end if correction else None,
+                        [row.model_dump() for row in correction.lines] if correction else None,
+                        payload.change_id, payload.accept, payload.comment)
+    return booking_view(await asyncio.to_thread(get_booking, booking_id))

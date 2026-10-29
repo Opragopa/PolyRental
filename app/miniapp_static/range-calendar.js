@@ -27,8 +27,9 @@
     return "";
   }
   class RangeCalendar {
-    constructor(element, { minimum, start = "", end = "", onChange = () => {} }) {
+    constructor(element, { minimum, start = "", end = "", onChange = () => {}, isDisabled = () => false }) {
       this.element = element; this.minimum = minimum; this.range = { start, end }; this.onChange = onChange;
+      this.isDisabled = isDisabled;
       this.month = `${start || minimum}`.slice(0, 7) + "-01";
       this.render();
     }
@@ -59,7 +60,7 @@
       for (let index = 0; index < 42; index += 1) {
         const day = addDays(first, index);
         const button = doc.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.dataset.date = day;
-        button.textContent = String(Number(day.slice(8))); button.disabled = day < this.minimum;
+        button.textContent = String(Number(day.slice(8))); button.disabled = day < this.minimum || this.isDisabled(day);
         button.classList.toggle("outside-month", day.slice(0, 7) !== this.month.slice(0, 7));
         const selected = day === this.range.start || day === this.range.end;
         button.classList.toggle("selected", selected);

@@ -97,6 +97,50 @@ def pii_admin_ids():
     return configured_ids("PII_ADMIN_IDS")
 
 
+def _require_pii(actor_id):
+    if actor_id not in pii_admin_ids():
+        raise PermissionError("Нет доступа к персональным данным")
+
+
+def _encrypted_review_comment(booking_id, comment):
+    if not comment:
+        return ""
+    nonce = os.urandom(12)
+    body = AESGCM(_master_key()).encrypt(nonce, comment.encode(), f"identity-review:{booking_id}".encode())
+    return "enc-v1:" + base64.urlsafe_b64encode(nonce + body).decode()
+
+
+def _review_comment(identity):
+    value = identity.review_comment or ""
+    if value.startswith("enc-v1:"):
+        raw = base64.urlsafe_b64decode(value[7:])
+        return AESGCM(_master_key()).decrypt(raw[:12], raw[12:], f"identity-review:{identity.booking_id}".encode()).decode()
+    return value  # Read-only compatibility until the startup backfill runs.
+
+
+def _purge_private_comments(session,booking_id):
+    from .db import BookingChange, BookingRework, NotificationDelivery
+    for change in session.scalars(select(BookingChange).where(BookingChange.booking_id==booking_id)):
+        change.ciphertext,change.nonce=b"",b""
+    for rework in session.scalars(select(BookingRework).where(BookingRework.booking_id==booking_id)):
+        rework.encrypted_comment,rework.nonce=b"",b""
+    for delivery in session.scalars(select(NotificationDelivery).where(NotificationDelivery.booking_id==booking_id,
+        NotificationDelivery.message.like("enc-v1:%"))):
+        delivery.message="Содержимое удалено по сроку хранения"
+        if delivery.sent_at is None: delivery.cancelled_at=now()
+
+
+def encrypt_legacy_review_comments():
+    with Session.begin() as session:
+        rows = session.scalars(select(CustomerIdentity).where(CustomerIdentity.review_comment != "").with_for_update()).all()
+        count = 0
+        for identity in rows:
+            if not identity.review_comment.startswith("enc-v1:"):
+                identity.review_comment = _encrypted_review_comment(identity.booking_id, identity.review_comment)
+                count += 1
+        return count
+
+
 def operator_ready():
     return all(os.getenv(name, "").strip() for name in
                ("OPERATOR_NAME", "OPERATOR_ADDRESS", "OPERATOR_CONTACT", "PRIVACY_POLICY_VERSION"))
@@ -110,12 +154,12 @@ def consent_text():
         f"Я, субъект персональных данных, добровольно, своей волей и в своём интересе даю "
         f"{os.environ['OPERATOR_NAME']}, адрес: {os.environ['OPERATOR_ADDRESS']} (далее — Оператор), "
         "согласие на обработку моих персональных данных для моей идентификации, оформления и исполнения "
-        "документов о безвозмездной передаче оборудования во временное пользование, составления акта выдачи "
+        "документов о безвозмездной передаче оборудования во временное пользование, составления единой сохранной расписки выдачи "
         "и возврата, проверки комплектности, рассмотрения требований о возмещении утраты или повреждения "
         "оборудования и связи со мной по этим вопросам.\n\n"
         "Перечень данных: фамилия, имя, отчество, дата рождения; серия, номер, дата выдачи, орган выдачи и "
         "код подразделения паспорта; адрес регистрации и фактического проживания; номер студенческого билета и "
-        "учебное заведение; Telegram ID, телефон или иной предоставленный контакт; фотографии "
+        "Telegram ID, телефон или иной предоставленный контакт; фотографии "
         "разворота паспорта с фотографией, страницы регистрации и лицевой стороны студенческого билета.\n\n"
         "Оператор выполняет сбор, запись, систематизацию, хранение, уточнение, извлечение, использование, "
         "предоставление допущенным сотрудникам, блокирование и уничтожение данных. Фотографии проверяются "
@@ -126,8 +170,8 @@ def consent_text():
         "Анкета и фотографии хранятся во время оформления и исполнения аренды, затем удаляются через 90 дней после возврата оборудования; "
         "если в этот период оформляется новая заявка, реквизиты и фотографии могут быть предложены для повторного заполнения; "
         "новая фотография заменяет сохранённую. Согласие на обработку для новой заявки запрашивается отдельно. "
-        "Подписанные акты выдачи и сохранные расписки сохраняются в зашифрованном архиве заявки без ограничения срока "
-        "и удаляются только при полном удалении заявки уполномоченным оператором. "
+        "PDF сохранной расписки хранится зашифрованно пять лет и доступен мне для скачивания. "
+        "После этого PDF и отдельная копия ФИО получателя удаляются; номер, даты и факт подписания сохраняются. "
         "При открытом ремонте срок хранения отсчитывается после его закрытия. Данные могут быть удалены раньше при наличии законного основания и обращения. "
         "Запрос, уточнение, отзыв согласия или обращение по удалению можно направить через "
         + os.environ["OPERATOR_CONTACT"] + ". Отказ предоставить данные означает невозможность оформить документы "
@@ -199,7 +243,7 @@ def identity_status(booking_id, customer_id=None):
             raise ValueError("Заявка не найдена")
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
         result = {"booking_id": booking.id, "status": booking.identity_status,
-                  "review_comment": identity.review_comment if identity else "",
+                  "review_comment": _review_comment(identity) if identity else "",
                   "review_fields": json.loads(identity.review_fields or "[]") if identity else []}
         if identity and customer_id is not None:
             payload, _ = _decrypt_payload(identity)
@@ -355,6 +399,7 @@ def _document_check(document, dek, booking_id):
 
 
 def masked_identity(booking_id, actor_id):
+    _require_pii(actor_id)
     with Session.begin() as session:
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not identity:
@@ -365,7 +410,7 @@ def masked_identity(booking_id, actor_id):
             "status": identity.status, "full_name": payload.get("full_name", ""),
             "passport": _mask(payload.get("passport_number"), 2),
             "student_id": _mask(payload.get("student_id_number"), 2),
-            "review_comment": identity.review_comment,
+            "review_comment": _review_comment(identity),
             "review_fields": json.loads(identity.review_fields or "[]"),
             "documents": [document.kind for document in identity.documents],
             "document_checks": {document.kind: _document_check(document, dek, booking_id)
@@ -374,17 +419,19 @@ def masked_identity(booking_id, actor_id):
 
 
 def reveal_identity(booking_id, actor_id):
+    _require_pii(actor_id)
     with Session.begin() as session:
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not identity:
             raise ValueError("Анкета не найдена")
         payload, _ = _decrypt_payload(identity)
         session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id, action="revealed"))
-        return {**payload, "status": identity.status, "review_comment": identity.review_comment,
+        return {**payload, "status": identity.status, "review_comment": _review_comment(identity),
                 "review_fields": json.loads(identity.review_fields or "[]")}
 
 
 def identity_document(booking_id, kind, actor_id):
+    _require_pii(actor_id)
     if kind not in DOCUMENT_KINDS:
         raise ValueError("Неизвестный документ")
     with Session.begin() as session:
@@ -403,11 +450,16 @@ def identity_document(booking_id, kind, actor_id):
 
 
 def review_identity(booking_id, actor_id, approved, comment="", fields=None):
+    _require_pii(actor_id)
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         if not booking or not identity:
             raise ValueError("Анкета не найдена")
+        from .db import BookingHandover
+        handover = session.get(BookingHandover, booking_id)
+        if handover and handover.data.get("snapshot"):
+            raise Conflict("Получатель расписки зафиксирован. До выдачи верните заявку в подготовку для исправления")
         if booking.status not in {"confirmed", "preparing", "ready"} or identity.status not in {
             "submitted", "needs_changes", "verified"
         }:
@@ -416,7 +468,7 @@ def review_identity(booking_id, actor_id, approved, comment="", fields=None):
         allowed = {"full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
                    "passport_division_code", "registration_address", "residential_address", "student_id_number",
                    "student_institution", "passport_main", "passport_registration", "student_front"}
-        identity.review_comment = comment.strip()[:500]
+        identity.review_comment = _encrypted_review_comment(booking_id, comment.strip()[:500])
         identity.review_fields = json.dumps([field for field in (fields or []) if field in allowed], ensure_ascii=False)
         booking.identity_status = identity.status
         if not approved:
@@ -426,9 +478,15 @@ def review_identity(booking_id, actor_id, approved, comment="", fields=None):
 
 
 def delete_identity(booking_id, actor_id, reason="manual_delete"):
+    _require_pii(actor_id)
     with Session.begin() as session:
+        _purge_private_comments(session,booking_id)
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         booking = session.get(Booking, booking_id)
+        from .db import ReceiptArchive
+        if booking and booking.status=="ready" and session.get(ReceiptArchive,booking_id) is None:
+            from .handover import reset_draft
+            reset_draft(session,booking_id)
         from .support import purge_support_for_booking
         support_deleted = purge_support_for_booking(session, booking_id, actor_id, "support_subject_purge")
         if not identity:
@@ -442,6 +500,7 @@ def delete_identity(booking_id, actor_id, reason="manual_delete"):
 
 
 def block_identity(booking_id, actor_id, blocked=True):
+    _require_pii(actor_id)
     with Session.begin() as session:
         identity = session.scalar(select(CustomerIdentity).where(
             CustomerIdentity.booking_id == booking_id))
@@ -467,6 +526,7 @@ def purge_expired_identities():
                 identity.delete_after = now() + timedelta(days=1)
                 continue
             booking = session.get(Booking, identity.booking_id)
+            _purge_private_comments(session,identity.booking_id)
             session.add(PIIAudit(booking_id=identity.booking_id, actor_id=0, action="retention_purge"))
             session.delete(identity)
             if booking:

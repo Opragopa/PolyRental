@@ -15,8 +15,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - name: Create non-production Compose defaults
+        run: cp .env.example .env
       - name: Run tests in the isolated PostgreSQL service
         run: docker compose --profile test run --rm --build test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify an encrypted backup by restoring an isolated test database
+        run: |
+          python -m pip install cryptography==46.0.3
+          python scripts/verify_test_restore.py --seed-synthetic --fresh-migrations
 
   browser:
     name: Mobile UI (${{ matrix.browser }})
@@ -57,6 +66,10 @@ jobs:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/request-review-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/completion-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}

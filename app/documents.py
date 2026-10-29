@@ -31,7 +31,7 @@ def _russian_date(value):
 def ensure_templates():
     TEMPLATE_DIR.mkdir(exist_ok=True)
     for kind, title in TITLES.items():
-        if kind == "receipt":
+        if kind in {"receipt","issue","return"}:
             continue
         path = TEMPLATE_DIR / f"{kind}.docx"
         if path.exists():
@@ -48,6 +48,8 @@ def ensure_templates():
 
 
 def render_document(booking_id, kind, include_identity=False, actor_id=0):
+    if kind in {"issue","return"}:
+        raise Conflict("Новые акты не формируются; используйте PDF-расписку")
     if kind not in TITLES:
         raise ValueError("Неизвестный документ")
     ensure_templates()
@@ -193,82 +195,36 @@ def _decrypt_archived_document(document):
 
 
 def archived_document(booking_id, kind, actor_id, refresh=False):
-    """Return an archived DOCX, creating the durable archive on first access."""
-    if kind not in {"issue", "receipt"}:
+    """Read immutable historical DOCX files; creation and replacement are retired."""
+    from .roles import configured_ids
+    if actor_id not in configured_ids("PII_ADMIN_IDS"):
+        raise PermissionError("Нет доступа к персональным данным")
+    if kind not in {"issue", "receipt", "return", "contract"}:
         raise ValueError("Неизвестный документ")
-    with Session() as session:
-        saved = session.get(BookingDocument, (booking_id, kind))
-        if saved is not None and not refresh:
-            body = _decrypt_archived_document(saved)
-            with Session.begin() as audit_session:
-                audit_session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
-                                           action="document_downloaded"))
-            return body, saved.filename
-
-    body = render_document(booking_id, kind, include_identity=True, actor_id=actor_id)
-    booking = get_booking(booking_id)
-    public_id = (booking.human_number or "request").replace("ТС", "TS")
-    filename = f"{'act' if kind == 'issue' else 'receipt'}-{public_id}.docx"
-    nonce = os.urandom(12)
-    aad = f"{booking_id}:{kind}:doc-v1".encode()
-    encrypted = AESGCM(_master_key()).encrypt(nonce, body, aad)
-    try:
-        with Session.begin() as session:
-            saved = session.get(BookingDocument, (booking_id, kind), with_for_update=True)
-            if saved is None:
-                saved = BookingDocument(booking_id=booking_id, kind=kind, filename=filename)
-            saved.media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            saved.encrypted_data, saved.nonce = encrypted, nonce
-            saved.sha256 = hashlib.sha256(body).hexdigest()
-            session.add(saved)
-            session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id,
-                                 action="document_replaced" if refresh else "document_archived"))
-    except IntegrityError:
-        # A simultaneous request may have won the unique booking/kind insert.
-        pass
-    with Session() as session:
+    with Session.begin() as session:
         saved = session.get(BookingDocument, (booking_id, kind))
         if saved is None:
-            raise ValueError("Документ не удалось сохранить в архив")
+            raise ValueError("Исторический документ отсутствует; новые акты не формируются")
+        session.add(PIIAudit(booking_id=booking_id, actor_id=actor_id, action="document_downloaded"))
         return _decrypt_archived_document(saved), saved.filename
 
 
 def operator_document(booking_id, kind, actor_id):
-    """Preview before signature; otherwise return the durable archived copy."""
-    booking = get_booking(booking_id)
-    if booking is None:
-        raise ValueError("Заявка не найдена")
-    if booking.status in {"confirmed", "preparing"} or (booking.status == "ready" and not booking.act_signed_at):
-        return render_document(booking_id, kind, include_identity=True, actor_id=actor_id), \
-            f"{'act' if kind == 'issue' else kind}-{(booking.human_number or 'request').replace('ТС', 'TS')}.docx"
-    if kind == "receipt":
-        with Session() as session:
-            damaged_photo = session.scalar(select(Inspection.id).where(
-                Inspection.booking_id == booking_id, Inspection.stage == "check_in",
-                Inspection.result == "fail", Inspection.encrypted_photo.is_not(None)).limit(1))
-        if damaged_photo:
-            return archived_document(booking_id, kind, actor_id, refresh=True)
+    """Read saved PDFs or deprecated historical documents, never generate acts."""
+    from .roles import configured_ids
+    if actor_id not in configured_ids("PII_ADMIN_IDS"):
+        raise PermissionError("Нет доступа к персональным данным")
+    if kind=="legacy_receipt":
+        return archived_document(booking_id,"receipt",actor_id)
+    if kind in {"receipt", "receipt_pdf"}:
+        from .receipt_archive import customer_receipt_pdf
+        booking = get_booking(booking_id)
+        if booking is None:
+            raise ValueError("Заявка не найдена")
+        return customer_receipt_pdf(booking_id, booking.customer_id,actor_id=actor_id)
     return archived_document(booking_id, kind, actor_id)
 
 
 def archive_completed_documents():
-    """Backfill durable copies before retained identity data is purged."""
-    with Session() as session:
-        booking_ids = session.scalars(select(Booking.id).where(
-            Booking.identity_status == "verified",
-            ((Booking.status == "ready") & Booking.act_signed_at.is_not(None)) |
-            Booking.status.in_({"issued", "return_inspection", "returned"})
-        )).all()
-    archived = 0
-    for booking_id in booking_ids:
-        for kind in ("issue", "receipt"):
-            try:
-                with Session() as session:
-                    exists = session.get(BookingDocument, (booking_id, kind)) is not None
-                if not exists:
-                    archived_document(booking_id, kind, 0)
-                    archived += 1
-            except Exception:
-                # A missing/rotated key or malformed legacy record must not stop startup.
-                continue
-    return archived
+    """Historical archives stay intact; new workflow creates PDFs atomically."""
+    return 0

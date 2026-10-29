@@ -42,7 +42,7 @@ def image_bytes(fmt="PNG"):
 
 def configure(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", TOKEN)
-    monkeypatch.setenv("ADMIN_IDS", "100")
+    monkeypatch.setenv("ADMIN_IDS", "100,200")
     monkeypatch.setenv("PII_ADMIN_IDS", "200")
     monkeypatch.setenv("PII_MASTER_KEY", base64.urlsafe_b64encode(b"x" * 32).decode().rstrip("="))
     monkeypatch.setenv("OPERATOR_NAME", "Учебный рентал")
