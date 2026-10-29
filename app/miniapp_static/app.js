@@ -241,12 +241,12 @@
       transaction.onerror = transaction.onabort = () => { db.close(); reject(transaction.error); };
     });
   }
-  function identityPhotoKey(kind) {
+  function identityPhotoKey(kind, bookingId = state.identityBookingId) {
     const userId = tg?.initDataUnsafe?.user?.id || "user";
-    return `${userId}:${state.identityBookingId}:${kind}`;
+    return `${userId}:${bookingId}:${kind}`;
   }
-  async function saveIdentityPhoto(kind, file) {
-    const key = identityPhotoKey(kind);
+  async function saveIdentityPhoto(kind, file, bookingId = state.identityBookingId) {
+    const key = identityPhotoKey(kind, bookingId);
     if (!file) { identityPhotoDrafts.delete(key); try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} return; }
     const entry = { blob: file, name: file.name || "document", type: file.type || "application/octet-stream", savedAt: Date.now() };
     identityPhotoDrafts.set(key, entry);
@@ -268,31 +268,32 @@
         : "";
     }
   }
-  async function restoreReusableIdentityPhotos() {
-    for (const kind of state.identityReusableDocuments) {
-      const key = identityPhotoKey(kind);
+  async function restoreReusableIdentityPhotos(bookingId, documents = state.identityReusableDocuments) {
+    await Promise.all(documents.map(async (kind) => {
+      const key = identityPhotoKey(kind, bookingId);
       let entry = identityPhotoDrafts.get(key);
       if (!entry) {
         try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; }
       }
       if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) {
         identityPhotoDrafts.set(key, entry);
-        continue;
+        return;
       }
       const input = document.querySelector(`#identity-form [name="${kind}"]`);
       const status = input?.closest(".field")?.querySelector(".file-draft-status");
       try {
-        const response = await fetch(`/api/miniapp/bookings/${state.identityBookingId}/identity/reusable-profile/documents/${kind}`, {
+        const response = await fetch(`/api/miniapp/bookings/${bookingId}/identity/reusable-profile/documents/${kind}`, {
           headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store",
         });
         if (!response.ok) throw new Error("download failed");
         const blob = await response.blob();
-        await saveIdentityPhoto(kind, new File([blob], `previous-${kind}.jpg`, { type: blob.type || "image/jpeg" }));
+        if (state.identityBookingId !== bookingId) return;
+        await saveIdentityPhoto(kind, new File([blob], `previous-${kind}.jpg`, { type: blob.type || "image/jpeg" }), bookingId);
         if (status) status.textContent = "Фото из предыдущей анкеты прикреплено. Новое фото заменит его.";
       } catch (_) {
         if (status) status.textContent = "Не удалось перенести фото автоматически. Прикрепите его вручную.";
       }
-    }
+    }));
   }
   async function clearIdentityPhotoDrafts(bookingId) {
     const userId = tg?.initDataUnsafe?.user?.id || "user";
@@ -684,10 +685,12 @@
         card.append(repeat);
         appendCustomerWorkflow(card, order);
         if (order.status === "pending") appendPendingContactEditor(card, order);
-        if (!(["cancelled", "expired"].includes(order.status)) && ["required", "needs_changes"].includes(order.identity_status)) {
+        if (["confirmed", "preparing", "ready"].includes(order.status) && ["required", "needs_changes"].includes(order.identity_status)) {
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
           identity.textContent = order.identity_status === "needs_changes" ? "Исправить данные" : "Заполнить документы";
           identity.addEventListener("click", () => openIdentity(order.id)); card.append(identity);
+        } else if (order.status === "pending" && ["required", "needs_changes"].includes(order.identity_status)) {
+          const note = document.createElement("p"); note.textContent = "Анкету можно заполнить после подтверждения заявки менеджером."; card.append(note);
         } else if (["submitted", "verified"].includes(order.identity_status)) {
           const note = document.createElement("p"); note.textContent = order.identity_status === "verified" ? "Документы проверены" : "Документы на проверке"; card.append(note);
         }
@@ -2175,8 +2178,17 @@
     if (!$("consent-check").checked) return showError("Чтобы продолжить, подтвердите согласие.");
     clearError(); const button = $("consent-next"); button.disabled = true;
     try {
-      await restoreReusableIdentityPhotos();
       $("consent-step").hidden = true; $("identity-form").hidden = false;
+      const bookingId = state.identityBookingId;
+      const reusableDocuments = [...state.identityReusableDocuments];
+      if (!reusableDocuments.length) return;
+      const status = $("identity-status"), submit = $("identity-submit");
+      status.textContent = "Подготавливаем фотографии из предыдущей анкеты…"; status.hidden = false;
+      submit.disabled = true; submit.textContent = "Подготавливаем фотографии…";
+      void restoreReusableIdentityPhotos(bookingId, reusableDocuments).finally(() => {
+        if (state.identityBookingId !== bookingId || $("identity-form").hidden) return;
+        status.hidden = true; submit.disabled = false; submit.textContent = "Отправить на проверку";
+      });
     } catch (error) { showError(error.message); }
     finally { button.disabled = false; }
   });
