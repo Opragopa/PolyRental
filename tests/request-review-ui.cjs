@@ -253,6 +253,19 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.equal(requests.filter(request => request.path.endsWith("/rework")).length, 1);
       assert.deepEqual(errors, []); passed.push("rework dialog and transition"); await page.close();
     }
+    {
+      const { page, errors, orders } = await fixture(browser, { orders: [order(7, {status:"ready", identity_status:"verified"})] });
+      await openCard(page, 7);
+      await card(page, 7).getByRole("button", {name:"Проверить анкету"}).click();
+      assert.equal(await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).count(), 0);
+      assert.equal(await card(page, 7).getByRole("button", {name:"Подписал: выдача"}).count(), 0);
+      await card(page, 7).getByRole("button", {name:"Вернуть в подготовку"}).click();
+      await page.locator("#rework-dialog textarea").fill("Исправить анкету");
+      await page.locator("#rework-dialog").getByRole("button", {name:"Вернуть на доработку"}).click();
+      await waitUntil(async () => orders[0].status === "preparing" && await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).count() === 1, "Review did not reopen after rework");
+      assert.equal(await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).evaluate(el => el === document.activeElement), true);
+      assert.deepEqual(errors, []); passed.push("ready identity rework and signer boundary"); await page.close();
+    }
     for (const partialFailure of [false, true]) {
       const assets = [{ id: 11, name: "QA camera", serial: "QA-11" }, { id: 12, name: "QA camera", serial: "QA-12" }];
       const { page, errors, requests } = await fixture(browser, { orders: [order(7, { status: "preparing", identity_status: "verified", assets })], inspectionFailEquipment: partialFailure ? 12 : undefined });

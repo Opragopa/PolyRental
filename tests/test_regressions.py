@@ -296,7 +296,7 @@ def test_repair_close_does_not_revive_retired_equipment():
         assert session.get(Equipment, asset_id).condition == "retired"
 
 
-def test_review_rejection_invalidates_act_signature(identity_case):
+def test_review_rejection_invalidates_act_signature(identity_case, monkeypatch):
     from app.pii import review_identity
     from app.rental import mark_act_signed
     _, booking_id, *_ = identity_case
@@ -308,7 +308,10 @@ def test_review_rejection_invalidates_act_signature(identity_case):
     with pytest.raises(Conflict, match="зафиксирован"):
         review_identity(booking_id, 200, False, "Исправить адрес", ["residential_address"])
     from app.rental import return_for_rework
-    return_for_rework(booking_id,"preparing","Нужно исправить анкету",100)
+    monkeypatch.setenv("PII_ADMIN_IDS", "200,300")
+    return_for_rework(booking_id,"preparing","Нужно исправить анкету",300)
+    with pytest.raises(PermissionError):
+        return_for_rework(booking_id,"confirmed","Причина",300)
     review_identity(booking_id, 200, False, "Исправить адрес", ["residential_address"])
     assert get_booking(booking_id).identity_status == "needs_changes"
 

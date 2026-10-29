@@ -1071,7 +1071,9 @@ REWORK_TRANSITIONS = {"confirmed": "pending", "preparing": "confirmed", "ready":
 def return_for_rework(booking_id, target, comment, actor_id, actor_name=""):
     """Apply an explicitly authorised backwards transition and retain its reason encrypted."""
     role = staff_subrole(actor_id)
-    if role not in {"operator", "manager", "admin"}:
+    from .roles import configured_ids
+    pii_only = role is None and actor_id in configured_ids("PII_ADMIN_IDS")
+    if role not in {"operator", "manager", "admin"} and not pii_only:
         raise PermissionError("Недостаточно прав для этого действия")
     if not isinstance(comment, str) or not comment.strip() or len(comment.strip()) > 2000:
         raise ValueError("Укажите комментарий длиной до 2000 символов")
@@ -1082,13 +1084,16 @@ def return_for_rework(booking_id, target, comment, actor_id, actor_name=""):
         if booking is None or booking.deleted_at is not None:
             raise ValueError("Заявка не найдена")
         previous = booking.status
+        if pii_only and (previous != "ready" or target != "preparing"):
+            raise PermissionError("Администратор ПД может вернуть только готовую заявку в подготовку")
         if REWORK_TRANSITIONS.get(previous) != target:
             raise Conflict("Недопустимый возврат на доработку")
         if previous == "confirmed" and role == "operator":
             raise PermissionError("Вернуть подтверждённую заявку может менеджер или администратор")
         if previous in {"preparing", "ready"} and role == "operator" and booking.assignee_id != actor_id:
             raise PermissionError("Оператор может вернуть только закреплённую за ним заявку")
-        _claim_stage(session, booking, actor_id, actor_name,bypass_owner=role in {"manager","admin"})
+        if not pii_only:
+            _claim_stage(session, booking, actor_id, actor_name,bypass_owner=role in {"manager","admin"})
         nonce = os.urandom(12)
         aad = f"booking-rework:{booking_id}:{previous}:{target}".encode()
         encrypted = AESGCM(_master_key()).encrypt(nonce, comment.strip().encode("utf-8"), aad)
