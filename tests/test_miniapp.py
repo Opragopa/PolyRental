@@ -13,11 +13,11 @@ from PIL import Image
 import pytest
 
 from app.bot import main_keyboard, miniapp_url
-from app.db import CustomerIdentity, IdentityDocument, PIIAudit, Session
+from app.db import Booking, CustomerIdentity, IdentityDocument, PIIAudit, Session
 from app.documents import render_document
 from app.miniapp import verify_init_data
 from app.miniapp_server import app
-from app.pii import purge_expired_identities, reveal_identity, sanitize_image, validate_identity_payload
+from app.pii import purge_expired_identities, reveal_identity, sanitize_image, submit_identity, validate_identity_payload
 from app.service import availability, now, save_equipment, transition
 from app.rental import assign_booking_assets
 
@@ -77,6 +77,17 @@ def test_signature_and_catalog_hides_serial(monkeypatch):
         assert body["items"][0]["id"] == booking_id
         assert "serial" not in json.dumps(body)
         assert body["items"][0]["identity_status"] == "required"
+
+
+def test_identity_submission_explains_that_manager_confirmation_is_required(monkeypatch):
+    configure(monkeypatch)
+    headers = {"X-Telegram-Init-Data": signed_init_data(42)}
+    with TestClient(app) as client:
+        booking_id = create_confirmed(client, headers)
+    with Session.begin() as session:
+        session.get(Booking, booking_id).status = "pending"
+    with pytest.raises(ValueError, match="после подтверждения заявки менеджером"):
+        submit_identity(booking_id, 42, {}, {})
 
 
 @pytest.mark.parametrize("contact", ["+7 999 123-45-67", "89991234567", "@anna_123", "Alice123"])

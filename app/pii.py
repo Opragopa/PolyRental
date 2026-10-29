@@ -308,10 +308,18 @@ def reusable_identity_document(booking_id, customer_id, kind):
 
 
 def submit_identity(booking_id, customer_id, payload, documents, policy_version="", text_hash=""):
-    checks = check_documents(documents)
     if not isinstance(payload, dict):
         raise ValueError("Неверный формат анкеты")
     with Session() as lookup:
+        booking = lookup.get(Booking, booking_id)
+        if not booking or booking.customer_id != customer_id:
+            raise ValueError("Заявка не найдена или недоступна")
+        if booking.status == "pending":
+            raise ValueError("Анкету можно заполнить после подтверждения заявки менеджером")
+        if booking.status in {"cancelled", "expired"}:
+            raise ValueError("Заявка отменена или истекла, поэтому отправка анкеты закрыта")
+        if booking.status not in {"confirmed", "preparing", "ready"}:
+            raise ValueError("Отправка анкеты для этой заявки уже закрыта")
         existing = lookup.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking_id))
         existing_payload = _decrypt_payload(existing)[0] if existing and existing.status == "needs_changes" else {}
         existing_kinds = {document.kind for document in existing.documents} if existing and existing.status == "needs_changes" else set()
@@ -330,12 +338,17 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         expected_hash = hashlib.sha256(expected_text.encode()).hexdigest()
         if policy_version != os.environ["PRIVACY_POLICY_VERSION"] or text_hash != expected_hash:
             raise Conflict("Текст согласия изменился. Откройте форму заново")
+    checks = check_documents(documents)
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
-        if not booking or booking.customer_id != customer_id or booking.status not in {
-            "confirmed", "preparing", "ready"
-        }:
-            raise ValueError("Документы недоступны для этой заявки")
+        if not booking or booking.customer_id != customer_id:
+            raise ValueError("Заявка не найдена или недоступна")
+        if booking.status == "pending":
+            raise ValueError("Анкету можно заполнить после подтверждения заявки менеджером")
+        if booking.status in {"cancelled", "expired"}:
+            raise ValueError("Заявка отменена или истекла, поэтому отправка анкеты закрыта")
+        if booking.status not in {"confirmed", "preparing", "ready"}:
+            raise ValueError("Отправка анкеты для этой заявки уже закрыта")
         identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
         if identity and identity.status == "verified":
             raise Conflict("Проверенные документы нельзя заменить без запроса менеджера")
