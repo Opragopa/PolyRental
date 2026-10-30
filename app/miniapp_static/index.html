@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f4f4f0">
+  <meta name="theme-color" content="#f3f6fb">
   <meta name="app-version" content="__APP_VERSION__">
   <meta name="description" content="Бронирование фото- и видеотехники PolyRental: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>Политех.АРЕНДА — бронирование</title>
@@ -29,37 +29,30 @@
       <p id="page-intro" class="intro">Выберите сроки и оборудование. На оформление уйдёт пара минут.</p>
 
       <nav class="tabs" aria-label="Разделы">
-        <button id="tab-admin" type="button" class="tab" hidden>Управление</button>
-        <button id="tab-new" type="button" class="tab active" aria-current="page">Бронирование</button>
-        <button id="tab-orders" type="button" class="tab">Профиль</button>
+        <button id="tab-admin" type="button" class="tab" hidden><span class="tab-icon" aria-hidden="true">⚙</span>Управление</button>
+        <button id="tab-new" type="button" class="tab active" aria-current="page"><span class="tab-icon" aria-hidden="true">⌂</span>Бронирование</button>
+        <button id="tab-orders" type="button" class="tab"><span class="tab-icon" aria-hidden="true">◯</span>Профиль</button>
       </nav>
       <div id="global-error" class="notice error" role="alert" hidden></div>
-      <button id="return-to-management" class="button secondary" type="button" hidden>Вернуться в управление</button>
 
       <section id="booking-blocked" class="panel" hidden><h2>Бронирование недоступно</h2><p>Обратитесь в поддержку, чтобы уточнить причину.</p><button id="blocked-support" class="button secondary" type="button">Поддержка</button></section>
       <section id="booking-flow" aria-label="Оформление бронирования">
-        <ol id="steps" class="steps" aria-label="Шаги оформления">
-          <li class="current"><button class="step-button" type="button" data-step="0"><span>01</span><b>Сроки</b></button></li>
-          <li><button class="step-button" type="button" data-step="1"><span>02</span><b>Оборудование</b></button></li>
-          <li><button class="step-button" type="button" data-step="2"><span>03</span><b>Подборка</b></button></li>
-          <li><button class="step-button" type="button" data-step="3"><span>04</span><b>Проверка</b></button></li>
-        </ol>
-
         <div id="step-dates" class="panel step-panel">
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда вам нужно оборудование?</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
-          <div id="range-calendar" class="range-calendar" aria-label="Календарь аренды"></div>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда нужна техника?</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
+          <p class="date-instruction">Выберите даты и время. Чтобы изменить период, нажмите новую дату начала.</p>
           <div class="date-grid">
             <label class="field"><span id="start-time-label">Начало (дата)</span><input id="start-date" type="hidden"><input id="start" type="hidden"><input id="start-time" type="time" required step="900" aria-labelledby="start-time-label"><small id="start-error" class="field-error" role="alert" hidden></small></label>
             <label class="field"><span id="end-time-label">Конец (дата)</span><input id="end-date" type="hidden"><input id="end" type="hidden"><input id="end-time" type="time" required step="900" aria-labelledby="end-time-label"><small id="end-error" class="field-error" role="alert" hidden></small></label>
           </div>
-          <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p><button id="period-clear" type="button" class="button ghost compact" aria-label="Очистить выбранный период">Сбросить</button></div>
+          <div id="range-calendar" class="range-calendar" aria-label="Календарь аренды"></div>
+          <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p></div>
           <p id="period-error" class="period-error" role="status"></p>
           <details class="period-help" hidden><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
         </div>
 
         <div id="step-items" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Что возьмёте в аренду?</h2></div><span class="panel-icon" aria-hidden="true">▦</span></div>
-          <p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты</button>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Выберите технику</h2></div><span class="panel-icon" aria-hidden="true">▦</span></div>
+          <div class="catalog-period"><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты <span aria-hidden="true">›</span></button></div>
           <div id="items-status" class="notice" role="status" hidden></div>
           <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button>
           <label class="field"><span>Поиск в каталоге</span><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"></label><div id="items-grid" class="items-grid" aria-label="Оборудование"></div>
@@ -68,11 +61,11 @@
         </div>
 
         <div id="step-contact" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Подборка и контакт</h2></div><span class="panel-icon" aria-hidden="true">✳</span></div>
-          <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p><h3>Как с вами связаться?</h3><p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Ваша подборка</h2></div><span class="panel-icon" aria-hidden="true">✳</span></div>
+          <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p><div class="contact-card"><h3>Как с вами связаться?</h3><p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
           <label class="field"><span>Имя для заявки (не ФИО из анкеты)</span><input id="customer-name" type="text" autocomplete="nickname" maxlength="200" placeholder="Например, Анна" aria-describedby="name-error"><small id="name-error" class="field-error" role="alert" hidden></small></label>
           <label class="field"><span>Телефон или Telegram</span><input id="customer-contact" type="text" autocomplete="tel" maxlength="200" placeholder="+7 999 123-45-67 или @username" aria-describedby="contact-error"><small id="contact-error" class="field-error" role="alert" hidden></small></label>
-          <p class="privacy-note">Имя и контакт сохраняются на этом устройстве для следующей заявки. Их можно исправить перед отправкой.</p>
+          <p class="privacy-note">Имя и контакт сохраняются на этом устройстве для следующей заявки. Их можно исправить перед отправкой.</p></div>
         </div>
 
         <div id="step-review" class="panel step-panel" hidden>
@@ -91,7 +84,8 @@
 
       <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
         <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2>Мои заявки</h2></div><span class="panel-icon" aria-hidden="true">≡</span></div>
-        <div id="profile-header"><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><button id="profile-support" class="button secondary" type="button">Поддержка</button><div id="profile-support-status" aria-live="polite"></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></div><label class="field"><span>История заявок</span><select id="profile-filter"><option value="all">Все</option><option value="active" selected>Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><form id="profile-search" class="action-row"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260001 или 0001"></label><button class="button secondary" type="submit">Найти</button></form><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
+        <form id="profile-search" class="action-row"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260001 или 0001"></label></form><label class="field"><span>История заявок</span><select id="profile-filter"><option value="all">Все</option><option value="active" selected>Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
+        <details id="profile-header" class="profile-settings"><summary>Настройки профиля</summary><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><button id="profile-support" class="button secondary" type="button">Поддержка</button><div id="profile-support-status" aria-live="polite"></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></details>
       </section>
 
       <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
@@ -106,20 +100,25 @@
         <div id="identity-feedback" class="identity-feedback" hidden></div>
         <form id="identity-form" hidden autocomplete="off" novalidate>
           <p class="supporting">Поля отправляются напрямую в PolyRental. Выбранные фото временно сохраняются только на этом устройстве до отправки анкеты (не более 24 часов) и удаляются после отправки.</p>
-          <div class="form-grid">
+          <section class="identity-section" aria-labelledby="identity-personal-heading"><h3 id="identity-personal-heading">Личные данные</h3><div class="form-grid">
             <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200" pattern="[А-Яа-яЁёA-Za-z .'\-]{2,200}"></label>
             <label class="field"><span>Дата рождения</span><input name="birth_date" type="date" required></label>
+          </div></section>
+          <section class="identity-section" aria-labelledby="identity-passport-heading"><h3 id="identity-passport-heading">Паспорт</h3><div class="form-grid">
             <label class="field wide"><span>Серия и номер паспорта</span><input name="passport_combined" required maxlength="11" inputmode="numeric" pattern="[0-9]{4} [0-9]{6}" placeholder="0000 000000" title="4 цифры, пробел, 6 цифр"></label>
             <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" type="date" required></label>
             <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="7" inputmode="numeric" pattern="[0-9]{3}-[0-9]{3}" placeholder="000-000" title="Формат 000-000"></label>
             <label class="field wide"><span>Кем выдан</span><input name="passport_issuer" required maxlength="500"></label>
+          </div></section>
+          <section class="identity-section" aria-labelledby="identity-address-heading"><h3 id="identity-address-heading">Адрес и студенческий</h3><div class="form-grid">
             <label class="field wide"><span>Адрес регистрации</span><div class="address-search"><input id="registration_address" name="registration_address" required maxlength="500" role="combobox" aria-autocomplete="list" aria-controls="address-suggestions" aria-expanded="false"><div id="address-suggestions" class="address-suggestions" role="listbox" hidden></div></div><small>Для подсказок введённый текст адреса передаётся DaData. Если подсказки недоступны, адрес можно ввести вручную.</small></label>
             <label class="check-row wide"><input name="same_address" type="checkbox"><span>Фактический адрес проживания совпадает с адресом регистрации</span></label>
             <label class="field wide"><span>Фактический адрес проживания</span><input name="residential_address" required maxlength="500"></label>
             <label class="field"><span>Номер студенческого (необязательно)</span><input name="student_id_number" maxlength="8" autocomplete="off" placeholder="12345678"></label>
             <input name="student_institution" type="hidden"><datalist id="university-options"></datalist>
-          </div>
-          <h3>Фотографии документов</h3>
+          </div></section>
+          <section class="identity-section" aria-labelledby="identity-photos-heading">
+          <h3 id="identity-photos-heading">Фотографии документов</h3>
           <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
           <div class="document-photo-grid">
             <div class="document-photo-group"><h4>Паспорт с пропиской</h4>
@@ -130,6 +129,7 @@
               <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Лицевая сторона</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Студенческий: лицевая сторона"><small class="file-draft-status" aria-live="polite"></small></label>
             </div>
           </div>
+          </section>
           <button id="identity-submit" class="button primary" type="submit">Отправить на проверку</button>
         </form>
       </section>
@@ -165,13 +165,14 @@
         </div>
       </section>
 
-      <section id="admin-panel" class="panel" hidden aria-label="Управление арендой"><button id="operator-book" class="button secondary" type="button">Забронировать как клиент</button>
+      <section id="admin-panel" class="panel" hidden aria-label="Управление арендой">
         <div class="panel-head"><div><p class="step-kicker">СЛУЖЕБНЫЙ РАЗДЕЛ</p><h2>Заказы и склад</h2></div><span class="panel-icon" aria-hidden="true">⚙</span></div>
         <div class="admin-tabs">
           <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
           <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button><button id="admin-hidden-tests" class="button ghost admin-mode" data-mode="hidden_tests" type="button" hidden>Скрытые тестовые</button>
         </div>
+        <details id="admin-settings" class="admin-settings"><summary>Настройки</summary>
         <details id="operator-notification-settings" class="calendar-sync"><summary>Тихие часы уведомлений</summary><p>Обязательные уведомления будут доставлены после тихих часов. Пустые поля означают доставку в рабочее время.</p><form id="operator-quiet-form" class="form-grid"><label class="field"><span>Начало</span><input name="quiet_start" type="time"></label><label class="field"><span>Конец</span><input name="quiet_end" type="time"></label><button class="button secondary" type="submit">Сохранить</button><p id="operator-quiet-status" role="status"></p></form></details>
         <details class="calendar-sync">
           <summary>Подписка Google Calendar</summary>
@@ -179,6 +180,7 @@
           <div class="action-row"><button id="calendar-feed-load" class="button secondary compact" type="button">Показать ссылку</button><button id="calendar-feed-copy" class="button ghost compact" type="button" hidden>Скопировать</button></div>
           <label id="calendar-feed-field" class="field wide" hidden><span>Ссылка подписки — доступна операторам</span><input id="calendar-feed-url" type="url" readonly></label>
           <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
+        </details>
         </details>
         <label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без владельца</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><div id="admin-content" role="status"></div>
       </section>

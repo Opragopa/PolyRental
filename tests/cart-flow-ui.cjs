@@ -52,6 +52,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.waitForFunction(() => document.querySelector('#selected-count').textContent === '2');
     assert.match(await page.locator('#selected-count').innerText(),/2/);
     await page.locator('#tab-orders').click();
+    await page.locator('#orders-content .customer-order-toggle').first().click();
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button',{name:'Скачать расписку PDF'}).click();
     assert.match((await downloadPromise).suggestedFilename(), /\.pdf$/);

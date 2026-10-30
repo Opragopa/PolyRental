@@ -23,6 +23,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     });
     await page.goto('http://polyrental.test/miniapp');
     await page.locator('#tab-orders').click();
+    await page.locator('#profile-header > summary').click();
     await page.getByRole('button',{name:'Поддержка',exact:true}).click();
     const dialog=page.locator('#support-dialog'); await dialog.waitFor({state:'visible'});
     await dialog.getByText('Как?',{exact:true}).click();

@@ -1,4 +1,6 @@
 .git
+.codex
+.idea
 .env
 .venv
 .pytest_cache
@@ -9,5 +11,7 @@ node_modules
 tools/browser-qa/.browsers
 local-qa-data
 artifacts
+tmp
+*.fig
 tools/telegram-qa
 templates/*.docx

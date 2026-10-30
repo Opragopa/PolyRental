@@ -13,7 +13,7 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',order=base(),change=null,width=390,failWriteOnce=false}={}) {
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false}={}) {
   const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
   const errors=[],writes=[];let catalogPreview='';
   page.on('pageerror',error=>errors.push(error.message));
@@ -22,7 +22,7 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
     const url=new URL(route.request().url()),method=route.request().method();
     if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"synthetic",initDataUnsafe:{user:{id:42}}}}'});
     if (url.pathname.startsWith('/miniapp/static/')) {const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
-    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:false}:{})}});
+    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:trusted}:{})}});
     if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,client_allowed:true,system_admin:role==='admin',start_screen:admin?'management':'booking'}});
     if (url.pathname==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
     if (url.pathname==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
@@ -30,6 +30,7 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
     if (url.pathname.endsWith('/history')) return route.fulfill({json:{items:[]}});
     if (url.pathname==='/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[{id:1,name:'Камера Sony',title:'Камера Sony',sku:'CAM',category:'camera',image_data:catalogPreview,composition:'Корпус\nКабель',equipment:Array.from({length:15},(_,index)=>({id:21+index,asset_code:`CAM-${index+1}`,condition:'available',location:'A1'}))}],dependencies:[]}});
     if (url.pathname==='/api/miniapp/admin/staff') return route.fulfill({json:{items:[{telegram_id:100,role:'admin',full_name:'QA Admin',trusted:true},{telegram_id:200,role:'operator',full_name:'QA Staff',trusted:false}]}});
+    if (url.pathname==='/api/miniapp/admin/assignees') return route.fulfill({json:{items:[{id:100,name:'QA Admin'},{id:200,name:'QA Staff'}]}});
     if (url.pathname.endsWith('/changes')&&method==='GET') return route.fulfill({json:change});
     if(url.pathname.endsWith('/photo')&&['PUT','DELETE'].includes(method)){
       writes.push({path:url.pathname,method});
@@ -40,8 +41,9 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
       const body=route.request().postDataJSON(); writes.push({path:url.pathname,body});
       if(failWriteOnce){failWriteOnce=false;return route.fulfill({status:409,json:{detail:'Синтетический конфликт: повторите'}});}
       if (url.pathname.endsWith('/attest')) { if (body.action==='returning') { order.handover.returning_at='2026-10-29T10:00:00Z'; order.status='return_inspection'; } else order.handover.received_at='2026-10-29T10:00:00Z'; }
-      if (url.pathname.endsWith('/paper-signature')) order.handover.issue_signature={actor_id:100,full_name:'QA Admin'};
+      if (url.pathname.endsWith('/paper-signature')) order.handover[`${body.point}_signature`]={actor_id:100,full_name:'QA Admin'};
       if (url.pathname.endsWith('/transition')) order.status=body.action;
+      if (url.pathname.endsWith('/assignee')) order.assignee_id=body.assignee_id;
       if (url.pathname.endsWith('/changes')) order.status='needs_changes';
       if (url.pathname.endsWith('/respond')) order.status='pending';
       return route.fulfill({json:order});
@@ -52,7 +54,7 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
   await page.goto('http://polyrental.test/miniapp');
   await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
   if (admin) {await page.locator('.request-toggle').waitFor();await page.locator('.request-toggle').click();}
-  else {await page.locator('#tab-orders').click();await page.locator('#orders-content .order-card').waitFor();}
+  else {await page.locator('#tab-orders').click();await page.locator('#orders-content .customer-order-toggle').first().click();}
   return {page,errors,writes};
 }
 
@@ -78,6 +80,35 @@ async function noOverflow(page) {
       await page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
       assert.deepEqual(writes[0].body,{action:'received',acknowledged:true});
       assert.deepEqual(errors,[]);await page.close();passed++;
+    }
+    {
+      const {page, errors, writes} = await fixture(browser, {admin:true, role:'manager', order:base('pending')});
+      assert.equal(await page.getByRole('button', {name:'Назначить ответственного', exact:true}).count(), 1);
+      assert.equal(await page.getByRole('button', {name:'Выбрать ответственного', exact:true}).count(), 0);
+      await page.getByRole('button', {name:'Назначить ответственного', exact:true}).click();
+      const dialog = page.locator('.workflow-dialog');
+      await dialog.getByLabel('Сотрудник').selectOption('200');
+      await dialog.getByRole('button', {name:'Подтвердить', exact:true}).click();
+      await page.waitForFunction(() => !document.querySelector('.workflow-dialog'));
+      assert.deepEqual(writes[0].body, {assignee_id:200});
+      await page.getByText('Ответственный: ID 200', {exact:true}).waitFor();
+      assert.deepEqual(errors, []); await page.close(); passed++;
+    }
+    {
+      const {page, errors, writes} = await fixture(browser, {admin:true, role:'admin'});
+      await page.locator('#admin-settings > summary').click();
+      await page.getByRole('button', {name:'Сотрудники', exact:true}).click();
+      const dialog = page.locator('.workflow-dialog');
+      try { await dialog.waitFor({state:'visible', timeout:3000}); } catch (error) { throw new Error(`Staff dialog: ${await page.locator('#global-error').innerText()}`, {cause:error}); }
+      await dialog.locator('[name="staff"]').selectOption('200');
+      await dialog.locator('[name="role"]').selectOption('manager');
+      assert.equal(await dialog.getByText('Доверенный подписант').count(), 0);
+      await dialog.getByRole('button', {name:'Сохранить', exact:true}).click();
+      await page.waitForFunction(() => !document.querySelector('.workflow-dialog'));
+      assert.equal(writes.length, 1);
+      assert.match(writes[0].path, /\/staff\/200\/role$/);
+      assert.deepEqual(writes[0].body, {role:'manager'});
+      assert.deepEqual(errors, []); await page.close(); passed++;
     }
     {
       const order=base(); order.partial_issue=false; order.handover.exceptions=[]; order.assignee_id=200;

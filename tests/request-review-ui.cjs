@@ -122,6 +122,21 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
     for (const [width, dark] of [[320, false], [390, true], [1024, false]]) {
       const { page, errors, requests, reviews } = await fixture(browser, { width, dark });
       assert.equal(await page.locator(".request-accordion[open]").count(), 0, "The initial list stays compact");
+      if (width === 320 && !dark) {
+        for (const name of ["Заказы", "Каталог", "Ремонт", "Поддержка"]) {
+          const tab = page.locator(".admin-tabs").getByRole("button", {name, exact:true});
+          assert.equal(await tab.isVisible(), true);
+          assert.ok(await tab.evaluate(node => { const box = node.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth && box.height >= 44; }), `${name} fits and is tappable`);
+        }
+        await page.locator("#admin-settings > summary").click();
+        assert.equal(await page.locator("#operator-notification-settings").isVisible(), true);
+        assert.equal(await page.getByRole("button", {name:"Сотрудники", exact:true}).isVisible(), true);
+        await page.locator("#admin-settings > summary").click();
+      }
+      if (process.env.QA_SCREENSHOTS && width === 320 && !dark) {
+        fs.mkdirSync(process.env.QA_SCREENSHOTS, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.QA_SCREENSHOTS, "staff-list-320.png") });
+      }
       assert.equal(await page.locator(".identity-check-review").count(), 0);
       assert.equal(requests.filter(request => request.path.endsWith("/identity")).length, 0, "PII is fetched on demand");
       await openCard(page, 8);
@@ -268,11 +283,32 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.equal(await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).evaluate(el => el === document.activeElement), true);
       assert.deepEqual(errors, []); passed.push("ready identity rework and signer boundary"); await page.close();
     }
+    {
+      const { page, errors } = await fixture(browser, { orders: [order(7, { assignee_id: 200, sla: { stage: "take", deadline: "2026-10-26T12:00:00Z", breached: true, progress: 1 } })] });
+      const selected = card(page, 7);
+      assert.match(await selected.locator(".request-assignee").innerText(), /Ответственный: вы/);
+      assert.match(await selected.locator(".request-sla").innerText(), /Просрочено.*МСК/);
+      await openCard(page, 7);
+      assert.match(await selected.locator(".request-summary").innerText(), /Ответственный/);
+      assert.doesNotMatch(await selected.locator(".request-summary").innerText(), /Владелец/);
+      assert.deepEqual(errors, []); passed.push("assignee and overdue deadline in request list"); await page.close();
+    }
+    {
+      const tracked = order(7, { sla: { stage: "take", deadline: "2026-10-26T12:00:00Z", breached: false, soon: false, progress: 0.9 } });
+      const { page, errors } = await fixture(browser, { orders: [tracked] });
+      assert.doesNotMatch(await card(page, 7).locator(".request-sla").innerText(), /Просрочено/);
+      tracked.sla.breached = true;
+      await page.clock.runFor(5100);
+      await waitUntil(async () => (await card(page, 7).locator(".request-sla").innerText()).includes("Просрочено"), "SLA status did not refresh");
+      assert.deepEqual(errors, []); passed.push("SLA breach refreshes request list"); await page.close();
+    }
     for (const partialFailure of [false, true]) {
-      const assets = [{ id: 11, name: "QA camera", serial: "QA-11" }, { id: 12, name: "QA camera", serial: "QA-12" }];
+      const assets = [{ id: 11, name: "QA camera", serial: "QA-11" }, { id: 12, name: "QA camera", serial: null, asset_code: "QA-12" }];
       const { page, errors, requests } = await fixture(browser, { orders: [order(7, { status: "preparing", identity_status: "verified", assets })], inspectionFailEquipment: partialFailure ? 12 : undefined });
       await openCard(page, 7);
       const selected = card(page, 7);
+      assert.match(await selected.locator('.inspection-row[data-equipment-id="12"]').innerText(), /QA-12/);
+      assert.doesNotMatch(await selected.locator('.inspection-row[data-equipment-id="12"]').innerText(), /undefined|null/);
       assert.match(await selected.locator(".stage-lock").innerText(), /Ожидает сотрудника/);
       await selected.getByRole("button", { name: "Все исправны", exact: true }).click();
       await waitUntil(async () => (await selected.locator(".stage-lock").innerText()).includes("QA self"), "Bulk inspection did not refresh the lock holder");

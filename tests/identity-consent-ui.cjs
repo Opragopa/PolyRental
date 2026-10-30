@@ -1,5 +1,5 @@
 /* Browser regression: entering the identity form must not wait for old photos. */
-const { chromium } = require('playwright');
+const { chromium, webkit } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,7 +9,9 @@ const assets = path.join(root, 'app/miniapp_static');
 const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll('__APP_VERSION__', 'qa');
 
 (async () => {
-  const browser = await chromium.launch({headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel: process.env.PLAYWRIGHT_CHANNEL} : {})});
+  const engine = process.env.PLAYWRIGHT_BROWSER || 'chromium';
+  assert.ok(['chromium', 'webkit'].includes(engine), 'Unsupported browser engine');
+  const browser = await (engine === 'webkit' ? webkit : chromium).launch({headless: true, ...(engine === 'chromium' && process.env.PLAYWRIGHT_CHANNEL ? {channel: process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
     const errors = [];
@@ -41,6 +43,12 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     });
 
     await page.goto('http://polyrental.test/miniapp?startapp=my_bookings');
+    await page.locator('#orders-content .customer-order-toggle').waitFor();
+    if (process.env.QA_SCREENSHOTS) {
+      fs.mkdirSync(process.env.QA_SCREENSHOTS, {recursive: true});
+      await page.screenshot({path: path.join(process.env.QA_SCREENSHOTS, 'profile.png')});
+    }
+    await page.locator('#orders-content .customer-order-toggle').click();
     await page.getByRole('button', {name: 'Заполнить документы'}).click();
     await page.getByText('Тестовое согласие').waitFor();
     await page.locator('#consent-check').check();
@@ -49,6 +57,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#identity-form').waitFor({state: 'visible'});
     assert.equal(await page.locator('#consent-step').isHidden(), true);
     assert.equal(await page.locator('#identity-submit').isDisabled(), true);
+    assert.deepEqual(await page.locator('#identity-form .identity-section h3').allTextContents(), ['Личные данные', 'Паспорт', 'Адрес и студенческий', 'Фотографии документов']);
     const passport = await page.locator('.document-photo-group').first().boundingBox();
     const student = await page.locator('.document-photo-group').last().boundingBox();
     assert.ok(student.x > passport.x, 'passport and student photo groups should be side by side');
@@ -58,6 +67,11 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     assert.equal(reusableDocumentRequests, 3, 'old photos should start restoring concurrently in the background');
     await page.locator('#identity-submit').waitFor({state: 'visible'});
     await page.waitForFunction(() => !document.querySelector('#identity-submit').disabled);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    if (process.env.QA_SCREENSHOTS) {
+      fs.mkdirSync(process.env.QA_SCREENSHOTS, {recursive: true});
+      await page.screenshot({path: path.join(process.env.QA_SCREENSHOTS, 'identity.png'), fullPage: true});
+    }
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

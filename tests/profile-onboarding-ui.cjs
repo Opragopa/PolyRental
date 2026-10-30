@@ -15,7 +15,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     for (const admin of [false, true]) {
       const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
-      let seen = false, completed = 0, switches = 0, reminders = true;
+      let seen = false, completed = 0, switches = 0, reminders = true, historySearch = '';
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.hostname === 'telegram.org') return route.fulfill({contentType:'text/javascript', body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
@@ -27,6 +27,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
         if (url.pathname === '/api/miniapp/onboarding/complete') { completed++; return route.fulfill({json:{status:'ok'}}); }
         if (url.pathname === '/api/miniapp/operator/client-mode') { switches++; return route.fulfill({json:{status:'ok'}}); }
         if (url.pathname === '/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[],dependencies:[]}});
+        if (url.pathname === '/api/miniapp/profile/history') { historySearch = url.searchParams.get('number'); return route.fulfill({json:{items:[],total:0}}); }
         if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[],total:0}});
         return route.fulfill({body:html,contentType:'text/html'});
       });
@@ -35,7 +36,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
         await page.locator('#admin-panel').waitFor({state:'visible'});
         assert.equal(await page.locator('#onboarding-dialog').isHidden(), true);
         await page.getByRole('button',{name:'Каталог',exact:true}).click();
-        await page.getByRole('button',{name:'Забронировать как клиент'}).click();
+        await page.locator('#tab-new').click();
       }
       const dialog = page.locator('#onboarding-dialog');
       await dialog.waitFor({state:'visible'});
@@ -46,11 +47,17 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       await dialog.waitFor({state:'hidden'});
       await page.waitForFunction(() => document.querySelector('#onboarding-dialog').hidden);
       if (admin) {
-        await page.getByRole('button',{name:'Вернуться в управление'}).click();
+        await page.locator('#tab-admin').click();
         await page.getByText('Показано моделей: 0 из 0').waitFor();
         assert.equal(switches, 1);
       }
       await page.locator('#tab-orders').click();
+      await page.locator('#profile-number').fill('ТС260001');
+      await page.waitForFunction(() => document.querySelector('#orders-content').textContent.includes('В этой категории заявок пока нет'));
+      await page.waitForTimeout(500);
+      assert.equal(historySearch, 'ТС260001');
+      assert.equal(await page.getByRole('button',{name:'Найти',exact:true}).count(), 0);
+      await page.locator('#profile-header > summary').click();
       await page.locator('#reminders-enabled').uncheck();
       assert.equal(reminders, false);
       await page.getByRole('button',{name:'Как пользоваться'}).click();

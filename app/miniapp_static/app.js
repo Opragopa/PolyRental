@@ -10,9 +10,10 @@
   const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
-  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, operatorClientMode: false, onboardingLoading: false, onboardingPending: false, profileFilter: "active", profilePage: 0, profileNumber: "", adminRequestFilter: "all", cartVersion: null };
+  const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, onboardingLoading: false, onboardingPending: false, profileFilter: "active", profilePage: 0, profileNumber: "", adminRequestFilter: "all", cartVersion: null };
   const catalogView = { query: "", status: "all", expanded: new Set() };
   let selectedRequestId = null;
+  let selectedCustomerOrderId = null;
   let pendingDeletion = null;
   let deleteUndoSeconds = 5;
   let adminRenderSequence = 0;
@@ -111,7 +112,7 @@
         const month=Number($(`${id}-date`).value.slice(5,7)),hours=month>=6&&month<=8?schedulePolicy.summer:schedulePolicy.normal;
         $(`${id}-time`).min=hours.start; $(`${id}-time`).max=hours.end;
       }
-      $(`${id}-time-label`).textContent = `${id === "start" ? "Начало" : "Конец"} (${$(`${id}-date`).value ? datePickerText($(`${id}-date`).value) : "дата"})`;
+      $(`${id}-time-label`).textContent = `${id === "start" ? "Получение" : "Возврат"} · ${$(`${id}-date`).value ? datePickerText($(`${id}-date`).value) : "выберите дату"}`;
       $(`${id}-time`).disabled = !$("end-date").value;
     }
     const start = $("start").value, end = $("end").value;
@@ -365,25 +366,16 @@
     $("tab-new").classList.toggle("active", state.view === "flow");
     $("tab-orders").classList.toggle("active", state.view === "orders");
     $("tab-admin").classList.toggle("active", state.view === "admin");
-    $("return-to-management").hidden = !state.role?.admin || !state.operatorClientMode || state.view === "admin";
     $("tab-new").setAttribute("aria-current", state.view === "flow" ? "page" : "false");
     $("tab-orders").setAttribute("aria-current", state.view === "orders" ? "page" : "false");
     $("page-title").textContent = state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки";
     $("page-intro").textContent = state.view === "admin" ? "Комплектация, проверки, возврат, каталог и ремонт." : state.view === "identity" ? "Защищённая передача данных напрямую в PolyRental." : state.view === "orders" ? "Здесь можно следить за статусом и отменить активную заявку." : done ? "Менеджер получил запрос и скоро ответит." : "Выберите сроки и оборудование. На оформление уйдёт пара минут.";
-    $("steps").hidden = done || state.view !== "flow";
-    [...$("steps").children].forEach((element, index) => {
-      element.classList.toggle("current", index === state.step);
-      element.classList.toggle("complete", index < state.step);
-      const button = element.querySelector(".step-button");
-      button.disabled = state.busy || index >= state.step;
-      if (index === state.step) button.setAttribute("aria-current", "step"); else button.removeAttribute("aria-current");
-    });
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
     const showAction = state.view === "flow" && !done && $("onboarding-dialog").hidden && $("support-dialog").hidden;
     $("action-bar").hidden = !showAction || nativeButtons;
     $("back-button").hidden = state.step === 0;
-    const labels = ["Продолжить", "Продолжить", "Проверить заказ", "Подтвердить бронирование"];
+    const labels = ["Далее к каталогу", "К подборке", "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
     $("main-button").disabled = state.busy || (state.step === 0 && Boolean(dateValidationMessage())) || (!authorized && !keyboardMode && !preview);
     if (nativeButtons) {
@@ -436,6 +428,7 @@
       }
       if (state.items.length) {
         $("items-status").textContent = data.unavailable_count ? `${data.unavailable_count} позиций недоступно в выбранный период.` : "Все показанные экземпляры свободны на выбранный срок.";
+        $("items-status").hidden = !data.unavailable_count;
       } else {
         $("items-status").textContent = "На эти даты свободного оборудования нет. Вернитесь и выберите другой период.";
       }
@@ -458,7 +451,7 @@
     availabilityFresh=false;
     document.querySelectorAll("#items-grid .available-badge").forEach(node=>node.textContent=message);
     document.querySelectorAll("#items-grid .quantity-control .plus").forEach(button=>button.disabled=true);
-    $("items-status").textContent=message;$("retry-items").hidden=false;
+    $("items-status").textContent=message;$("items-status").hidden=false;$("retry-items").hidden=false;
   }
   async function refreshAvailability(invalidated = false) {
     if (!authorized || state.view !== "flow" || state.step !== 1 || state.busy || document.hidden) return;
@@ -472,12 +465,15 @@
         const previous = state.items.find((item) => item.id === id);
         next.push({...(previous || {id, name:"Позиция больше недоступна", description:""}), available_quantity:0});
       }
+      const wasStale = !availabilityFresh;
       const key = (items) => JSON.stringify(items.map((item) => [item.id, item.available_quantity, item.next_available_start, item.title, item.name]));
       if (key(next) !== key(state.items)) {
         const offset = window.scrollY; state.items = next; availabilityFresh=true; renderItems(); window.scrollTo(window.scrollX, offset);
         $("items-status").textContent = "Доступность обновлена с учётом других заявок.";
+        $("items-status").hidden = false;
       }
       if(!availabilityFresh){availabilityFresh=true;state.items=next;renderItems();}
+      if(wasStale){$("items-status").textContent="Доступность обновлена.";$("items-status").hidden=false;}
       $("retry-items").hidden=true;
     } catch (_) { if(sequence===availabilitySequence)markAvailabilityStale("Нет свежих данных. Повторите проверку доступности."); }
   }
@@ -512,13 +508,15 @@
       card.className = `item-card${selected ? " selected" : ""}${unavailable ? " unavailable" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<details><summary>Показать детали</summary><p>${escapeHtml(item.name)}</p><p>${escapeHtml(item.description || "")}</p></details></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong aria-live="polite">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>+</button></div></div>`;
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<div class="item-notes"></div></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong aria-live="polite">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>+</button></div></div>`;
       const changeQuantity = (next) => { if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id); state.requestId = null; renderItems(); saveDraft(); };
       card.querySelector(".minus").addEventListener("click", () => changeQuantity(quantity - 1));
       card.querySelector(".plus").addEventListener("click", () => changeQuantity(quantity + 1));
       if (!availabilityFresh) card.querySelector(".available-badge").textContent = "Нужна свежая проверка";
-      if (item.owners?.length) { const owner = document.createElement("p"); owner.textContent=`Владелец: ${item.owners.join(", ")}`; card.querySelector("details").append(owner); }
-      for (const block of item.unavailability || []) { const note=document.createElement("p"); note.textContent=`Занято вне сервиса: ${block.reason}, до ${dateText(block.end)} МСК`; card.querySelector("details").append(note); }
+      const notes = card.querySelector(".item-notes");
+      if (item.name && item.name !== catalogTitle(item)) { const full = document.createElement("p"); full.textContent = item.name; notes.append(full); }
+      if (item.owners?.length) { const owner = document.createElement("p"); owner.textContent=`Владелец: ${item.owners.join(", ")}`; notes.append(owner); }
+      for (const block of item.unavailability || []) { const note=document.createElement("p"); note.textContent=`Занято вне сервиса: ${block.reason}, до ${dateText(block.end)} МСК`; notes.append(note); }
       $("items-grid").append(card);
     }
     $("selected-count").textContent = [...state.quantities.values()].reduce((sum, value) => sum + value, 0);
@@ -583,13 +581,6 @@
     if (state.step > 0 && state.step < 4) { state.step--; render(); }
   }
 
-  $("steps").addEventListener("click", (event) => {
-    const button = event.target.closest(".step-button");
-    if (!button || state.busy) return;
-    const target = Number(button.dataset.step);
-    if (!Number.isInteger(target) || target < 0 || target >= state.step) return;
-    clearError(); state.step = target; render();
-  });
   async function submit() {
     if (authorized && (cartDirty || cartSaving)) { try { await flushCart(); } catch (error) { return showError(`Не удалось сохранить подборку: ${error.message}`); } }
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
@@ -668,8 +659,12 @@
       $("profile-page").textContent = `${state.profilePage + 1} / ${pages}`;
       if (!filtered.length) { $("orders-content").textContent = "В этой категории заявок пока нет."; return; }
       for (const order of filtered) {
-        const card = document.createElement("article"); card.className = "order-card";
-        card.innerHTML = `<div class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></div><p>${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</p><p>${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</p>${order.estimated_until ? `<p>В обработке, ориентировочно до ${escapeHtml(dateText(order.estimated_until))} МСК</p>` : ""}`;
+        const outer = document.createElement("article"); outer.className = "order-card customer-order-card"; outer.dataset.bookingId = String(order.id);
+        const accordion = document.createElement("details"); accordion.className = "customer-order-accordion"; accordion.open = selectedCustomerOrderId === order.id;
+        const toggle = document.createElement("summary"); toggle.className = "customer-order-toggle";
+        toggle.innerHTML = `<span class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="customer-order-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span><span class="customer-order-items">${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</span>`;
+        const card = document.createElement("div"); card.className = "customer-order-body";
+        if (order.estimated_until) { const estimate = document.createElement("p"); estimate.textContent = `В обработке, ориентировочно до ${dateText(order.estimated_until)} МСК`; card.append(estimate); }
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
         help.addEventListener("click", () => openSupport("request", order.id)); card.append(help);
         if (order.receipt_available) {
@@ -715,7 +710,13 @@
           });
           card.append(cancel);
         }
-        $("orders-content").append(card);
+        accordion.append(toggle, card); outer.append(accordion); $("orders-content").append(outer);
+        toggle.addEventListener("click", event => {
+          event.preventDefault(); const opening = !accordion.open;
+          if (opening) for (const other of $("orders-content").querySelectorAll(".customer-order-accordion")) if (other !== accordion) other.open = false;
+          accordion.open = opening; selectedCustomerOrderId = opening ? order.id : null;
+          if (opening) showStageNotice(order);
+        });
       }
     } catch (error) { if (sequence === profileLoadSequence && state.view === "orders") { $("orders-content").textContent = "Не удалось загрузить заявки. Попробуйте открыть раздел ещё раз."; showError(error.message); } }
   }
@@ -962,21 +963,28 @@
   }
 
   async function showAdmin(mode = "orders") {
+    $("admin-settings").hidden = Boolean(state.role?.pii_only);
     if (state.role?.pii_only) {mode = "orders";document.querySelectorAll("#admin-panel .calendar-sync").forEach(node=>node.hidden=true);}
     document.querySelectorAll(".admin-tabs .admin-mode").forEach((button) => { if (state.role?.pii_only && button.dataset.mode !== "orders") button.hidden = true; });
     if (state.role?.staff_role === "admin" && !$("staff-settings-button")) {
       const settings = plainButton("Сотрудники", async () => {
         const result = await api("/api/miniapp/admin/staff");
-        const data = await workflowDialog("Роли сотрудников", `<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.full_name || String(item.telegram_id))}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label>`, "Подтвердить", (dialog) => {
+        if (!result.items?.length) throw new Error("Нет сотрудников для настройки. Обратитесь к администратору.");
+        const data = await workflowDialog("Сотрудники", `<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.full_name || String(item.telegram_id))}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label><p class="workflow-hint">Доступ к персональным данным назначается отдельно.</p>`, "Сохранить", (dialog) => {
           const populate = () => { const item = result.items.find(row => row.telegram_id === Number(dialog.querySelector('[name="staff"]').value)); dialog.querySelector('[name="role"]').value = item?.role || "operator"; };
           dialog.querySelector('[name="staff"]').addEventListener("change", populate); populate();
         }, async data => {
           const id = data.get("staff");
-          await api(`/api/miniapp/admin/staff/${id}/role`, {method:"PUT", body:JSON.stringify({role:data.get("role")})});
-          if (Number(id) === state.role?.id) state.role = await api("/api/miniapp/me");
+          const original = result.items.find(item => item.telegram_id === Number(id));
+          const role = data.get("role");
+          if (role !== original?.role) {
+            await api(`/api/miniapp/admin/staff/${id}/role`, {method:"PUT", body:JSON.stringify({role})});
+            if (original) original.role = role;
+            if (Number(id) === state.role?.id) state.role = await api("/api/miniapp/me");
+          }
         });
         if(data)await showAdmin(mode);
-      }); settings.id="staff-settings-button"; $("admin-panel").querySelector(".admin-tabs").append(settings);
+      }); settings.id="staff-settings-button"; $("admin-settings").append(settings);
     }
     const sequence = ++adminRenderSequence;
     const anchoredRequestId = selectedRequestId;
@@ -985,12 +993,12 @@
     const focused = previousCard?.contains(document.activeElement) ? document.activeElement.textContent : null;
     if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
     closeDocumentViewer();
-    clearError(); state.view = "admin"; state.adminMode = mode; state.operatorClientMode = false;
+    clearError(); state.view = "admin"; state.adminMode = mode;
     $("admin-request-filter-field").hidden = mode !== "orders";
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
     if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
     render();
-    document.querySelectorAll(".admin-mode").forEach((button) => { button.className = `button ${button.dataset.mode === mode ? "secondary" : "ghost"} admin-mode`; });
+    document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
     if (!content.querySelector(".request-card") || mode !== "orders") content.textContent = "Загружаем…";
@@ -1030,18 +1038,22 @@
         const accordion = document.createElement("details"); accordion.className = "request-accordion";
         const toggle = document.createElement("summary"); toggle.className = "request-toggle";
         toggle.innerHTML = `<span class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span>`;
+        const owner = document.createElement("span"); owner.className = "request-assignee";
+        owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ID ${order.assignee_id}`) : "Ответственный не назначен";
+        toggle.append(owner);
+        if (order.sla?.deadline && order.sla?.stage !== "closed") {
+          const sla = document.createElement("span"); sla.className = "request-sla";
+          if (order.sla.breached) sla.classList.add("request-sla-overdue");
+          sla.textContent = `${order.sla.breached ? "Просрочено · " : ""}Срок обработки: ${dateText(order.sla.deadline)} МСК`;
+          toggle.append(sla);
+        }
         const body = document.createElement("div"); body.className = "request-body";
-        const summary = reviewSection("Заявка", "request-summary");
+        const summary = reviewSection("Сроки и техника", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
-        summary.append(labelledValues([["Номер заявки", order.human_number || `№${order.id}`], ["Владелец", order.assignee_id ? `ID ${order.assignee_id}` : "Без владельца"], ["Клиент", order.customer_name], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`], ["Статус", statusNames[order.status] || order.status], ["Анкета", identityStatusNames[order.identity_status] || order.identity_status]]));
+        summary.append(labelledValues([["Ответственный", order.assignee_id ? `ID ${order.assignee_id}` : "Не назначен"], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`]]));
         if (order.sla?.deadline) {
           const deadline = document.createElement("p"); deadline.textContent = `${order.sla.breached ? "Просрочено · " : ""}Дедлайн: ${dateText(order.sla.deadline)} МСК`; summary.append(deadline);
           const progress = document.createElement("progress"); progress.max = 1; progress.value = order.sla.progress; progress.setAttribute("aria-label", "Прошедшая часть срока обработки"); summary.append(progress);
-        }
-        if (order.sla?.stage !== "closed" && ["manager","admin"].includes(state.role?.staff_role)) {
-          const assign = document.createElement("form"); assign.className = "action-row";
-          assign.innerHTML = `<label class="field"><span>Telegram ID сотрудника</span><input type="number" min="1" required inputmode="numeric" aria-label="Telegram ID сотрудника"></label><button class="button secondary" type="submit">Назначить</button>`;
-          assign.addEventListener("submit", async (event) => { event.preventDefault(); const value = Number(assign.querySelector("input").value); try { await api(`/api/miniapp/admin/bookings/${order.id}/assignee`, { method: "PUT", body: JSON.stringify({ assignee_id: value }) }); await showAdmin("orders"); } catch (error) { showError(error.message); } }); summary.append(assign);
         }
         if (state.profile?.system_admin) {
           const flag = document.createElement("label"); flag.className = "check-row"; const checkbox = document.createElement("input"); checkbox.type="checkbox"; checkbox.checked = Boolean(order.is_test); const text = document.createElement("span"); text.textContent="Тестовая заявка"; flag.append(checkbox,text); summary.append(flag);
@@ -1052,7 +1064,7 @@
           if (pendingDeletion?.bookingId === order.id && pendingDeletion.lineId === line.id) continue;
           const row = document.createElement("div"); row.className = "request-equipment-row"; row.dataset.lineId = String(line.id);
           const label = document.createElement("span"); label.textContent = `${line.title || line.name} × ${line.quantity}`; row.append(label);
-          if (line.title && line.title !== line.name) { const details = document.createElement("details"); const toggle = document.createElement("summary"); toggle.textContent = "Полное название"; const full = document.createElement("p"); full.textContent = line.name; details.append(toggle, full); row.append(details); }
+          if (line.title && line.title !== line.name) { const full = document.createElement("small"); full.className = "request-equipment-full"; full.textContent = line.name; row.append(full); }
           if (order.status === "pending") {
             const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact";
             remove.textContent = "Удалить"; remove.setAttribute("aria-label", `Удалить позицию ${line.title || line.name}`);
@@ -1086,9 +1098,12 @@
             ? (state.role?.pii_admin ? "Следующий шаг: проверьте анкету клиента." : "Ждём проверку анкеты сотрудником с доступом к персональным данным.")
             : (order.identity_status === "needs_changes" ? "Ждём исправленную анкету клиента." : "Ждём заполненную анкету клиента.");
         }
-        processing.append(nextStep);
+        if (order.status === "pending" && !["manager", "admin"].includes(state.role?.staff_role)) nextStep.textContent = "Ожидаем подтверждения заявки менеджером.";
+        const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview";
+        const nextHeading = document.createElement("h4"); nextHeading.textContent = "Следующий шаг";
+        nextOverview.append(nextHeading, nextStep);
         appendHandoverProgress(processing, order, true);
-        body.append(summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
+        body.append(nextOverview, summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
         if (reworkTargets[order.status] && (order.status !== "confirmed" || ["manager","admin"].includes(state.role?.staff_role))) {
@@ -1221,7 +1236,8 @@
       const row = document.createElement("div"); row.className = "inspection-row"; row.dataset.equipmentId = String(asset.id);
       const details = document.createElement("div"); details.className = "inspection-unit";
       const name = document.createElement("strong"); name.className = "inspection-unit-name";
-      name.textContent = `${asset.name} · № ${asset.serial}`;
+      const assetIdentifier = asset.asset_code || asset.inventory_code || asset.serial;
+      name.textContent = assetIdentifier ? `${asset.name} · № ${assetIdentifier}` : `${asset.name} · без номера`;
       const status = document.createElement("span"); status.className = `inspection-state${saved ? " checked" : ""}`;
       status.textContent = saved ? (saved.result === "pass" ? "Исправно" : "Зафиксирована неисправность") : "Ожидает проверки";
       details.append(name, status);
@@ -1691,6 +1707,14 @@
     });
   }
 
+  async function chooseAssignee(order) {
+    const result = await api("/api/miniapp/admin/assignees");
+    const items = (result.items || []).filter(item => Number.isInteger(item.id) && item.id > 0);
+    if (!items.length) throw new Error("Нет доступных сотрудников для назначения. Обратитесь к администратору.");
+    const options = items.map(item => `<option value="${item.id}" ${item.id === order.assignee_id ? "selected" : ""}>${escapeHtml(item.name || `ID ${item.id}`)}</option>`).join("");
+    await workflowDialog("Назначить ответственного", `<label class="field"><span>Сотрудник</span><select name="assignee" required><option value="">Выберите сотрудника</option>${options}</select></label>`, "Подтвердить", null, async data => api(`/api/miniapp/admin/bookings/${order.id}/assignee`, {method:"PUT", body:JSON.stringify({assignee_id:Number(data.get("assignee"))})}));
+  }
+
   function appendHandoverProgress(parent, order, admin) {
     const status = order.status, handover = order.handover || {};
     if (!["ready", "issued", "return_inspection", "returned"].includes(status)) return;
@@ -1714,7 +1738,7 @@
   }
 
   function workflowSnapshot(result) {
-    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available}))});
+    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
   }
 
   function workflowRefreshSafe() {
@@ -1812,7 +1836,6 @@
   }
 
   function appendCustomerWorkflow(card, order) {
-    showStageNotice(order);
     const notice = workflowNotice(order);
     if (notice) { const strip = document.createElement("p"); strip.className = "notice stage-notice"; strip.setAttribute("role","status"); strip.textContent = notice; card.append(strip); }
     if (order.status === "pending") card.append(plainButton("Изменить заявку", () => editRequestDialog(order)));
@@ -1849,10 +1872,7 @@
     showStageNotice(order,true);
     const role = state.role?.staff_role || "operator";
     const manager = ["manager","admin"].includes(role);
-    if (manager && ["confirmed","preparing","ready","issued","return_inspection"].includes(order.status)) actions.append(actionButton("Передать заявку",async () => {
-      const result=await api("/api/miniapp/admin/assignees");
-      const data=await workflowDialog("Передать заявку сотруднику",`<label class="field"><span>Сотрудник</span><select name="assignee">${result.items.map((item)=>`<option value="${item.id}" ${item.id === order.assignee_id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>`,"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/assignee`,{method:"PUT",body:JSON.stringify({assignee_id:Number(data.get("assignee"))})}));
-    },order.id,"secondary lock-exempt"));
+    if (manager && ["pending","needs_changes","confirmed","preparing","ready","issued","return_inspection"].includes(order.status)) actions.append(actionButton(order.assignee_id ? "Передать заявку" : "Назначить ответственного", () => chooseAssignee(order), order.id, "secondary lock-exempt"));
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; actions.append(badge); }
     if (manager && ["pending","confirmed"].includes(order.status)) {
       actions.append(actionButton("Изменить заявку", () => editRequestDialog(order,true), order.id,"secondary",false));
@@ -2221,7 +2241,6 @@
   function enterClientMode() {
     clearError();
     if (state.role?.admin && state.view === "admin") {
-      state.operatorClientMode = true;
       api("/api/miniapp/operator/client-mode", { method: "POST" }).catch(() => showError("Не удалось записать переход в режим бронирования."));
     }
     if (state.profile?.client_allowed === false) { state.view = "blocked"; render(); return; }
@@ -2232,8 +2251,6 @@
     void maybeShowOnboarding();
   }
   $("tab-new").addEventListener("click", enterClientMode);
-  $("operator-book").addEventListener("click", enterClientMode);
-  $("return-to-management").addEventListener("click", () => showAdmin(state.adminMode));
   $("onboarding-reopen").addEventListener("click", openOnboarding);
   $("reminders-enabled").addEventListener("change", async (event) => {
     const checkbox = event.target, previous = state.profile.reminders_enabled;
@@ -2246,7 +2263,14 @@
   $("onboarding-next").addEventListener("click", () => { if (onboardingIndex + 1 === onboardingSlides.length) void finishOnboarding(); else { onboardingIndex++; drawOnboarding(); } });
   $("onboarding-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("onboarding-dialog")); if (event.key === "Escape") void finishOnboarding(); });
   $("tab-orders").addEventListener("click", showOrders);
-  $("profile-search").addEventListener("submit", (event) => { event.preventDefault(); state.profileNumber = $("profile-number").value.trim(); state.profilePage = 0; state.profileFilter = "all"; $("profile-filter").value = "all"; void showOrders(); });
+  let profileSearchTimer;
+  function applyProfileSearch() {
+    clearTimeout(profileSearchTimer);
+    if (state.view !== "orders") return;
+    state.profileNumber = $("profile-number").value.trim(); state.profilePage = 0; state.profileFilter = "all"; $("profile-filter").value = "all"; void showOrders();
+  }
+  $("profile-number").addEventListener("input", () => { clearTimeout(profileSearchTimer); profileLoadSequence += 1; profileSearchTimer = setTimeout(applyProfileSearch, 350); });
+  $("profile-search").addEventListener("submit", (event) => { event.preventDefault(); applyProfileSearch(); });
   $("profile-filter").addEventListener("change", (event) => { state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
   $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
@@ -2305,7 +2329,6 @@
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
   for (const id of ["start", "end"]) $(`${id}-time`).addEventListener("input", periodChanged);
-  $("period-clear").addEventListener("click", () => rangeCalendar.reset());
   document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
   $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });

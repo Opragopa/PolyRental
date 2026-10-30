@@ -57,12 +57,14 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         });
         assert.equal(bounds.overflow,false,JSON.stringify({width,dark,bounds}));
         assert.equal(bounds.touch,true);
-        assert.equal(bounds.scroll,0);
-        assert.ok(bounds.calendar.bottom<=bounds.action.top && bounds.time.bottom<=bounds.action.top && bounds.summary.bottom<=bounds.action.top, JSON.stringify({width,dark,bounds}));
+        await page.locator('#period-summary').evaluate(node => node.scrollIntoView({block: 'center'}));
+        const visibleSummary = await page.evaluate(() => ({summary:document.querySelector('#period-summary').getBoundingClientRect().toJSON(), action:document.querySelector('#action-bar').getBoundingClientRect().toJSON(), tabs:document.querySelector('.tabs').getBoundingClientRect().toJSON()}));
+        assert.ok(visibleSummary.summary.bottom <= visibleSummary.action.top && visibleSummary.action.bottom <= visibleSummary.tabs.top, JSON.stringify({width,dark,visibleSummary}));
+        assert.ok(await page.locator('.tabs .tab:visible').evaluateAll(buttons => buttons.every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44 && box.left >= 0 && box.right <= innerWidth; })), 'bottom navigation stays visible and tappable');
         assert.ok(bounds.button.bottom<=height && bounds.button.top>=0);
         assert.ok(bounds.renderMs<100,JSON.stringify(bounds));
         await page.locator("#main-button").click();
-        await page.locator('[data-step="0"]').click();
+        await page.locator('#back-button').click();
         assert.equal(await page.locator("#start-time").inputValue(),"10:00");
         assert.equal(await page.locator("#start-date").inputValue(),"2026-10-30");
         assert.equal(requests.filter(url=>url.startsWith("/api/")).length,0);
@@ -90,9 +92,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
           fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});
           await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,`v${version}-calendar-${width}-${dark?"dark":"light"}.png`)});
         }
-        await page.locator("#period-clear").click();
-        assert.equal(await page.locator(".calendar-day.selected").count(),0);
         await page.locator('[data-date="2026-10-30"]').click();
+        assert.equal(await page.locator(".calendar-day.selected").count(),1);
         await page.locator('[data-date="2026-10-30"]').click();
         assert.equal(await page.locator("#main-button").isDisabled(),false); // 10:00–18:00 same day
         await page.locator("#end-time").fill("09:00");
@@ -163,13 +164,14 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     await native.clock.install({time:new Date("2026-10-26T10:00:00Z")});
     await native.goto("http://polyrental.test/miniapp");
     assert.equal(await native.locator("#action-bar").isHidden(),true);
+    assert.equal(await native.locator(".tabs").isVisible(),true);
     assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[true,false]);
     await native.locator('[data-date="2026-10-30"]').tap();
     await native.locator('[data-date="2026-10-31"]').tap();
     assert.equal(await native.evaluate(()=>__qaSdk.enabled),true);
     await native.evaluate(()=>{Telegram.WebApp.colorScheme="dark";__qaSdk.events.themeChanged();});
     assert.equal(await native.locator("html").getAttribute("data-theme"),"dark");
-    await native.locator("#period-clear").tap();
+    await native.locator('[data-date="2026-10-30"]').tap();
     assert.equal(await native.evaluate(()=>__qaSdk.enabled),false);
     assert.deepEqual(nativeErrors,[]);await native.close();
     console.log(JSON.stringify({engine:engineName,passed:results.length+3,viewports:results},null,2));
