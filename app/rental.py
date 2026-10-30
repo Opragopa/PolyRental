@@ -153,7 +153,7 @@ _HISTORY_OPERATION_ACTIONS.update({"customer_received", "customer_returning", "p
     "request_changes_proposed", "request_changes_disputed", "request_changes_unanswered", "request_updated",
     "return_finding_existing", "return_finding_damage", "return_finding_lost", "legacy_receipt_migrated"})
 _HISTORY_OPERATION_ACTIONS.add("request_rejected")
-_HISTORY_IDENTITY_ACTIONS = {"verified", "changes_requested", "blocked", "unblocked",
+_HISTORY_IDENTITY_ACTIONS = {"submitted", "verified", "changes_requested", "blocked", "unblocked",
                              "manual_delete", "subject_request", "retention_purge"}
 
 

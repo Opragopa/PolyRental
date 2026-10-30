@@ -39,10 +39,10 @@ def test_history_is_staff_only_ordered_and_content_free(monkeypatch):
     transition(booking_id, "confirmed", 100)
     stamp = now() + timedelta(seconds=1)
     with Session.begin() as session:
-        for action in ("verified", "changes_requested"):
+        for action in ("submitted", "verified", "changes_requested"):
             session.add(PIIAudit(booking_id=booking_id, actor_id=200, action=action, created_at=stamp))
-        # Reads/uploads and unknown legacy actions are never exposed to staff.
-        for action in ("submitted", "view_masked", "revealed", "document_downloaded", "sensitive-unknown"):
+        # Reads and unknown legacy actions are never exposed to staff.
+        for action in ("view_masked", "revealed", "document_downloaded", "sensitive-unknown"):
             session.add(PIIAudit(booking_id=booking_id, actor_id=200, action=action))
         session.add(Audit(booking_id=booking_id, actor_id=100, action="sensitive-unknown"))
     url = f"/api/miniapp/admin/bookings/{booking_id}/history"
@@ -54,9 +54,9 @@ def test_history_is_staff_only_ordered_and_content_free(monkeypatch):
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-store"
             items = response.json()["items"]
-            assert [item["action"] for item in items] == ["created", "assignee:100", "confirmed", "verified", "changes_requested"]
-            assert [item["actor_id"] for item in items] == [42, 100, 100, 200, 200]
-            assert [item["category"] for item in items] == ["status", "operation", "status", "identity", "identity"]
+            assert [item["action"] for item in items] == ["created", "assignee:100", "confirmed", "submitted", "verified", "changes_requested"]
+            assert [item["actor_id"] for item in items] == [42, 100, 100, 200, 200, 200]
+            assert [item["category"] for item in items] == ["status", "operation", "status", "identity", "identity", "identity"]
             assert len({item["id"] for item in items}) == len(items)
             assert all(set(item) == {"id", "action", "actor_id", "created_at", "category"} for item in items)
             assert [item["created_at"] for item in items] == sorted(item["created_at"] for item in items)
@@ -140,7 +140,7 @@ def test_manual_correction_and_approval_persist_safe_history_without_claiming_st
             assert session.get(BookingOperationLease, (booking_id, "identity_review")) is None
         history = client.get(url + "/history", headers=headers(100))
         assert [row["action"] for row in history.json()["items"]] == [
-            "created", "assignee:100", "confirmed", "changes_requested", "verified"]
+            "created", "assignee:100", "confirmed", "submitted", "changes_requested", "verified"]
         for secret in ("Анна Иванова", "123456", "student_front", "Замените фото", "document_checks", "manual_review"):
             assert secret not in history.text
         # Terminal requests reject further review and do not append a review event.

@@ -19,6 +19,7 @@
   let profileLoadSequence = 0;
   let availabilitySequence = 0;
   let leaseRefreshTimer = null;
+  let adminOrdersSnapshot = null, customerOrdersSnapshot = null, workflowRefreshBusy = false;
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
@@ -658,6 +659,7 @@
       const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}`);
       if (sequence !== profileLoadSequence || state.view !== "orders") return;
       $("orders-content").replaceChildren();
+      customerOrdersSnapshot = workflowSnapshot(result);
       const filtered = result.items;
       const pages = Math.max(1, Math.ceil((result.total ?? filtered.length) / 10));
       if (state.profilePage >= pages) { state.profilePage = pages - 1; return showOrders(); }
@@ -916,12 +918,12 @@
       const result = await api(`/api/miniapp/admin/bookings/${order.id}/history`);
       if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
       body.replaceChildren();
-      const names = { support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
+      const names = { pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
       if (!result.items?.length) { body.textContent = "Записей пока нет."; return; }
       const list = document.createElement("ol"); list.className = "request-history-list";
       for (const event of result.items) {
         const item = document.createElement("li"); const label = document.createElement("strong"); const meta = document.createElement("span");
-        label.textContent = names[event.action] || (event.action.startsWith("support_owner:") ? `Обращение передано сотруднику ID ${event.action.split(":")[1]}` : event.action.startsWith("assignee:") ? `Назначен владелец ID ${event.action.split(":")[1]}` : event.action.startsWith("asset_deleted:") ? `Экземпляр ${event.action.split(":")[1]} удалён` : event.action.startsWith("asset_restored:") ? `Экземпляр ${event.action.split(":")[1]} восстановлен` : event.action.startsWith("line_deleted:") ? `Позиция ${event.action.split(":")[1]} удалена` : event.action.startsWith("line_restored:") ? `Позиция ${event.action.split(":")[1]} восстановлена` : event.action === "request_deleted" ? "Заявка удалена" : event.action === "request_restored" ? "Заявка восстановлена" : "Служебное действие");
+        label.textContent = names[event.action] || (event.action.startsWith("support_owner:") ? `Обращение передано сотруднику ID ${event.action.split(":")[1]}` : event.action.startsWith("assignee:") ? `Назначен владелец ID ${event.action.split(":")[1]}` : event.action.startsWith("asset_deleted:") ? `Экземпляр ${event.action.split(":")[1]} удалён` : event.action.startsWith("asset_restored:") ? `Экземпляр ${event.action.split(":")[1]} восстановлен` : event.action.startsWith("line_deleted:") ? `Позиция ${event.action.split(":")[1]} удалена` : event.action.startsWith("line_restored:") ? `Позиция ${event.action.split(":")[1]} восстановлена` : event.action.startsWith("sla_") ? "Уведомление о сроке обработки" : event.action.includes("_delete_intent") ? "Запрошено удаление" : event.action.includes("_delete_undo") ? "Удаление отменено" : event.action === "request_deleted" ? "Заявка удалена" : event.action === "request_restored" ? "Заявка восстановлена" : "Служебное действие");
         meta.textContent = `${dateText(event.created_at)} МСК · ${event.actor_id ? `ID ${event.actor_id}` : "Система"}`;
         item.append(label, meta); list.append(item);
       }
@@ -1019,6 +1021,7 @@
       }
       const result = await api("/api/miniapp/admin/bookings");
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
+      adminOrdersSnapshot = workflowSnapshot(result);
       content.replaceChildren();
       if (!result.items.length) { content.textContent = "Заказов пока нет."; return; }
       deleteUndoSeconds = Number.isInteger(result.undo_seconds) ? Math.max(1, Math.min(30, result.undo_seconds)) : 5;
@@ -1084,7 +1087,13 @@
         const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status"); processing.append(ownership);
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
         nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Сверьте личность, бумажную подпись и отметку клиента «Получил».", issued: "Ждём отметку клиента «Сдаю оборудование».", return_inspection: "Проверьте возврат и отметьте приём оборудования.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
+        if (order.status === "confirmed" && order.identity_status !== "verified") {
+          nextStep.textContent = order.identity_status === "submitted"
+            ? (state.role?.pii_admin ? "Следующий шаг: проверьте анкету клиента." : "Ждём проверку анкеты сотрудником с доступом к персональным данным.")
+            : (order.identity_status === "needs_changes" ? "Ждём исправленную анкету клиента." : "Ждём заполненную анкету клиента.");
+        }
         processing.append(nextStep);
+        appendHandoverProgress(processing, order, true);
         body.append(summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
@@ -1099,7 +1108,7 @@
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
         if (order.status === "confirmed") {
           if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
-          else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = "Комплектацию можно начать после заполнения документов клиентом и проверки оператором."; actions.append(note); }
+          else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = state.role?.pii_admin ? "Дождитесь заполнения анкеты клиентом и проверьте документы. Затем начните подготовку." : "Дождитесь заполнения анкеты клиентом и проверки сотрудником с доступом к персональным данным. Затем начните подготовку."; actions.append(note); }
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
@@ -1127,16 +1136,19 @@
           formHost.append(actionButton("Проверить анкету", () => reviewIdentity(order, card), order.id, "secondary lock-exempt", false));
         }
         if (["pending", "needs_changes", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заявку", async () => { if (await confirmCancel(order.human_number || "", order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
-        if (order.status === "issued") actions.append(actionButton("Начать приём оборудования", transitionAction("return_inspection"), order.id, "primary workflow-next"));
+
         if (order.status === "return_inspection") {
           const finishReturn = actionButton("Завершить заявку", async () => { if (await workflowDialog("Завершить заявку", "<p>Оборудование проверено. Подтвердите завершение.</p>")) await transitionAction("returned")(); }, order.id, "primary workflow-next");
           const canFinishReturn = () => order.assets.length > 0 && Boolean(order.handover?.return_signature) && order.assets.every((asset) => Boolean(inspectionFor(order, asset, "check_in")));
           const returnHint = document.createElement("p"); returnHint.className = "workflow-hint";
           const updateReturnHint = () => {
             const unchecked = order.assets.filter((asset) => !inspectionFor(order, asset, "check_in")).length;
-            returnHint.textContent = unchecked
-              ? `Проверьте каждый экземпляр при возврате: осталось ${unchecked}. Затем нажмите «Далее», чтобы завершить возврат.`
-              : "Проверка завершена. Нажмите «Далее», чтобы закрыть возврат.";
+            const missing = [];
+            if (unchecked) missing.push(`проверьте экземпляры: осталось ${unchecked}`);
+            if (!order.assets.length) missing.push("нет назначенных экземпляров");
+            if (!order.handover?.return_signature) missing.push("доверенный сотрудник должен отметить бумажную подпись при возврате");
+            returnHint.textContent = missing.length ? `Для завершения: ${missing.join("; ")}.` : "Все условия выполнены. Нажмите «Завершить заявку».";
+            finishReturn.title = returnHint.textContent;
             returnHint.hidden = canFinishReturn();
           };
           finishReturn.disabled = !canFinishReturn();
@@ -1683,6 +1695,59 @@
     });
   }
 
+  function appendHandoverProgress(parent, order, admin) {
+    const status = order.status, handover = order.handover || {};
+    if (!["ready", "issued", "return_inspection", "returned"].includes(status)) return;
+    const section = document.createElement("section"); section.className = "handover-progress";
+    const heading = document.createElement("strong"); heading.textContent = status === "ready" ? "Выдача: что уже сделано" : "Возврат: что уже сделано"; section.append(heading);
+    const list = document.createElement("ul");
+    const isDone = status === "returned";
+    let steps;
+    if (status === "ready") steps = [[Boolean(handover.received_at), "Клиент подтвердил получение"], [Boolean(handover.issue_signature), "Доверенный сотрудник отметил бумажную подпись"], [false, "Сотрудник подтверждает выдачу"]];
+    else {
+      steps = [[Boolean(handover.returning_at) || isDone, "Клиент отметил сдачу оборудования"]];
+      if (admin) {
+        const assets = order.assets || [];
+        const checked = assets.length > 0 && assets.every(asset => Boolean(inspectionFor(order, asset, "check_in")));
+        steps.push([checked || isDone, "Сотрудник проверил оборудование"]);
+      }
+      steps.push([Boolean(handover.return_signature) || isDone, "Доверенный сотрудник отметил бумажную подпись"], [isDone, "Сотрудник завершил возврат"]);
+    }
+    for (const [done, label] of steps) { const li = document.createElement("li"); li.textContent = `${done ? "✓" : "○"} ${label} — ${done ? "готово" : "ожидается"}`; list.append(li); }
+    section.append(list); parent.append(section);
+  }
+
+  function workflowSnapshot(result) {
+    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available}))});
+  }
+
+  function workflowRefreshSafe() {
+    const active = document.activeElement;
+    return !document.hidden && !state.busy && !pendingDeletion && !document.querySelector('.workflow-dialog, .identity-check-review, .review-loading, .assignment-editor, .inspection-all-pass:disabled, [data-action-pending="true"]') && $("document-viewer").hidden && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("rework-dialog").hidden && $("identity-review-dialog").hidden && !(active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) && ![...document.querySelectorAll(".request-summary input:not([type=checkbox])")].some(input => input.value.trim());
+  }
+
+  async function refreshWorkflow() {
+    if (!authorized || workflowRefreshBusy || !workflowRefreshSafe()) return;
+    const view = state.view, mode = state.adminMode;
+    if (view !== "orders" && !(view === "admin" && mode === "orders")) return;
+    const baseline = view === "orders" ? customerOrdersSnapshot : adminOrdersSnapshot;
+    if (baseline === null) return;
+    const sequence = view === "orders" ? profileLoadSequence : adminRenderSequence;
+    const path = view === "orders" ? `/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}` : "/api/miniapp/admin/bookings";
+    workflowRefreshBusy = true;
+    try {
+      const result = await api(path);
+      if (state.view !== view || (view === "admin" && state.adminMode !== mode) || sequence !== (view === "orders" ? profileLoadSequence : adminRenderSequence) || !workflowRefreshSafe()) return;
+      if (workflowSnapshot(result) !== baseline) {
+        const scroll = window.scrollY;
+        if (view === "orders") { await showOrders(); window.scrollTo(window.scrollX, scroll); }
+        else await showAdmin("orders");
+      }
+    } catch (_) { /* Keep the current view; retry on the next interval. */ }
+    finally { workflowRefreshBusy = false; }
+  }
+  setInterval(refreshWorkflow, 5000);
+
   function workflowNotice(order) {
     return ({pending:"Заявка отправлена, ждите проверки", confirmed:"Заявка подтверждена", ready:"Готово к выдаче", issued:`Выдано, вернуть до ${dateText(order.ends_at)} МСК`, return_inspection:"Оборудование на приёмке", returned:"Заявка завершена"})[order.status] || "";
   }
@@ -1771,6 +1836,7 @@
         await showOrders();
       }));
     }
+    appendHandoverProgress(card, order, false);
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
     if (order.receipt_available || order.receipt_preview_available) card.append(plainButton("Предпросмотр расписки",()=>previewReceipt(order)));
     if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.pdf`)));

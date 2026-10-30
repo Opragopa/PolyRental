@@ -39,7 +39,7 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
     if (['POST','PUT','DELETE'].includes(method)) {
       const body=route.request().postDataJSON(); writes.push({path:url.pathname,body});
       if(failWriteOnce){failWriteOnce=false;return route.fulfill({status:409,json:{detail:'Синтетический конфликт: повторите'}});}
-      if (url.pathname.endsWith('/attest')) order.handover.received_at='2026-10-29T10:00:00Z';
+      if (url.pathname.endsWith('/attest')) { if (body.action==='returning') { order.handover.returning_at='2026-10-29T10:00:00Z'; order.status='return_inspection'; } else order.handover.received_at='2026-10-29T10:00:00Z'; }
       if (url.pathname.endsWith('/paper-signature')) order.handover.issue_signature={actor_id:100,full_name:'QA Admin'};
       if (url.pathname.endsWith('/transition')) order.status=body.action;
       if (url.pathname.endsWith('/changes')) order.status='needs_changes';
@@ -78,6 +78,45 @@ async function noOverflow(page) {
       await page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
       assert.deepEqual(writes[0].body,{action:'received',acknowledged:true});
       assert.deepEqual(errors,[]);await page.close();passed++;
+    }
+    {
+      const order=base(); order.partial_issue=false; order.handover.exceptions=[];
+      const client=await fixture(browser,{order});
+      const operator=await fixture(browser,{admin:true,order});
+      assert.match(await operator.page.locator('.handover-progress').innerText(), /Клиент подтвердил получение — ожидается/);
+      assert.equal(await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).count(),0);
+      await operator.page.getByRole('button',{name:'Подписал: выдача',exact:true}).click();
+      await operator.page.locator('.workflow-dialog').getByLabel('Личность сверена',{exact:true}).check();
+      await client.page.getByRole('button',{name:'Получил',exact:true}).click();
+      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      await client.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
+      await operator.page.clock.runFor(5100);
+      assert.ok(await operator.page.locator('.workflow-dialog').getByLabel('Личность сверена',{exact:true}).isChecked(), 'background refresh must preserve an open form');
+      await operator.page.locator('.workflow-dialog').getByRole('button',{name:'Отмена',exact:true}).click();
+      await operator.page.clock.runFor(5100);
+      await operator.page.getByText('✓ Клиент подтвердил получение — готово').waitFor();
+      assert.equal(await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).count(),0);
+      await operator.page.getByRole('button',{name:'Подписал: выдача',exact:true}).click();
+      const dialog=operator.page.locator('.workflow-dialog');
+      await dialog.getByLabel('Личность сверена',{exact:true}).check();
+      await dialog.getByLabel('Бумажная расписка подписана мной').check();
+      await dialog.getByRole('button',{name:'Подтвердить',exact:true}).click();
+      await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).click();
+      await client.page.clock.runFor(5100);
+      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
+      assert.equal(await operator.page.getByRole('button',{name:'Начать приём оборудования',exact:true}).count(),0);
+      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).click();
+      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      await operator.page.clock.runFor(5100);
+      await operator.page.getByText('Клиент отметил сдачу оборудования — готово',{exact:false}).waitFor();
+      assert.match(await operator.page.locator('.workflow-hint').last().innerText(), /бумажную подпись/);
+      assert.ok(await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).isDisabled());
+      order.inspections=[{equipment_id:21,stage:'check_in',result:'pass'}];
+      await operator.page.clock.runFor(5100);
+      await operator.page.getByText(/Для завершения: доверенный сотрудник должен отметить бумажную подпись/).waitFor();
+      assert.match(await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).getAttribute('title'), /бумажную подпись/);
+      assert.deepEqual(client.errors,[]); assert.deepEqual(operator.errors,[]);
+      await client.page.close(); await operator.page.close(); passed++;
     }
     {
       const order=base();order.handover.received_at='2026-10-29T10:00:00Z';

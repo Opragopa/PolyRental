@@ -448,3 +448,7 @@ html.role-pending main, html.role-pending .action-bar { display: none; }
 .document-photo-group .photo-actions { margin: 2px 0 12px; }
 .document-photo-group .photo-actions .button { min-height: 36px; padding: 6px 8px; }
 @media (max-width: 380px) { .item-card, .item-card.selected { grid-template-columns: 84px minmax(0, 1fr); } .item-card .item-photo, .item-card .item-placeholder { width: 84px; height: 110px; } }
+
+.handover-progress { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); font-size: 14px; }
+.handover-progress ul { list-style: none; padding: 0; margin: 8px 0 0; }
+.handover-progress li { margin: 5px 0; overflow-wrap: anywhere; }
