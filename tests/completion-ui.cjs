@@ -22,7 +22,7 @@ async function fixture(browser,{admin=false,role='operator',order=base(),change=
     const url=new URL(route.request().url()),method=route.request().method();
     if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"synthetic",initDataUnsafe:{user:{id:42}}}}'});
     if (url.pathname.startsWith('/miniapp/static/')) {const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
-    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role}:{})}});
+    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:true}:{})}});
     if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,client_allowed:true,system_admin:role==='admin',start_screen:admin?'management':'booking'}});
     if (url.pathname==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
     if (url.pathname==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
