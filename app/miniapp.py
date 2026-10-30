@@ -1404,7 +1404,7 @@ async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
     claimed = False
     saved = False
     try:
-        await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], operator_name(user))
+        await asyncio.to_thread(claim_booking_operation, booking_id, user["id"], operator_name(user), bypass_return_owner=True)
         claimed = True
     except (ValueError, Conflict) as exc:
         raise HTTPException(409, str(exc)) from exc

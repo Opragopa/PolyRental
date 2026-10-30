@@ -50,24 +50,25 @@ def test_full_cycle_pdf_is_atomic_immutable_and_survives_identity_removal(monkey
     feature_id = save_feature(asset_id,"Царапина на корпусе",100)
     transition(booking_id,"ready",100)
     original = customer_receipt_pdf(booking_id,42)[0]
+    text = "\n".join(page.extract_text() for page in PdfReader(BytesIO(original)).pages)
+    assert "Сотрудник (ФИО)" in text and "Доверенный сотрудник" not in text
     assert handover_state(booking_id)["snapshot"][0]["features"][0]["description"] == "Царапина на корпусе"
     assert customer_receipt_pdf(booking_id,42)[0] == original
     with pytest.raises(Conflict): transition(booking_id,"issued",100)
     with pytest.raises(ValueError): customer_attest(booking_id,43,"received")
-    with pytest.raises(PermissionError): attest_paper_signature(booking_id,200,"issue",True,True)
-    paper(booking_id)
-    transition(booking_id,"issued",100)
+    customer_attest(booking_id,42,"received")
+    transition(booking_id,"issued",200, actor_name="Оператор Выдачи")
+    assert handover_state(booking_id)["issued_by_name"] == "Оператор Выдачи"
     save_feature(asset_id,"Изменённая карточка",100,feature_id)
     assert customer_receipt_pdf(booking_id,42)[0]==original
     with pytest.raises(Conflict): transition(booking_id,"return_inspection",100)
     returning(booking_id)
     transition(booking_id,"return_inspection",100)
-    with pytest.raises(Conflict): attest_paper_signature(booking_id,100,"return",False,True)
-    for asset in get_booking(booking_id).assets:
-        record_inspection(booking_id,asset.equipment_id,"check_in","pass",{},"",100)
     with pytest.raises(Conflict): transition(booking_id,"returned",100)
-    paper(booking_id,point="return")
-    transition(booking_id,"returned",100)
+    for asset in get_booking(booking_id).assets:
+        record_inspection(booking_id,asset.equipment_id,"check_in","pass",{},"",200)
+    transition(booking_id,"returned",200, actor_name="Оператор Приёмки")
+    assert handover_state(booking_id)["returned_by_name"] == "Оператор Приёмки"
     from app.pii import delete_identity
     delete_identity(booking_id,200)
     assert customer_receipt_pdf(booking_id,42)[0] == original
@@ -76,7 +77,8 @@ def test_full_cycle_pdf_is_atomic_immutable_and_survives_identity_removal(monkey
         expiry = session.get(ReceiptArchive,booking_id).expires_at
         assert session.scalar(select(NotificationDelivery.id).where(NotificationDelivery.booking_id==booking_id,NotificationDelivery.event=="booking_completed_operator"))
     assert purge_expired_receipts(expiry) == 1
-    assert handover_state(booking_id)["issue_signature"]["full_name"] == "Тестовый Сотрудник"
+    assert handover_state(booking_id)["issued_by"] == 200
+    assert handover_state(booking_id)["returned_by"] == 200
 
 
 def test_partial_issue_has_appendix_acknowledgement_and_actual_return_count(monkeypatch):

@@ -221,13 +221,13 @@ def attest_paper_signature(booking_id, actor_id, point, identity_matches, paper_
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=f"paper_{point}_signed"))
 
 
-def validate_issue(session, booking, actor_id=None):
+def validate_issue(session, booking, actor_id=None, actor_name=""):
     row = session.get(BookingHandover, booking.id)
     data = row.data if row else {}
     if (booking.identity_status != "verified" or not data.get("received_at") or
-            not data.get("issue_signature") or data.get("recipient_id") != booking.customer_id or
+            data.get("recipient_id") != booking.customer_id or
             (data.get("exceptions") and not data.get("exceptions_acknowledged"))):
-        raise Conflict("Нужны расписка, «Получил», сверка личности и подпись доверенного сотрудника")
+        raise Conflict("Нужны расписка и подтверждение получения клиентом")
     document = session.get(BookingDocument, (booking.id, "receipt_pdf"))
     if document is None:
         raise Conflict("Сохранённая расписка отсутствует")
@@ -251,6 +251,7 @@ def validate_issue(session, booking, actor_id=None):
     data = dict(data)
     data["issued_at"] = now().isoformat()
     data["issued_by"] = actor_id
+    data["issued_by_name"] = " ".join(actor_name.split())[:200] or f"Сотрудник ID {actor_id}"
     row.data = data
 
 
@@ -262,11 +263,12 @@ def validate_return_start(session, booking):
         raise Conflict("Получатель должен отметить «Сдаю оборудование»")
 
 
-def validate_return_finish(session, booking, actor_id=None):
+def validate_return_finish(session, booking, actor_id=None, actor_name=""):
     row = session.get(BookingHandover, booking.id)
-    if row is None or not row.data.get("return_signature") or not row.data.get("returning_at"):
-        raise Conflict("Отметьте приём, совпадение личности и бумажную подпись")
-    row.data = {**row.data, "returned_at": now().isoformat(), "returned_by": actor_id}
+    if row is None or not row.data.get("returning_at"):
+        raise Conflict("Получатель должен отметить «Сдаю оборудование»")
+    row.data = {**row.data, "returned_at": now().isoformat(), "returned_by": actor_id,
+                "returned_by_name": " ".join(actor_name.split())[:200] or f"Сотрудник ID {actor_id}"}
 
 
 def record_return_finding(booking_id, equipment_id, actor_id, kind, description):
@@ -280,7 +282,7 @@ def record_return_finding(booking_id, equipment_id, actor_id, kind, description)
         booking = session.get(Booking, booking_id, with_for_update=True)
         if not booking or booking.status != "return_inspection":
             raise Conflict("Результат доступен при проверке возврата")
-        _claim_stage(session, booking, actor_id)
+        _claim_stage(session, booking, actor_id, bypass_owner=True)
         assigned = session.get(BookingAsset, (booking_id, equipment_id))
         if not assigned or assigned.deleted_at:
             raise ValueError("Экземпляр не был выдан")

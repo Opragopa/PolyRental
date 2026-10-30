@@ -525,12 +525,12 @@ async def change(message: Message, bot: Bot):
     try:
         key = number.strip()
         booking_id = int(key) if key.isascii() and key.isdigit() and len(key) != 4 else await asyncio.to_thread(resolve_booking_number, key)
-        status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id)
-        if status == "expired":
-            return await message.answer("Удержание истекло; создайте новую заявку")
         operator = (getattr(message.from_user, "full_name", "") or "").strip()
         operator = operator or (f"@{message.from_user.username}" if getattr(message.from_user, "username", None)
                                 else f"оператор {message.from_user.id}")
+        status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id, actor_name=operator)
+        if status == "expired":
+            return await message.answer("Удержание истекло; создайте новую заявку")
         booking = await asyncio.to_thread(get_booking, booking_id)
         update_text = booking_status_text(getattr(booking, "human_number", None) or booking_id, status, operator)
         await message.answer(update_text, parse_mode=ParseMode.HTML)

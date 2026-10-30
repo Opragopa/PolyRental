@@ -58,7 +58,7 @@ def test_status_update_names_stage_and_escapes_operator():
 def test_bot_command_reports_status_to_operator_without_customer_push(monkeypatch):
     import app.bot as bot_module
     monkeypatch.setenv("ADMIN_IDS", "100")
-    monkeypatch.setattr(bot_module, "transition", lambda *_: "confirmed")
+    monkeypatch.setattr(bot_module, "transition", lambda *_, **__: "confirmed")
     monkeypatch.setattr(bot_module, "get_booking", lambda *_: SimpleNamespace(customer_id=42))
     message = SimpleNamespace(text="/confirm 14", from_user=SimpleNamespace(id=100, full_name="Анна & Олег"),
                               answer=AsyncMock())

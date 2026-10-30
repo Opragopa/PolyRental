@@ -49,7 +49,7 @@ def test_failed_damage_photo_releases_its_stage_claim(monkeypatch):
     configure(monkeypatch)
     released = []
     monkeypatch.setattr(miniapp, "sanitize_image", lambda raw, _type: (raw, "image/jpeg"))
-    monkeypatch.setattr(miniapp, "claim_booking_operation", lambda *_args: None)
+    monkeypatch.setattr(miniapp, "claim_booking_operation", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(miniapp, "release_booking_operation", lambda booking_id, actor_id: released.append((booking_id, actor_id)))
     with TestClient(app) as client:
         response = client.post("/api/miniapp/admin/bookings/999/inspection-photo",

@@ -94,7 +94,7 @@ def _claim_stage(session, booking, actor_id, actor_name="", stage=None, bypass_o
     return lease
 
 
-def claim_booking_operation(booking_id, actor_id, actor_name="", stage=None):
+def claim_booking_operation(booking_id, actor_id, actor_name="", stage=None, bypass_return_owner=False):
     from .inventory import require_role
     from .roles import configured_ids
     if stage != "identity_review" or actor_id not in configured_ids("PII_ADMIN_IDS"):
@@ -105,7 +105,7 @@ def claim_booking_operation(booking_id, actor_id, actor_name="", stage=None):
             raise ValueError("Заявка не найдена")
         if booking.status not in ACTIVE_STATUSES:
             raise Conflict("Этот этап уже завершён")
-        lease = _claim_stage(session, booking, actor_id, actor_name, stage)
+        lease = _claim_stage(session, booking, actor_id, actor_name, stage, bypass_owner=bypass_return_owner and booking.status == "return_inspection")
         return {"stage": lease.stage, "actor_id": lease.actor_id,
                 "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat()}
 
@@ -1011,7 +1011,7 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
         expected_status = "preparing" if stage == "pre_issue" else "return_inspection"
         if not booking or booking.status != expected_status:
             raise ValueError("Проверка недоступна на текущем этапе заказа")
-        _claim_stage(session, booking, actor_id, actor_name)
+        _claim_stage(session, booking, actor_id, actor_name, bypass_owner=stage == "check_in")
         assigned = session.get(BookingAsset, (booking_id, equipment_id))
         if not assigned or assigned.deleted_at is not None:
             raise ValueError("Экземпляр не назначен заказу")
@@ -1158,7 +1158,7 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
         if customer_id is not None and actor_id != customer_id:
             raise PermissionError("Неверный участник действия")
         if customer_id is None:
-            _claim_stage(session, booking, actor_id, actor_name)
+            _claim_stage(session, booking, actor_id, actor_name, bypass_owner=action in {"issued", "returned"})
         if action == "confirmed":
             if not session.scalar(select(BookingLine.id).where(BookingLine.booking_id == booking.id,
                                                                 BookingLine.deleted_at.is_(None)).limit(1)):
@@ -1199,7 +1199,7 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             prepare_receipt(session, booking, actor_id)
         elif action == "issued":
             from .handover import validate_issue
-            validate_issue(session, booking, actor_id)
+            validate_issue(session, booking, actor_id, actor_name)
         elif action == "return_inspection":
             from .handover import validate_return_start
             validate_return_start(session, booking)
@@ -1220,7 +1220,7 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             if checked != assigned:
                 raise Conflict("Проверьте каждый возвращённый экземпляр")
             from .handover import validate_return_finish
-            validate_return_finish(session, booking, actor_id)
+            validate_return_finish(session, booking, actor_id, actor_name)
             booking.returned_at = now()
             identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
             if identity:

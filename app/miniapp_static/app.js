@@ -952,7 +952,7 @@
       : `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name || `ID ${lease.actor_id}`}. Закрепление до ${dateText(lease.expires_at)} МСК.`;
     if (hardStage) ownership.textContent=`${otherOwner?"Закреплено за сотрудником":"Закреплено за вами"}. ${lease ? (expired?"Мягкая блокировка истекла.":ownership.textContent) : ""}`;
     for (const button of card.querySelectorAll(".request-actions button:not(.document-button):not(.lock-exempt)")) {
-      if (otherOwner || (lease && !expired && !mine)) {
+      if ((otherOwner && !button.classList.contains("handover-action")) || (lease && !expired && !mine)) {
         if (!button.dataset.lockBlocked) button.dataset.lockWasDisabled = String(button.disabled);
         button.dataset.lockBlocked = "true"; button.disabled = true;
       } else if (button.dataset.lockBlocked) {
@@ -967,19 +967,13 @@
     if (state.role?.staff_role === "admin" && !$("staff-settings-button")) {
       const settings = plainButton("Сотрудники", async () => {
         const result = await api("/api/miniapp/admin/staff");
-        const data = await workflowDialog("Роли и доверенные сотрудники",`<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.full_name || String(item.telegram_id))}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label><label class="field"><span>ФИО для бумажной расписки</span><input name="full_name" maxlength="200"></label><label class="check-row"><input type="checkbox" name="trusted"><span>Доверенный сотрудник: может подписывать бумажную расписку</span></label>`,"Подтвердить",(dialog) => {
-          const populate = () => { const item=result.items.find((row) => row.telegram_id === Number(dialog.querySelector('[name="staff"]').value)); dialog.querySelector('[name="role"]').value=item.role || "operator"; dialog.querySelector('[name="full_name"]').value=item.full_name; dialog.querySelector('[name="trusted"]').checked=item.trusted; };
-          const signerName=dialog.querySelector('[name="full_name"]'),trusted=dialog.querySelector('[name="trusted"]');
-          const requireName=()=>{signerName.required=trusted.checked;};
-          dialog.querySelector('[name="staff"]').addEventListener("change",()=>{populate();requireName();});
-          trusted.addEventListener("change",requireName);populate();requireName();
-        },async data=>{
-          const id=data.get("staff"),fullName=String(data.get("full_name") || "").trim();
-          if(data.get("trusted")==="on"&&!fullName)throw new Error("Укажите ФИО доверенного сотрудника");
-          await api(`/api/miniapp/admin/staff/${id}/role`,{method:"PUT",body:JSON.stringify({role:data.get("role")})});
-          const signerName=fullName || result.items.find(item=>item.telegram_id===Number(id))?.full_name || "";
-          if(signerName)await api(`/api/miniapp/admin/staff/${id}/signer`,{method:"PUT",body:JSON.stringify({full_name:signerName,active:data.get("trusted")==="on"})});
-          if(Number(id)===state.role?.id)state.role=await api("/api/miniapp/me");
+        const data = await workflowDialog("Роли сотрудников", `<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.full_name || String(item.telegram_id))}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label>`, "Подтвердить", (dialog) => {
+          const populate = () => { const item = result.items.find(row => row.telegram_id === Number(dialog.querySelector('[name="staff"]').value)); dialog.querySelector('[name="role"]').value = item?.role || "operator"; };
+          dialog.querySelector('[name="staff"]').addEventListener("change", populate); populate();
+        }, async data => {
+          const id = data.get("staff");
+          await api(`/api/miniapp/admin/staff/${id}/role`, {method:"PUT", body:JSON.stringify({role:data.get("role")})});
+          if (Number(id) === state.role?.id) state.role = await api("/api/miniapp/me");
         });
         if(data)await showAdmin(mode);
       }); settings.id="staff-settings-button"; $("admin-panel").querySelector(".admin-tabs").append(settings);
@@ -1086,7 +1080,7 @@
         const processing = reviewSection("Действия по заявке", "request-actions");
         const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status"); processing.append(ownership);
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
-        nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Сверьте личность, бумажную подпись и отметку клиента «Получил».", issued: "Ждём отметку клиента «Сдаю оборудование».", return_inspection: "Проверьте возврат и отметьте приём оборудования.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
+        nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Дождитесь отметки клиента «Получил», затем оформите выдачу.", issued: "Ждём отметку клиента «Сдаю оборудование».", return_inspection: "Проверьте возвращённое оборудование и завершите заявку.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
         if (order.status === "confirmed" && order.identity_status !== "verified") {
           nextStep.textContent = order.identity_status === "submitted"
             ? (state.role?.pii_admin ? "Следующий шаг: проверьте анкету клиента." : "Ждём проверку анкеты сотрудником с доступом к персональным данным.")
@@ -1139,14 +1133,14 @@
 
         if (order.status === "return_inspection") {
           const finishReturn = actionButton("Завершить заявку", async () => { if (await workflowDialog("Завершить заявку", "<p>Оборудование проверено. Подтвердите завершение.</p>")) await transitionAction("returned")(); }, order.id, "primary workflow-next");
-          const canFinishReturn = () => order.assets.length > 0 && Boolean(order.handover?.return_signature) && order.assets.every((asset) => Boolean(inspectionFor(order, asset, "check_in")));
+          finishReturn.classList.add("handover-action");
+          const canFinishReturn = () => order.assets.length > 0 && order.assets.every((asset) => Boolean(inspectionFor(order, asset, "check_in")));
           const returnHint = document.createElement("p"); returnHint.className = "workflow-hint";
           const updateReturnHint = () => {
             const unchecked = order.assets.filter((asset) => !inspectionFor(order, asset, "check_in")).length;
             const missing = [];
             if (unchecked) missing.push(`проверьте экземпляры: осталось ${unchecked}`);
             if (!order.assets.length) missing.push("нет назначенных экземпляров");
-            if (!order.handover?.return_signature) missing.push("доверенный сотрудник должен отметить бумажную подпись при возврате");
             returnHint.textContent = missing.length ? `Для завершения: ${missing.join("; ")}.` : "Все условия выполнены. Нажмите «Завершить заявку».";
             finishReturn.title = returnHint.textContent;
             returnHint.hidden = canFinishReturn();
@@ -1238,12 +1232,14 @@
       }
       row.append(details);
       const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact";
+      if (stage === "check_in") defect.classList.add("handover-action");
       defect.textContent = saved?.result === "fail" ? "Изменить" : "Неисправность";
       defect.addEventListener("click", () => openInspection(order, asset, stage, saved));
       row.append(defect);
       group.append(row);
     }
     const markAll = document.createElement("button"); markAll.type = "button"; markAll.className = "button secondary inspection-all-pass";
+    if (stage === "check_in") markAll.classList.add("handover-action");
     const updateButton = () => {
       const left = pending().length;
       markAll.hidden = left === 0;
@@ -1703,7 +1699,7 @@
     const list = document.createElement("ul");
     const isDone = status === "returned";
     let steps;
-    if (status === "ready") steps = [[Boolean(handover.received_at), "Клиент подтвердил получение"], [Boolean(handover.issue_signature), "Доверенный сотрудник отметил бумажную подпись"], [false, "Сотрудник подтверждает выдачу"]];
+    if (status === "ready") steps = [[Boolean(handover.received_at), "Клиент подтвердил получение"], [false, "Сотрудник подтверждает выдачу"]];
     else {
       steps = [[Boolean(handover.returning_at) || isDone, "Клиент отметил сдачу оборудования"]];
       if (admin) {
@@ -1711,7 +1707,7 @@
         const checked = assets.length > 0 && assets.every(asset => Boolean(inspectionFor(order, asset, "check_in")));
         steps.push([checked || isDone, "Сотрудник проверил оборудование"]);
       }
-      steps.push([Boolean(handover.return_signature) || isDone, "Доверенный сотрудник отметил бумажную подпись"], [isDone, "Сотрудник завершил возврат"]);
+      steps.push([isDone, "Сотрудник завершил возврат"]);
     }
     for (const [done, label] of steps) { const li = document.createElement("li"); li.textContent = `${done ? "✓" : "○"} ${label} — ${done ? "готово" : "ожидается"}`; list.append(li); }
     section.append(list); parent.append(section);
@@ -1723,7 +1719,7 @@
 
   function workflowRefreshSafe() {
     const active = document.activeElement;
-    return !document.hidden && !state.busy && !pendingDeletion && !document.querySelector('.workflow-dialog, .identity-check-review, .review-loading, .assignment-editor, .inspection-all-pass:disabled, [data-action-pending="true"]') && $("document-viewer").hidden && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("rework-dialog").hidden && $("identity-review-dialog").hidden && !(active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) && ![...document.querySelectorAll(".request-summary input:not([type=checkbox])")].some(input => input.value.trim());
+    return !document.hidden && !state.busy && !pendingDeletion && !document.querySelector('.workflow-dialog, .identity-check-review, .review-loading, .assignment-editor, .inspection-editor, .inspection-all-pass:disabled, [data-action-pending="true"]') && $("document-viewer").hidden && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("rework-dialog").hidden && $("identity-review-dialog").hidden && !(active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) && ![...document.querySelectorAll(".request-summary input:not([type=checkbox])")].some(input => input.value.trim());
   }
 
   async function refreshWorkflow() {
@@ -1875,16 +1871,13 @@
     if (state.role?.pii_admin && ["issued","return_inspection"].includes(order.status) && !order.handover?.snapshot?.length) actions.append(actionButton("Подготовить расписку старой выдачи", async () => {
       if (await workflowDialog("Перенос старой выдачи", "<p>Будет подготовлена PDF-расписка по проверенной анкете. Исторические документы сохранятся. Особенности на момент выдачи неизвестны; при возврате нужна ручная сверка.</p>")) await api(`/api/miniapp/admin/bookings/${order.id}/migrate-receipt`,{method:"POST"});
     },order.id,"secondary lock-exempt"));
-    const point = order.status === "ready" ? "issue" : order.status === "return_inspection" ? "return" : null;
-    for(const signedPoint of ["issue","return"])if(order.handover?.[`${signedPoint}_signature`]){const signed=document.createElement("p");signed.textContent=`${signedPoint==="issue"?"Выдача":"Приём"}: подписал ${order.handover[`${signedPoint}_signature`].full_name}`;actions.append(signed);}
-    if (point && !order.handover?.[`${point}_signature`] && state.role?.trusted_signer === true) actions.append(actionButton(point === "issue" ? "Подписал: выдача" : "Отметить приём оборудования", async () => {
-      const data = await workflowDialog(point === "issue" ? "Подтвердить выдачу" : "Отметить приём оборудования", receiptSummary(order) + `<label class="check-row"><input type="checkbox" name="identity" required><span>${point === "issue" ? "Личность сверена" : "Личность сверена, совпадает с получателем"}</span></label><label class="check-row"><input type="checkbox" name="paper" required><span>Бумажная расписка подписана мной</span></label><p>Подписывать может доверенный сотрудник. Отметка в приложении не заменяет бумажную подпись.</p>`,"Подтвердить",null,async()=>api(`/api/miniapp/admin/bookings/${order.id}/paper-signature`,{method:"POST",body:JSON.stringify({point,identity_matches:true,paper_signed:true})}));
-    },order.id,"primary lock-exempt"));
-    if (order.status === "ready" && order.handover?.received_at && order.handover?.issue_signature) actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next"));
+    if (order.handover?.issued_by) { const note = document.createElement("p"); note.textContent = `Выдал: ${order.handover.issued_by_name || `сотрудник ID ${order.handover.issued_by}`}`; actions.append(note); }
+    if (order.handover?.returned_by) { const note = document.createElement("p"); note.textContent = `Принял: ${order.handover.returned_by_name || `сотрудник ID ${order.handover.returned_by}`}`; actions.append(note); }
+    if (order.status === "ready" && order.handover?.received_at) actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next handover-action"));
     if (order.status === "return_inspection") for (const asset of order.assets) actions.append(actionButton(`Особенности при возврате: ${asset.name}`, async () => {
       const original = order.handover?.snapshot?.find((item) => item.id === asset.id);
       const data = await workflowDialog("Сравнение особенностей", `<p>При выдаче: ${escapeHtml(original?.features?.map((item) => item.description).join("; ") || (order.handover?.legacy_snapshot_unknown ? "снимок отсутствовал" : "особенностей нет"))}</p><label class="field"><span>Результат</span><select name="kind"><option value="existing">Старая черта, выявлено при возврате</option><option value="damage">Новое повреждение</option><option value="lost">Утеря</option></select></label><label class="field"><span>Описание</span><textarea name="description" maxlength="2000" required></textarea></label>`,"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/return-finding`,{method:"POST",body:JSON.stringify({equipment_id:asset.id,kind:data.get("kind"),description:data.get("description")})}));
-    },order.id,"secondary"));
+    },order.id,"secondary handover-action"));
     if (!manager) actions.querySelectorAll("button").forEach((button) => { if (["Подтвердить заявку","Изменить заявку"].includes(button.textContent)) button.hidden = true; });
     if (state.role?.pii_only) actions.querySelectorAll("button:not(.lock-exempt)").forEach((button) => { button.hidden=true; });
   }
