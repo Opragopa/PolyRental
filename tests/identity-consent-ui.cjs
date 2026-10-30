@@ -49,6 +49,11 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#identity-form').waitFor({state: 'visible'});
     assert.equal(await page.locator('#consent-step').isHidden(), true);
     assert.equal(await page.locator('#identity-submit').isDisabled(), true);
+    const passport = await page.locator('.document-photo-group').first().boundingBox();
+    const student = await page.locator('.document-photo-group').last().boundingBox();
+    assert.ok(student.x > passport.x, 'passport and student photo groups should be side by side');
+    assert.equal(await page.locator('.photo-placeholder').count(), 3);
+    assert.equal(await page.locator('#identity-form input[type=file]').count(), 3);
     await page.waitForTimeout(75);
     assert.equal(reusableDocumentRequests, 3, 'old photos should start restoring concurrently in the background');
     await page.locator('#identity-submit').waitFor({state: 'visible'});

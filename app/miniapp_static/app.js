@@ -456,7 +456,7 @@
   function markAvailabilityStale(message="Доступность проверяется…") {
     availabilityFresh=false;
     document.querySelectorAll("#items-grid .available-badge").forEach(node=>node.textContent=message);
-    document.querySelectorAll("#items-grid .catalog-add").forEach(button=>button.disabled=true);
+    document.querySelectorAll("#items-grid .quantity-control .plus").forEach(button=>button.disabled=true);
     $("items-status").textContent=message;$("retry-items").hidden=false;
   }
   async function refreshAvailability(invalidated = false) {
@@ -511,9 +511,11 @@
       card.className = `item-card${selected ? " selected" : ""}${unavailable ? " unavailable" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<details><summary>Показать детали</summary><p>${escapeHtml(item.name)}</p><p>${escapeHtml(item.description || "")}</p></details></div></div><button type="button" class="button secondary catalog-add" ${unavailable && !selected ? "disabled" : ""}>${selected ? "Убрать из подборки" : "Добавить"}</button>`;
-      card.querySelector(".catalog-add").addEventListener("click", () => { if (selected) state.quantities.delete(item.id); else state.quantities.set(item.id, 1); state.requestId = null; renderItems(); saveDraft(); });
-      if(!availabilityFresh){card.querySelector(".available-badge").textContent="Нужна свежая проверка";card.querySelector(".catalog-add").disabled=true;}
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<details><summary>Показать детали</summary><p>${escapeHtml(item.name)}</p><p>${escapeHtml(item.description || "")}</p></details></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong aria-live="polite">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>+</button></div></div>`;
+      const changeQuantity = (next) => { if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id); state.requestId = null; renderItems(); saveDraft(); };
+      card.querySelector(".minus").addEventListener("click", () => changeQuantity(quantity - 1));
+      card.querySelector(".plus").addEventListener("click", () => changeQuantity(quantity + 1));
+      if (!availabilityFresh) card.querySelector(".available-badge").textContent = "Нужна свежая проверка";
       if (item.owners?.length) { const owner = document.createElement("p"); owner.textContent=`Владелец: ${item.owners.join(", ")}`; card.querySelector("details").append(owner); }
       for (const block of item.unavailability || []) { const note=document.createElement("p"); note.textContent=`Занято вне сервиса: ${block.reason}, до ${dateText(block.end)} МСК`; card.querySelector("details").append(note); }
       $("items-grid").append(card);
@@ -540,7 +542,14 @@
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
     const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
-    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li><span>${escapeHtml(catalogTitle(item))}</span><strong>${state.quantities.get(item.id)} шт.</strong></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
+    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= Math.min(30, item.available_quantity) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
+    $("review-content").querySelectorAll(".review-minus, .review-plus").forEach((button) => button.addEventListener("click", () => {
+      const id = Number(button.dataset.id), quantity = state.quantities.get(id) || 0;
+      const nextQuantity = quantity + (button.classList.contains("review-plus") ? 1 : -1);
+      if (nextQuantity > 0) state.quantities.set(id, nextQuantity); else state.quantities.delete(id);
+      state.requestId = null; saveDraft(); renderCart(); renderReview();
+      $("review-content").querySelector(`.${button.classList.contains("review-plus") ? "review-plus" : "review-minus"}[data-id="${id}"]`)?.focus();
+    }));
   }
 
   async function next() {
@@ -2214,7 +2223,7 @@
       if (!state.identityRequiredPhotos.includes(input.name)) state.identityRequiredPhotos.push(input.name);
       const status=input.closest(".field").querySelector(".file-draft-status"); if (status) status.textContent="Фото удалено. Загрузите новое перед отправкой.";
     },"ghost danger"); remove.setAttribute("aria-label","Удалить фото"); buttons.append(remove);
-    input.closest(".field").append(buttons);
+    input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; void showAdmin("orders"); });

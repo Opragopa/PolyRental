@@ -7,11 +7,11 @@
   <meta name="app-version" content="__APP_VERSION__">
   <meta name="description" content="Бронирование фото- и видеотехники PolyRental: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>Политех.АРЕНДА — бронирование</title>
-  <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
+  <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__-ui1">
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__"></script>
-  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__"></script>
+  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__-ui1"></script>
 </head>
 <body class="dates-view">
   <div class="shell">
@@ -121,10 +121,14 @@
           </div>
           <h3>Фотографии документов</h3>
           <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
-          <div class="form-grid">
-            <label class="field"><span>Паспорт: разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
-            <label class="field"><span>Паспорт: регистрация</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
-            <label class="field"><span>Студенческий: лицевая</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp"><small class="file-draft-status" aria-live="polite"></small></label>
+          <div class="document-photo-grid">
+            <div class="document-photo-group"><h4>Паспорт с пропиской</h4>
+              <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Паспорт: разворот с фото"><small class="file-draft-status" aria-live="polite"></small></label>
+              <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Страница регистрации</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Паспорт: страница регистрации"><small class="file-draft-status" aria-live="polite"></small></label>
+            </div>
+            <div class="document-photo-group"><h4>Студенческий</h4>
+              <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Лицевая сторона</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Студенческий: лицевая сторона"><small class="file-draft-status" aria-live="polite"></small></label>
+            </div>
           </div>
           <button id="identity-submit" class="button primary" type="submit">Отправить на проверку</button>
         </form>
