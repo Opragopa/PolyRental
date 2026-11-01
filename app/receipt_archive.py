@@ -1,4 +1,4 @@
-"""Encrypted PDF receipt storage with a durable five-year expiry record.
+"""Encrypted receipt storage with a durable five-year expiry record.
 
 Callers must authenticate and authorize the actor before calling these helpers.
 """
@@ -31,7 +31,10 @@ def _five_years_after(value):
 
 def _decrypt(document):
     aad = f"{document.booking_id}:{document.kind}:doc-v1".encode()
-    return AESGCM(_master_key()).decrypt(document.nonce, document.encrypted_data, aad)
+    body = AESGCM(_master_key()).decrypt(document.nonce, document.encrypted_data, aad)
+    if hashlib.sha256(body).hexdigest() != document.sha256:
+        raise ValueError("Контроль целостности сохранённой расписки не пройден")
+    return body
 
 
 def archived_receipt_pdf(booking_id, actor_id):
@@ -86,12 +89,24 @@ def customer_receipt_pdf(booking_id, customer_id, actor_id=None):
     expired = False
     result = None
     with Session.begin() as session:
-        booking = session.get(Booking, booking_id)
+        booking = session.get(Booking, booking_id, with_for_update=True)
         if booking is None or booking.customer_id != customer_id:
             raise ValueError("Расписка не найдена")
         lifecycle = session.get(ReceiptArchive, booking_id, with_for_update=True)
         handover = session.get(BookingHandover, booking_id)
         kind = (handover.data.get("receipt_kind", "receipt_pdf") if handover else "receipt_pdf")
+        document = session.get(BookingDocument, (booking_id, kind), with_for_update=True)
+        # Historical DOCX receipts were archived under `receipt`, before handover metadata existed.
+        if document is None and not (handover and handover.data.get("receipt_kind")):
+            for historical_kind in ("receipt_docx", "receipt"):
+                document = session.get(BookingDocument, (booking_id, historical_kind), with_for_update=True)
+                if document is not None:
+                    kind = historical_kind
+                    break
+        if lifecycle is None and document is not None and kind == "receipt":
+            lifecycle = ReceiptArchive(booking_id=booking_id, created_at=document.created_at,
+                expires_at=_five_years_after(document.created_at))
+            session.add(lifecycle)
         if lifecycle is None:
             draft=session.get(BookingDocument,(booking_id,kind))
             if booking.status=="ready" and booking.deleted_at is None and draft and handover and handover.data.get("snapshot"):
@@ -128,7 +143,7 @@ def purge_expired_receipts(at=None):
             ReceiptArchive.expired_at.is_(None), ReceiptArchive.expires_at <= timestamp)
             .with_for_update(skip_locked=True)).all()
         for lifecycle in rows:
-            for kind in ("receipt_pdf", "receipt_docx"):
+            for kind in ("receipt_pdf", "receipt_docx", "receipt"):
                 document = session.get(BookingDocument, (lifecycle.booking_id, kind), with_for_update=True)
                 if document is not None:
                     session.delete(document)

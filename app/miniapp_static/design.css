@@ -80,3 +80,9 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .dates-view .date-grid input[type=time] { border-color: transparent; padding-left: 0; }
 
 #admin-panel.catalog-editing > .panel-head, #admin-panel.catalog-editing > .admin-tabs, #admin-panel.catalog-editing > .admin-settings { display: none; }
+
+.receipt-pages { display: grid; gap: 16px; min-width: 0; }
+.receipt-pages figure { margin: 0; min-width: 0; }
+.receipt-pages figcaption { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.receipt-pages canvas { display: block; width: 100%; height: auto; background: white; border: 1px solid var(--line); }
+.receipt-pdf-preview > .receipt-download { width: 100%; margin-top: 16px; }

@@ -1850,7 +1850,11 @@
   async function previewReceipt(order, admin = false) {
     const path = admin ? `/api/miniapp/admin/bookings/${order.id}/documents/receipt` : `/api/miniapp/bookings/${order.id}/receipt`;
     const response = await fetch(path,{headers:{"X-Telegram-Init-Data":tg?.initData || ""},cache:"no-store"});
-    if (!response.ok) throw new Error("Не удалось открыть сохранённую расписку");
+    if (!response.ok) {
+      let detail = "Не удалось открыть сохранённую расписку";
+      try { const error = await response.json(); if (typeof error.detail === "string") detail = error.detail; } catch (_) {}
+      throw new Error(detail);
+    }
     if (!response.headers.get("Content-Type")?.includes("application/pdf")) {
       await workflowDialog("Сохранная расписка DOCX", receiptSummary(order) + '<button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
         dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
@@ -1864,9 +1868,20 @@
         });
       }); return;
     }
-    const url=URL.createObjectURL(await response.blob());
-    try { await workflowDialog("Предпросмотр расписки",`<iframe title="Сохранённая расписка PDF" src="${url}"></iframe><p>Если просмотр PDF недоступен на устройстве, скачайте расписку из заявки.</p>`,"Закрыть"); }
-    finally { URL.revokeObjectURL(url); }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let renderer = null;
+    try {
+      await workflowDialog("Предпросмотр расписки", '<div class="receipt-pdf-preview"><p class="receipt-preview-status" role="status">Загрузка страниц…</p><div class="receipt-pages"></div><button type="button" class="button primary receipt-download">Скачать PDF</button></div>', "Закрыть", dialog => {
+        dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
+        dialog.querySelector('[type="submit"]').hidden = true;
+        const host = dialog.querySelector(".receipt-pdf-preview");
+        const button = host.querySelector(".receipt-download");
+        button.addEventListener("click", async () => { button.disabled = true; try { await downloadSecure(path, `receipt-${order.id}.pdf`); } catch (error) { host.querySelector(".receipt-preview-status").textContent = error.message; } finally { button.disabled = false; } });
+        void import("/miniapp/static/receipt-preview.js").then(module => {
+          if (dialog.isConnected) renderer = module.renderReceiptPdf(host, bytes);
+        }).catch(() => { if (dialog.isConnected) host.querySelector(".receipt-preview-status").textContent = "Не удалось загрузить просмотрщик. Скачайте PDF, чтобы открыть его на устройстве."; });
+      });
+    } finally { renderer?.close(); }
   }
 
   function plainButton(title, handler, className = "secondary") {

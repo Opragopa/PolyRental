@@ -26,7 +26,7 @@ from aiogram.enums import ParseMode
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_, text
 
 from .documents import archived_document, operator_document
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
@@ -626,11 +626,13 @@ async def client_history(category: str = Query(default="active", pattern="^(acti
     except ValueError as exc:
         raise HTTPException(422, "Введите полный номер заявки или последние четыре цифры") from exc
     with Session() as session:
-        available = set(session.scalars(select(ReceiptArchive.booking_id).join(
-            BookingDocument, and_(BookingDocument.booking_id == ReceiptArchive.booking_id,
-                                 BookingDocument.kind.in_(["receipt_pdf", "receipt_docx"]))).where(
-            ReceiptArchive.booking_id.in_([booking.id for booking in bookings]),
-            ReceiptArchive.expired_at.is_(None), ReceiptArchive.expires_at > func.now())).all())
+        available = set(session.scalars(select(BookingDocument.booking_id).outerjoin(
+            ReceiptArchive, ReceiptArchive.booking_id == BookingDocument.booking_id).where(
+            BookingDocument.booking_id.in_([booking.id for booking in bookings]),
+            BookingDocument.kind.in_(["receipt_pdf", "receipt_docx", "receipt"]),
+            or_(and_(ReceiptArchive.booking_id.is_(None), BookingDocument.kind == "receipt",
+                     BookingDocument.created_at > func.now() - text("interval '5 years'")),
+                and_(ReceiptArchive.expired_at.is_(None), ReceiptArchive.expires_at > func.now())))).all())
     return {"items": [booking_view(booking) | {"receipt_available": booking.id in available} for booking in bookings],
             "total": total, "page": page, "page_size": 10}
 
@@ -1535,8 +1537,14 @@ async def admin_generated_document_download_link(booking_id: int, kind: str, use
         raise HTTPException(404, "Заявка не найдена")
     token = secrets.token_urlsafe(32)
     _DOCUMENT_DOWNLOAD_TOKENS[token] = (booking_id, kind, user["id"], current + 120)
-    public_id = (booking.human_number or "request").replace("ТС", "TS")
-    filename = f"{kind}-{public_id}.{'pdf' if kind == 'receipt' else 'docx'}"
+    try:
+        _, filename = await asyncio.to_thread(operator_document, booking_id, kind, user["id"])
+    except ReceiptExpired as exc:
+        _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
+        raise HTTPException(410, str(exc)) from exc
+    except (ValueError, Conflict) as exc:
+        _DOCUMENT_DOWNLOAD_TOKENS.pop(token, None)
+        raise HTTPException(404, str(exc)) from exc
     return {"url": f"{public_url}/api/miniapp/document-download/{token}", "file_name": filename}
 
 

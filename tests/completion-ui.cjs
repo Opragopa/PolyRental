@@ -13,7 +13,7 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false}={}) {
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null}={}) {
   const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
   const errors=[],writes=[];let catalogPreview='';
   let releaseInspectionRefresh;
@@ -24,7 +24,12 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
   await page.route('**/*',async route=>{
     const url=new URL(route.request().url()),method=route.request().method();
     if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"synthetic",initDataUnsafe:{user:{id:42}}}}'});
-    if (url.pathname.startsWith('/miniapp/static/')) {const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
+    if (url.pathname.startsWith('/miniapp/static/')) {
+      const file=path.resolve(assets,url.pathname.slice('/miniapp/static/'.length));
+      assert.ok(file.startsWith(assets+path.sep));
+      return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':file.endsWith('.wasm')?'application/wasm':/\.m?js$/.test(file)?'text/javascript':'application/octet-stream'});
+    }
+    if (url.pathname.endsWith('/receipt') && receipt) return route.fulfill({status:receipt.status || 200,body:receipt.body,contentType:receipt.type || 'application/pdf'});
     if (url.pathname==='/api/miniapp/notifications/claim') return route.fulfill({json:{items:notices.splice(0)}});
     if (url.pathname==='/api/miniapp/catalog/categories') return route.fulfill({json:{items:categories}});
     if (url.pathname==='/api/miniapp/admin/catalog/categories') {
@@ -76,7 +81,8 @@ async function noOverflow(page) {
   if (await dialog.count()) assert.ok(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'dialog must fit the viewport');
 }
 
-(async()=>{
+module.exports={fixture,base};
+if(require.main===module)(async()=>{
   const engine=process.env.PLAYWRIGHT_BROWSER||'chromium';
   const browser=await(engine==='webkit'?webkit:chromium).launch({headless:true,...(engine==='chromium'&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   let passed=0;
