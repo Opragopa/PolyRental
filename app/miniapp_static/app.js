@@ -138,13 +138,6 @@
     state.requestId = null;
     fieldError("start", ""); fieldError("end", ""); saveDraft(); render();
   }
-  function applyDuration(days) {
-    if (!Number.isInteger(days) || days < 1 || days > 365) { fieldError("end", "Укажите срок от 1 до 365 суток."); return; }
-    if (!$("start-date").value) { fieldError("start", "Сначала выберите дату выдачи."); return; }
-    $("end-date").value = addIsoDays($("start-date").value, days);
-    $("end-time").value = $("start-time").value;
-    rangeCalendar.setRange($("start-date").value, $("end-date").value); periodChanged();
-  }
   function ensureBookingPeriod() {
     if ($("start-date").value && $("start-date").value < minimumBookingDate()) {
       $("start").value = ""; $("end").value = ""; syncDateFields("start"); syncDateFields("end"); return false;
@@ -2409,8 +2402,6 @@
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
   for (const id of ["start", "end"]) $(`${id}-time`).addEventListener("input", periodChanged);
-  document.querySelectorAll(".duration-option").forEach((button) => button.addEventListener("click", () => applyDuration(Number(button.dataset.days))));
-  $("duration-apply").addEventListener("click", () => applyDuration(Number($("duration-days").value)));
   for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
   passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });

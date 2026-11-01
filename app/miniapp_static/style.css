@@ -41,9 +41,6 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .panel-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 13px; background: var(--soft); color: var(--accent); font-size: 22px; font-weight: 600; }
 .supporting { margin: 12px 0 28px; color: var(--muted); }
 .date-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.duration-options { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 12px 0 18px; }
-.duration-custom { width: 140px; margin: 0; }
-.duration-options .button { min-height: 54px; }
 .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 19px; font-weight: 700; }
 .field input { width: 100%; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text); font-weight: 500; }
 .field select, .field textarea { width: 100%; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text); }
@@ -305,8 +302,6 @@ h2 { margin: 0; font-size: clamp(23px, 3.5vw, 31px); letter-spacing: -.045em; li
 .period-row { display: flex; align-items: center; gap: 4px; min-height: 44px; }
 .period-row p { flex: 1; margin: 0; font-size: 12px; color: var(--text); }
 .period-error { min-height: 30px; margin: 0; font-size: 12px; line-height: 15px; color: var(--danger); }
-.period-help { font-size: 12px; }
-.period-help summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .dates-view .action-bar { padding-top: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom), var(--tg-content-safe-area-inset-bottom, 0px)); }
 .dates-view .action-bar .button { min-height: 44px; }
 .article-photo, .article-placeholder { width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; min-width: 0; }
@@ -579,7 +574,6 @@ html { scroll-padding-bottom: calc(150px + max(env(safe-area-inset-bottom), var(
   .dates-view .date-grid .field { padding: 10px; }
   .dates-view .date-grid .field > span { font-size: 13px; }
   .dates-view .date-grid input[type=time] { min-width: 0; padding: 6px; }
-  .period-help { margin-bottom: 12px; }
   .article-card-head { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
   .article-main .order-head { display: block; }
   .article-main .status-pill { display: inline-block; margin-top: 6px; }

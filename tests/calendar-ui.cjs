@@ -56,6 +56,9 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
             renderMs:(()=>{const target=document.createElement("div"); const start=performance.now();new PolyRentalCalendar.RangeCalendar(target,{minimum:"2026-10-30"});return performance.now()-start;})()};
         });
         assert.equal(bounds.overflow,false,JSON.stringify({width,dark,bounds}));
+        assert.equal(await page.getByText('Условия и быстрый срок · МСК',{exact:true}).count(),0,'ФТ-UI-08: quick durations are removed');
+        assert.equal(await page.locator('.duration-option, #duration-apply').count(),0);
+        assert.match(await page.locator('#start-hint').innerText(),/Выдача с.*Время по Москве/);
         assert.equal(bounds.touch,true);
         await page.locator('#period-summary').evaluate(node => node.scrollIntoView({block: 'center'}));
         const visibleSummary = await page.evaluate(() => ({summary:document.querySelector('#period-summary').getBoundingClientRect().toJSON(), action:document.querySelector('#action-bar').getBoundingClientRect().toJSON(), tabs:document.querySelector('.tabs').getBoundingClientRect().toJSON()}));
