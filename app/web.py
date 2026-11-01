@@ -40,16 +40,16 @@ async def expiry_loop():
                 expire_holds(session)
             expire_deletion_intents()
         await asyncio.to_thread(expire)
+        from .notification_outbox import retry_pending_notifications
+        await retry_pending_notifications()
         if last_workflow_tick is None or time.monotonic()-last_workflow_tick>=60:
             from .booking_changes import process_change_deadlines
             from .roadmap import queue_optional_reminders
-            from .notification_outbox import retry_pending_notifications
             from .sla_escalations import queue_sla_escalations
             from .support import retry_support_replies
             await asyncio.to_thread(process_change_deadlines)
             await asyncio.to_thread(queue_optional_reminders)
             await asyncio.to_thread(queue_sla_escalations)
-            await retry_pending_notifications()
             await retry_support_replies()
             last_workflow_tick=time.monotonic()
         if last_receipt_purge is None or time.monotonic() - last_receipt_purge >= 86400:
@@ -165,7 +165,7 @@ def dashboard(request: Request):
 @app.post("/admin/bookings/{booking_id}/{action}")
 async def change_booking(request: Request, booking_id: int, action: str):
     admin = require_admin(request)
-    if not await asyncio.to_thread(staff_allows, admin, "manager" if action == "confirmed" else "operator"):
+    if not await asyncio.to_thread(staff_allows, admin, "operator"):
         raise HTTPException(403, "Недостаточно прав для этого действия")
     try:
         status = await asyncio.to_thread(transition, booking_id, action, admin)

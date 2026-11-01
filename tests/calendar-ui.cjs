@@ -79,7 +79,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
           }
           host.remove();return measurements;
         });
-        assert.deepEqual(media,[[76,57],[76,57],[76,57]]);
+        assert.deepEqual(media,[[64,48],[64,48],[64,48]]);
         await page.locator('[data-date="2026-10-30"]').focus();
         await page.keyboard.press("ArrowRight");
         assert.equal(await page.locator(":focus").getAttribute("data-date"),"2026-10-31");

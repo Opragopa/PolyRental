@@ -1,0 +1,82 @@
+/* DESIGN-01: composed screens use the PolyRental Figma spacing and surfaces.
+   Telegram theme variables remain the source of runtime colours. */
+:root { --view-gap: 16px; --card-radius: 12px; }
+.shell, .dates-view .shell { padding-top: max(20px, env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px)); padding-left: max(20px, env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px)); }
+.topbar, .dates-view .topbar { min-height: 24px; padding: 0; margin-bottom: 16px; border: 0; }
+.brand { font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: 0; }
+.brand-mark, .topbar-note, .topbar .app-version, .step-kicker { display: none; }
+.panel-head, .dates-view #step-dates .panel-head { margin: 0 0 16px; gap: 12px; }
+.panel-head h2, .dates-view #step-dates h2 { font-size: 24px; font-weight: 700; line-height: 1.2; letter-spacing: -.025em; }
+.button { min-height: 48px; padding: 14px 16px; font-size: 14px; font-weight: 700; border-radius: var(--card-radius); }
+.button.compact { min-height: 44px; }
+.field { gap: 8px; margin-bottom: 16px; font-size: 14px; }
+.field input, .field select, .field textarea { font-size: 16px; }
+.contact-card, .review-group, .identity-section, #consent-step, .admin-card, .order-card, .request-next-overview, .catalog-controls, .receipt-section { padding: 16px; border: 0; border-radius: var(--card-radius); background: var(--surface); box-shadow: none; }
+.review-group, .review-group:last-child { border: 0; }
+.contact-card h3, .identity-section h3, .review-heading, .receipt-section h3 { font-size: 16px; line-height: 24px; font-weight: 700; }
+.supporting, .customer-order-period, .customer-order-items, .item-description { font-size: 14px; }
+.catalog-period { padding: 16px; margin: 0 0 16px; border-radius: var(--card-radius); background: var(--surface); }
+.items-grid { gap: 16px; }
+.item-card, .item-card.selected { padding: 16px; border: 1px solid transparent; border-radius: var(--card-radius); }
+.item-card.selected { border-color: var(--accent); }
+.item-main .item-name { font-size: 16px; line-height: 1.4; }
+.item-main p, .available-badge { font-size: 14px; }
+.item-card .item-photo, .item-card .item-placeholder { width: 80px; height: 96px; }
+.item-card, .item-card.selected { grid-template-columns: 80px minmax(0, 1fr); min-height: 128px; }
+.dates-view .date-grid { grid-template-columns: 1fr; gap: 0; margin: 0 0 16px; padding: 0 16px; border-radius: var(--card-radius); background: var(--surface); }
+.dates-view .date-grid .field { padding: 16px 0; border: 0; border-radius: 0; background: transparent; }
+.dates-view .date-grid .field + .field { border-top: 1px solid var(--line); }
+.dates-view .date-grid .field > span { font-size: 16px; line-height: 24px; }
+.dates-view .date-grid input[type=time] { max-width: 180px; background: var(--surface); }
+.range-calendar { border-radius: 16px; padding: 16px; }
+.date-instruction { margin-bottom: 16px; }
+.admin-tabs { margin-bottom: 16px; }
+.admin-settings { margin-bottom: 16px; }
+.catalog-controls { gap: 12px; margin: 0 0 16px; }
+.catalog-summary { margin: 16px 0; }
+.catalog-toolbar { flex-direction: column; gap: 12px; margin: 16px 0; }
+.catalog-toolbar > .button { width: 100%; flex: none; min-height: 48px !important; text-align: left; }
+.article-card { margin-top: 16px; }
+.article-card-head { grid-template-columns: 64px minmax(0, 1fr); align-items: start; }
+.article-main h3 { font-size: 16px; line-height: 24px; }
+.article-main .article-type { margin-top: 0; }
+.article-meta { font-size: 14px; }
+.equipment-row { padding: 16px 0; }
+.equipment-list { margin-top: 12px; }
+.catalog-operations { margin: 16px 0; background: var(--surface); border: 0; }
+.editor-card { padding: 0; background: transparent; }
+.editor-card h3 { margin: 0 0 16px; font-size: 24px; line-height: 1.2; }
+.editor-card .catalog-form > .field { padding: 16px; margin: 0; background: var(--surface); border-radius: var(--card-radius); }
+.editor-card .catalog-form { gap: 16px; }
+.editor-card .catalog-form > .action-row { margin: 0; }
+.request-card, .customer-order-card { padding: 0; }
+.request-next-overview { margin-top: 16px; background: var(--surface); border: 1px solid var(--line); }
+.request-next-overview h4 { font-size: 16px; }
+.request-section h4 { font-size: 16px; }
+.request-card .action-row > .workflow-next { min-height: 48px; border: 0; padding: 14px 16px; font-size: 14px; box-shadow: none; }
+.request-card .action-row > .workflow-next::after { display: none; }
+.receipt-summary { display: grid; gap: 16px; }
+.receipt-section h3, .receipt-section p { margin: 0; }
+.receipt-section ul { margin: 8px 0 0; padding-left: 20px; }
+.receipt-section li { margin-top: 8px; overflow-wrap: anywhere; }
+.receipt-section { border: 1px solid var(--line); }
+.workflow-dialog .dialog-card { gap: 16px; }
+.workflow-dialog .action-row > .button { min-height: 48px; }
+.profile-version { margin-top: 16px; color: var(--muted); font-size: 12px; }
+@media (max-width: 620px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .action-row > .button { min-height: 48px; }
+  .action-bar .button { text-align: left; }
+}
+@media (max-width: 359px) {
+  .dates-view .shell { padding-left: 6px; padding-right: 6px; }
+  .dates-view .range-calendar { padding-left: 0; padding-right: 0; }
+  .item-card, .item-card.selected { grid-template-columns: 1fr; }
+  .item-card .item-photo, .item-card .item-placeholder { width: 100%; height: 100px; }
+}
+
+button, summary { -webkit-tap-highlight-color: transparent; }
+.dates-view .date-grid .field { padding-top: 12px; padding-bottom: 12px; }
+.dates-view .date-grid input[type=time] { border-color: transparent; padding-left: 0; }
+
+#admin-panel.catalog-editing > .panel-head, #admin-panel.catalog-editing > .admin-tabs, #admin-panel.catalog-editing > .admin-settings { display: none; }

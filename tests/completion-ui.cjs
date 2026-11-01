@@ -13,15 +13,22 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false}={}) {
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[]}={}) {
   const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
   const errors=[],writes=[];let catalogPreview='';
+  const categories=[{code:'generic',name:'Оборудование'},{code:'camera',name:'Камера'}];
   page.on('pageerror',error=>errors.push(error.message));
   await page.clock.install({time:new Date('2026-10-29T10:00:00Z')});
   await page.route('**/*',async route=>{
     const url=new URL(route.request().url()),method=route.request().method();
     if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"synthetic",initDataUnsafe:{user:{id:42}}}}'});
     if (url.pathname.startsWith('/miniapp/static/')) {const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
+    if (url.pathname==='/api/miniapp/notifications/claim') return route.fulfill({json:{items:notices.splice(0)}});
+    if (url.pathname==='/api/miniapp/catalog/categories') return route.fulfill({json:{items:categories}});
+    if (url.pathname==='/api/miniapp/admin/catalog/categories') {
+      const category={code:'custom_sound',name:route.request().postDataJSON().name};categories.push(category);
+      return route.fulfill({json:category});
+    }
     if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:trusted}:{})}});
     if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,client_allowed:true,system_admin:role==='admin',start_screen:admin?'management':'booking'}});
     if (url.pathname==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
@@ -69,6 +76,32 @@ async function noOverflow(page) {
   const browser=await(engine==='webkit'?webkit:chromium).launch({headless:true,...(engine==='chromium'&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   let passed=0;
   try {
+    {
+      const {page,errors}=await fixture(browser,{order:base('returned'),notices:[{id:'event-1',booking_id:7,status:'returned',message:'Заявка завершена'}]});
+      await page.locator('.stage-toast').waitFor();
+      assert.equal(await page.locator('.stage-toast').count(),1);
+      await page.reload();
+      await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
+      assert.equal(await page.locator('.stage-toast').count(),0);
+      assert.deepEqual(errors,[]);await page.close();passed++;
+    }
+    {
+      const {page,errors}=await fixture(browser,{admin:true,role:'operator',order:base('pending')});
+      assert.ok(await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).isVisible());
+      await page.locator('[data-mode="catalog"]').click();
+      await page.getByRole('button',{name:'Новый артикул',exact:true}).click();
+      const form=page.locator('.catalog-form');
+      await form.locator('[name="name"]').fill('Полное имя Sony FX3');
+      await form.getByRole('button',{name:'Создать категорию',exact:true}).click();
+      const dialog=page.locator('.workflow-dialog');
+      await dialog.locator('[name="name"]').fill('Звук');
+      await dialog.getByRole('button',{name:'Создать',exact:true}).click();
+      await page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
+      assert.equal(await form.locator('[name="category"]').inputValue(),'custom_sound');
+      assert.equal(await form.locator('[name="name"]').inputValue(),'Полное имя Sony FX3');
+      await noOverflow(page);
+      assert.deepEqual(errors,[]);await page.close();passed++;
+    }
     for (const width of [320,390]) {
       const {page,errors,writes}=await fixture(browser,{width});
       await page.getByRole('button',{name:'Получил',exact:true}).click();

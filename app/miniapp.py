@@ -33,6 +33,8 @@ from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .cart import CartConflict, get_cart, put_cart
 from .availability_events import subscribe as subscribe_availability, unsubscribe as unsubscribe_availability
 from .catalog_titles import catalog_title
+from .catalog_categories import list_categories, create_category
+from .booking_events import claim_notices
 from .request_sla import request_sla
 from .support import (SupportConflict, submit_question, list_threads as list_support_threads,
                       claim_thread, read_messages as read_support_messages, reply as support_reply,
@@ -135,6 +137,28 @@ def require_admin(user=Depends(require_customer)):
     if not staff_allows(user["id"], "operator"):
         raise HTTPException(403, "Доступ только для сотрудников")
     return user
+
+
+@router.post("/api/miniapp/notifications/claim")
+async def claim_booking_notifications(user=Depends(require_customer)):
+    return {"items": await asyncio.to_thread(claim_notices, user["id"])}
+
+
+@router.get("/api/miniapp/catalog/categories")
+async def catalog_categories():
+    return {"items": await asyncio.to_thread(list_categories)}
+
+
+class CategoryRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/api/miniapp/admin/catalog/categories")
+async def admin_create_category(payload: CategoryRequest, user=Depends(require_admin)):
+    try:
+        return await asyncio.to_thread(create_category, payload.name, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def require_system_admin(user=Depends(require_customer)):
@@ -258,10 +282,7 @@ class BookingContactUpdate(BaseModel):
 
 
 async def notify_new_booking(booking_id: int, customer_id: int):
-    booking = await asyncio.to_thread(get_booking, booking_id)
-    number = booking.human_number or f"№{booking_id}"
-    await notify(booking_id, customer_id, "booking_created_customer",
-                 f"<b>Заявка {number} создана</b>\n<i>Ожидает решения оператора.</i> Заявка остаётся в очереди до подтверждения или отмены.")
+    return None  # The transaction queues the shared event and deliveries.
 
 
 async def notify_cancelled_booking(booking_id: int):
@@ -270,21 +291,12 @@ async def notify_cancelled_booking(booking_id: int):
 
 
 async def notify_booking_status(booking_id: int, customer_id: int, status: str, operator: str):
-    if not status.startswith("identity_"):
-        return None  # The service writes stage events transactionally to the outbox.
-    booking = await asyncio.to_thread(get_booking, booking_id)
-    return await notify(booking_id, customer_id, f"status_{status}",
-                        booking_status_text(booking.human_number or booking_id, status, operator))
+    return None  # Includes identity events, persisted with the review transaction.
 
 
 async def notify_identity_submitted(booking_id: int):
     """Tell operators that identity data was submitted or corrected; never include PII."""
-    booking = await asyncio.to_thread(get_booking, booking_id)
-    if not booking or not booking.assignee_id:
-        return
-    number = getattr(booking, "human_number", None) or f"№{booking_id}"
-    message = f"<b>Анкета обновлена · заявка {number}</b>\nПроверьте документы клиента в Mini App."
-    await notify_actionable(booking_id, booking.assignee_id, "identity_submitted", message)
+    return None
 
 
 @router.get("/miniapp")
@@ -607,15 +619,16 @@ async def customer_bookings(user=Depends(require_customer)):
 
 @router.get("/api/miniapp/profile/history")
 async def client_history(category: str = Query(default="active", pattern="^(active|completed|cancelled|all)$"),
-                         page: int = Query(default=0, ge=0, le=100000), number: str = Query(default="", max_length=32), user=Depends(require_customer)):
+                         page: int = Query(default=0, ge=0, le=100000), number: str = Query(default="", max_length=32),
+                         booking_id: int | None = Query(default=None, gt=0), user=Depends(require_customer)):
     try:
-        bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number)
+        bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number, booking_id)
     except ValueError as exc:
         raise HTTPException(422, "Введите полный номер заявки или последние четыре цифры") from exc
     with Session() as session:
         available = set(session.scalars(select(ReceiptArchive.booking_id).join(
             BookingDocument, and_(BookingDocument.booking_id == ReceiptArchive.booking_id,
-                                 BookingDocument.kind == "receipt_pdf")).where(
+                                 BookingDocument.kind.in_(["receipt_pdf", "receipt_docx"]))).where(
             ReceiptArchive.booking_id.in_([booking.id for booking in bookings]),
             ReceiptArchive.expired_at.is_(None), ReceiptArchive.expires_at > func.now())).all())
     return {"items": [booking_view(booking) | {"receipt_available": booking.id in available} for booking in bookings],
@@ -627,7 +640,7 @@ async def customer_download_receipt(booking_id: int, user=Depends(require_custom
     _limit_pii(user["id"], "customer_receipt")
     try:
         body, filename = await asyncio.to_thread(customer_receipt_pdf, booking_id, user["id"])
-        return Response(body, media_type="application/pdf", headers={"Cache-Control": "no-store",
+        return Response(body, media_type="application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Cache-Control": "no-store",
                         "Content-Disposition": f'attachment; filename="{filename}"'})
     except ReceiptExpired as exc:
         raise HTTPException(410, str(exc)) from exc
@@ -1134,7 +1147,7 @@ async def admin_catalog(user=Depends(require_admin)):
     with Session() as session:
         previews = image_data(session, [article.id for article in articles])
     dependencies = await asyncio.to_thread(list_dependencies)
-    return {"articles": [{"id": article.id, "sku": article.sku, "name": article.name,
+    return {"categories": await asyncio.to_thread(list_categories), "articles": [{"id": article.id, "sku": article.sku, "name": article.name,
                            "is_test": article.is_test,
                            "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
                            "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
@@ -1303,8 +1316,6 @@ async def admin_return_for_rework(booking_id: int, payload: ReworkRequest,
         booking = await asyncio.to_thread(get_booking, booking_id)
         background_tasks.add_task(notify_booking_status, booking_id, booking.customer_id, status,
                                   operator_name(user))
-        if booking.assignee_id and booking.assignee_id != user["id"]:
-            background_tasks.add_task(notify_actionable, booking_id, booking.assignee_id, "identity_rework", "Заявка возвращена в подготовку для исправления анкеты. После проверки потребуется новая расписка.")
         return admin_booking_view(booking)
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
@@ -1317,7 +1328,7 @@ async def admin_return_for_rework(booking_id: int, payload: ReworkRequest,
 @router.post("/api/miniapp/admin/bookings/{booking_id}/transition")
 async def admin_transition(booking_id: int, payload: TransitionRequest,
                            background_tasks: BackgroundTasks, user=Depends(require_admin)):
-    required = "manager" if payload.action == "confirmed" else "operator"
+    required = "operator"
     if not await asyncio.to_thread(staff_allows, user["id"], required):
         raise HTTPException(403, "Недостаточно прав для этого действия")
     try:
@@ -1540,7 +1551,7 @@ async def download_generated_document(token: str):
     try:
         if kind == "customer_receipt_pdf":
             body, filename = await asyncio.to_thread(customer_receipt_pdf, booking_id, actor_id)
-            media_type = "application/pdf"
+            media_type = "application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             body, filename = await asyncio.to_thread(operator_document, booking_id, kind, actor_id)
             media_type = "application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

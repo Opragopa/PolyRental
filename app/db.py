@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import (BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary,
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, LargeBinary, Identity, Index,
                         Numeric, String, Text, UniqueConstraint, create_engine, inspect,
                         select, text)
 from sqlalchemy.dialects.postgresql import JSONB
@@ -511,10 +511,13 @@ class BookingRework(Base):
 class NotificationDelivery(Base):
     """Durable Telegram delivery log and retry queue."""
     __tablename__ = "notification_deliveries"
+    __table_args__ = (UniqueConstraint("event_id", "recipient_id", "delivery_kind", name="notification_event_recipient_kind_unique"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True, index=True)
     recipient_id: Mapped[int] = mapped_column(BigInteger, index=True)
     event: Mapped[str] = mapped_column(String(50))
+    event_id: Mapped[str | None] = mapped_column(ForeignKey("booking_events.id", ondelete="CASCADE"), nullable=True)
+    delivery_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     message: Mapped[str] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -522,6 +525,42 @@ class NotificationDelivery(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class CatalogCategory(Base):
+    __tablename__ = "catalog_categories"
+    code: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    normalized_name: Mapped[str] = mapped_column(String(100), unique=True)
+
+
+class BookingEvent(Base):
+    __tablename__ = "booking_events"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    version: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    actions: Mapped[list] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(30))
+    card_text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BookingEventRecipient(Base):
+    __tablename__ = "booking_event_recipients"
+    __table_args__ = (Index("booking_event_recipient_unseen_idx", "recipient_id", "shown_at"),)
+    event_id: Mapped[str] = mapped_column(ForeignKey("booking_events.id", ondelete="CASCADE"), primary_key=True)
+    recipient_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BookingBotCard(Base):
+    __tablename__ = "booking_bot_cards"
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), primary_key=True)
+    recipient_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BookingDeletionAudit(Base):
@@ -535,6 +574,10 @@ class BookingDeletionAudit(Base):
 
 engine = create_engine(os.getenv("DATABASE_URL", "postgresql+psycopg://polyrental:polyrental@localhost:5432/polyrental"), pool_pre_ping=True)
 Session = sessionmaker(engine, expire_on_commit=False)
+
+# Install transactional booking notifications for every service entry point.
+from .booking_events import install_booking_events
+install_booking_events(Session)
 
 
 def _columns(connection, table):
@@ -657,6 +700,9 @@ def init_db():
             if "removed_billable" not in columns:
                 connection.execute(text("ALTER TABLE booking_assets ADD COLUMN removed_billable BOOLEAN NOT NULL DEFAULT false"))
     Base.metadata.create_all(engine)
+    from .catalog_categories import seed_categories
+    with engine.begin() as connection:
+        seed_categories(connection)
     with engine.begin() as connection:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_customer_request_unique ON bookings (customer_id, client_request_id)"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_number_unique ON bookings (receipt_number)"))

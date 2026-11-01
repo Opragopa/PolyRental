@@ -13,9 +13,9 @@ from tests.test_miniapp import configure, signed_init_data
 
 def test_title_rules_and_fallback():
     parts = infer_structured("Карта памяти Lexar SDXC 256GB Professional")
-    assert catalog_title("original", **parts) == "Карта памяти Lexar 256GB"
+    assert catalog_title("original", **parts) == "original"
     assert catalog_title("Original model", "", "", "") == "Original model"
-    assert catalog_title("Original", "lens", "", "24–70 мм") == "Объектив 24–70 мм"
+    assert catalog_title("Original", "lens", "", "24–70 мм") == "Original"
     assert infer_structured("Штатив Manfrotto 160 см")["key_spec"] == "160 см"
 
 
@@ -32,7 +32,7 @@ def test_staff_can_edit_separate_fields_and_audit(monkeypatch):
         assert response.status_code == 200, response.text
         article_id = response.json()["id"]
         row = next(x for x in client.get("/api/miniapp/admin/catalog", headers=headers).json()["articles"] if x["id"] == article_id)
-        assert row["name"] == payload["name"] and row["title"] == "Карта памяти Lexar 256GB"
+        assert row["name"] == payload["name"] and row["title"] == payload["name"]
         # Old clients omitting the new fields do not erase them.
         old_payload = {k: v for k, v in payload.items() if k not in {"kind", "brand", "key_spec"}}
         old_payload["id"] = article_id

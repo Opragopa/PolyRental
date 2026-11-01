@@ -36,6 +36,4 @@ def infer_structured(name, category="generic"):
 
 
 def catalog_title(name, kind="", brand="", key_spec=""):
-    label = KINDS.get(kind, kind.strip()) if kind else ""
-    title = " ".join(part.strip() for part in (label, brand or "", key_spec or "") if part and part.strip())
-    return title or (name or "").strip() or "Оборудование"
+    return (name or "").strip() or "Оборудование"

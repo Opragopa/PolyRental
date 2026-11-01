@@ -558,3 +558,29 @@ html { scroll-padding-bottom: calc(150px + max(env(safe-area-inset-bottom), var(
   .range-calendar { padding-left: 0; padding-right: 0; border-left: 0; border-right: 0; }
   .tab { gap: 4px; font-size: 12px; }
 }
+
+/* DESIGN-01: mobile controls, focused editors and progressive disclosure. */
+.catalog-operations { margin: 12px 0; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; }
+.catalog-operations > summary, .equipment-actions > summary, .article-details > summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--accent); }
+.catalog-operations > p { font-size: 14px; color: var(--muted); }
+#admin-content > .action-row > .button { min-height: 44px; }
+.equipment-actions { flex: 1 1 100%; }
+.equipment-actions .action-row { margin-top: 4px; }
+.equipment-row > span { flex: 1 1 200px; min-width: 0; }
+.article-main, .article-main .order-head > div { min-width: 0; }
+.article-main h3 { overflow-wrap: anywhere; }
+.editor-card { margin-top: 0; scroll-margin-top: 16px; }
+.request-actions { scroll-margin-top: 16px; }
+.request-next-overview .button { margin-top: 10px; }
+@media (max-width: 620px) {
+  .shell, .dates-view .shell { padding-top: max(12px, env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px)); }
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px; }
+  .dates-view .date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .dates-view .date-grid .field { padding: 10px; }
+  .dates-view .date-grid .field > span { font-size: 13px; }
+  .dates-view .date-grid input[type=time] { min-width: 0; padding: 6px; }
+  .period-help { margin-bottom: 12px; }
+  .article-card-head { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
+  .article-main .order-head { display: block; }
+  .article-main .status-pill { display: inline-block; margin-top: 6px; }
+}

@@ -83,13 +83,13 @@ def reset_draft(session, booking_id):
         row.data = {key: value for key, value in row.data.items() if key == "exceptions"}
         row.encrypted_recipient = row.recipient_nonce = None
     session.execute(delete(BookingDocument).where(BookingDocument.booking_id == booking_id,
-                                                BookingDocument.kind == "receipt_pdf"))
+                                                BookingDocument.kind.in_(["receipt_pdf", "receipt_docx"])))
     session.execute(delete(ReceiptArchive).where(ReceiptArchive.booking_id == booking_id))
 
 
 def prepare_receipt(session, booking, actor_id, legacy=False):
     """Called with the booking lock in the ready transaction; no nested sessions."""
-    from .receipt_pdf import render_receipt_pdf
+    from .receipt_docx import render_receipt_docx, DOCX_MEDIA_TYPE
     identity_row = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
     if identity_row is None or identity_row.status != "verified":
         raise Conflict("Для расписки необходима проверенная анкета клиента")
@@ -116,17 +116,17 @@ def prepare_receipt(session, booking, actor_id, legacy=False):
     row.recipient_nonce = os.urandom(12)
     row.encrypted_recipient = AESGCM(_master_key()).encrypt(row.recipient_nonce,
         identity["full_name"].encode(), f"recipient:{booking.id}".encode())
-    body = render_receipt_pdf(booking.id, actor_id, booking=booking, identity=identity,
-                              snapshot=snapshot, exceptions=data["exceptions"], legacy=legacy)
+    body = render_receipt_docx(booking, identity, snapshot, data["exceptions"], legacy=legacy)
+    data["receipt_kind"] = "receipt_docx"
     timestamp, nonce = now(), os.urandom(12)
-    document = session.get(BookingDocument, (booking.id, "receipt_pdf"))
+    document = session.get(BookingDocument, (booking.id, "receipt_docx"))
     if document is None:
-        document = BookingDocument(booking_id=booking.id, kind="receipt_pdf")
+        document = BookingDocument(booking_id=booking.id, kind="receipt_docx")
         session.add(document)
-    document.filename = f"receipt-{(booking.human_number or str(booking.id)).replace('ТС', 'TS')}.pdf"
-    document.media_type = "application/pdf"
+    document.filename = f"receipt-{(booking.human_number or str(booking.id)).replace('ТС', 'TS')}.docx"
+    document.media_type = DOCX_MEDIA_TYPE
     document.nonce, document.sha256 = nonce, hashlib.sha256(body).hexdigest()
-    document.encrypted_data = AESGCM(_master_key()).encrypt(nonce, body, f"{booking.id}:receipt_pdf:doc-v1".encode())
+    document.encrypted_data = AESGCM(_master_key()).encrypt(nonce, body, f"{booking.id}:receipt_docx:doc-v1".encode())
     if legacy:
         lifecycle = session.get(ReceiptArchive, booking.id)
         if lifecycle is not None:
@@ -167,11 +167,13 @@ def customer_attest(booking_id, customer_id, action, acknowledged=False):
                 raise Conflict("Получение доступно для готовой заявки")
             if data.get("exceptions") and not acknowledged:
                 raise Conflict("Подтвердите ознакомление с перечнем частичной выдачи")
+            if data.get("received_at") and data.get("exceptions_acknowledged") == acknowledged:
+                return
             data.setdefault("received_at", now().isoformat())
             data["exceptions_acknowledged"] = acknowledged
         elif action == "returning":
-            from .schedule import validate_operation_window
-            validate_operation_window()
+            if data.get("returning_at") and booking.status == "return_inspection":
+                return
             if booking.status != "issued" and not (booking.status == "return_inspection" and data.get("legacy_issue")):
                 raise Conflict("Возврат доступен только после выдачи")
             data["returning_at"] = now().isoformat()
@@ -190,8 +192,6 @@ def customer_attest(booking_id, customer_id, action, acknowledged=False):
 
 def attest_paper_signature(booking_id, actor_id, point, identity_matches, paper_signed):
     require_role(actor_id)
-    from .schedule import validate_operation_window
-    validate_operation_window()
     if point not in {"issue", "return"} or not identity_matches or not paper_signed:
         raise Conflict("Сверьте личность получателя и подтвердите бумажную подпись")
     with Session.begin() as session:
@@ -228,7 +228,7 @@ def validate_issue(session, booking, actor_id=None, actor_name=""):
             data.get("recipient_id") != booking.customer_id or
             (data.get("exceptions") and not data.get("exceptions_acknowledged"))):
         raise Conflict("Нужны расписка и подтверждение получения клиентом")
-    document = session.get(BookingDocument, (booking.id, "receipt_pdf"))
+    document = session.get(BookingDocument, (booking.id, data.get("receipt_kind", "receipt_pdf")))
     if document is None:
         raise Conflict("Сохранённая расписка отсутствует")
     from .inventory import composition_items

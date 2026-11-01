@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from .db import Article, Equipment, Session
+from .catalog_categories import category_exists
 
 
 MAX_CSV_BYTES = 1024 * 1024
@@ -22,7 +23,6 @@ MODEL_FIELDS = {"description", "composition", "category", "inspection_profile", 
                 "image_url", "active"}
 DEFAULTS = {"description": "", "composition": "", "category": "generic",
             "inspection_profile": "generic", "buffer_hours": 24, "image_url": "", "active": True}
-CATEGORIES = {"generic", "camera", "optics", "light", "battery", "accessory"}
 PROFILES = {"generic", "camera", "optics", "light", "battery"}
 CONDITIONS = {"available", "maintenance", "retired"}
 
@@ -112,7 +112,7 @@ def _model_value(field, raw, line):
             raise ValueError(f"Строка {line}: image_url должен быть HTTPS-ссылкой")
         return url
     if field == "category":
-        if raw not in CATEGORIES:
+        if not category_exists(raw):
             raise ValueError(f"Строка {line}: неизвестная категория {raw}")
         return raw
     if field == "inspection_profile":

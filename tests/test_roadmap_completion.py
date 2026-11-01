@@ -71,9 +71,9 @@ def test_decline_reason_and_notification_are_encrypted(monkeypatch):
     assert "comment" not in change_view(booking_id,200)
     from app.notification_outbox import delivery_message
     with Session() as session:
-        row=session.scalar(select(NotificationDelivery).where(NotificationDelivery.booking_id==booking_id,NotificationDelivery.event=="request_rejected"))
-        assert row.message.startswith("enc-v1:") and "Нет согласования" not in row.message
-        assert "Нет согласования" in delivery_message(row)
+        rows=session.scalars(select(NotificationDelivery).where(NotificationDelivery.booking_id==booking_id,NotificationDelivery.event=="booking_update")).all()
+        assert rows and all("Нет согласования" not in delivery_message(row) for row in rows)
+        assert any("Заявка отклонена" in delivery_message(row) for row in rows)
 
 
 def test_reminders_are_optional_durable_and_cancelled_when_disabled(monkeypatch):

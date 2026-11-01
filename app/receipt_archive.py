@@ -30,7 +30,7 @@ def _five_years_after(value):
 
 
 def _decrypt(document):
-    aad = f"{document.booking_id}:receipt_pdf:doc-v1".encode()
+    aad = f"{document.booking_id}:{document.kind}:doc-v1".encode()
     return AESGCM(_master_key()).decrypt(document.nonce, document.encrypted_data, aad)
 
 
@@ -82,7 +82,7 @@ def archived_receipt_pdf(booking_id, actor_id):
 
 
 def customer_receipt_pdf(booking_id, customer_id, actor_id=None):
-    """Read an existing PDF for its owner; never create one from a read request."""
+    """Read the saved receipt (DOCX or historical PDF); never generate on read."""
     expired = False
     result = None
     with Session.begin() as session:
@@ -90,14 +90,15 @@ def customer_receipt_pdf(booking_id, customer_id, actor_id=None):
         if booking is None or booking.customer_id != customer_id:
             raise ValueError("Расписка не найдена")
         lifecycle = session.get(ReceiptArchive, booking_id, with_for_update=True)
+        handover = session.get(BookingHandover, booking_id)
+        kind = (handover.data.get("receipt_kind", "receipt_pdf") if handover else "receipt_pdf")
         if lifecycle is None:
-            draft=session.get(BookingDocument,(booking_id,"receipt_pdf"))
-            handover=session.get(BookingHandover,booking_id)
+            draft=session.get(BookingDocument,(booking_id,kind))
             if booking.status=="ready" and booking.deleted_at is None and draft and handover and handover.data.get("snapshot"):
                 session.add(PIIAudit(booking_id=booking_id,actor_id=actor_id if actor_id is not None else customer_id,action="document_previewed"))
                 return _decrypt(draft),draft.filename
             raise ValueError("Расписка не найдена")
-        document = session.get(BookingDocument, (booking_id, "receipt_pdf"), with_for_update=True)
+        document = session.get(BookingDocument, (booking_id, kind), with_for_update=True)
         timestamp = now()
         if lifecycle.expired_at is not None or lifecycle.expires_at <= timestamp:
             handover = session.get(BookingHandover, booking_id)
@@ -120,16 +121,17 @@ def customer_receipt_pdf(booking_id, customer_id, actor_id=None):
 
 
 def purge_expired_receipts(at=None):
-    """Remove expired PDF bytes while keeping the lifecycle metadata."""
+    """Remove expired receipt bytes in either format, retaining lifecycle metadata."""
     timestamp = at or now()
     with Session.begin() as session:
         rows = session.scalars(select(ReceiptArchive).where(
             ReceiptArchive.expired_at.is_(None), ReceiptArchive.expires_at <= timestamp)
             .with_for_update(skip_locked=True)).all()
         for lifecycle in rows:
-            document = session.get(BookingDocument, (lifecycle.booking_id, "receipt_pdf"), with_for_update=True)
-            if document is not None:
-                session.delete(document)
+            for kind in ("receipt_pdf", "receipt_docx"):
+                document = session.get(BookingDocument, (lifecycle.booking_id, kind), with_for_update=True)
+                if document is not None:
+                    session.delete(document)
             handover = session.get(BookingHandover, lifecycle.booking_id)
             if handover:
                 handover.encrypted_recipient = handover.recipient_nonce = None

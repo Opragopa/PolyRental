@@ -43,12 +43,26 @@
     camera: ["Камера", "◉"], optics: ["Оптика", "◌"], light: ["Свет", "✦"],
     battery: ["Питание", "▰"], accessory: ["Аксессуар", "◆"], generic: ["Оборудование", "▣"],
   };
+  function setCategories(categories) {
+    for (const category of categories) categoryMeta[category.code] = [category.name, categoryMeta[category.code]?.[1] || "▣"];
+  }
+  function categoryOptions(selected) {
+    return Object.entries(categoryMeta).map(([code, meta]) => `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(meta[0])}</option>`).join("");
+  }
+  async function createCategoryDialog() {
+    let created = null;
+    const data = await workflowDialog("Создать категорию", '<label class="field"><span>Название категории</span><input name="name" maxlength="100" required></label>', "Создать", null,
+      async values => { created = await api("/api/miniapp/admin/catalog/categories", {method:"POST", body:JSON.stringify({name:values.get("name")})}); });
+    if (!data) return null;
+    setCategories([created]);
+    return created;
+  }
   function categoryLabel(category) { return categoryMeta[category]?.[0] || categoryMeta.generic[0]; }
   function catalogType(item) {
     return item.category && item.category !== "generic" ? categoryLabel(item.category) : (item.description || categoryLabel(item.category));
   }
   function catalogTitle(item) {
-    return item.title || item.name || catalogType(item);
+    return item.name || item.title || catalogType(item);
   }
   function catalogMedia(item, className) {
     if(item.image_data && /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(item.image_data))return `<img class="${className}-photo" src="${escapeHtml(item.image_data)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">`;
@@ -611,7 +625,7 @@
     } finally { state.busy = false; render(); }
   }
 
-  const statusNames = { needs_changes: "Нужно исправить", pending: "Ждёт менеджера", confirmed: "Подтверждена", preparing: "Комплектуется", ready: "Готова", issued: "В аренде", return_inspection: "Проверяется", returned: "Завершена", cancelled: "Отменена", expired: "Удержание истекло" };
+  const statusNames = { needs_changes: "Нужно исправить", pending: "Ожидает проверки", confirmed: "Подтверждена", preparing: "Комплектуется", ready: "Готова", issued: "В аренде", return_inspection: "Проверяется", returned: "Завершена", cancelled: "Отменена", expired: "Удержание истекло" };
   const identityStatusNames = { required: "Не заполнена", submitted: "На проверке", needs_changes: "Нужны исправления", verified: "Проверена", not_required: "Не требуется", deleted: "Удалена", blocked: "Заблокирована" };
   function appendPendingContactEditor(card, order) {
     const toggle = document.createElement("button"); toggle.className = "button ghost"; toggle.type = "button";
@@ -647,7 +661,7 @@
     if (keyboardMode) { $("orders-content").textContent = "Вернитесь в чат с ботом и нажмите «Мои заявки». Там же можно узнать статус и связаться с менеджером."; return; }
     if (!authorized) { $("orders-content").textContent = "Откройте приложение через Telegram."; return; }
     try {
-      const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}`);
+      const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}`);
       if (sequence !== profileLoadSequence || state.view !== "orders") return;
       $("orders-content").replaceChildren();
       customerOrdersSnapshot = workflowSnapshot(result);
@@ -668,10 +682,10 @@
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
         help.addEventListener("click", () => openSupport("request", order.id)); card.append(help);
         if (order.receipt_available) {
-          const receipt = document.createElement("button"); receipt.type = "button"; receipt.className = "button secondary"; receipt.textContent = "Скачать расписку PDF";
+          const receipt = document.createElement("button"); receipt.type = "button"; receipt.className = "button secondary"; receipt.textContent = "Скачать расписку";
           receipt.addEventListener("click", async () => {
             receipt.disabled = true;
-            try { await downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`, `receipt-${(order.human_number || "request").replace("ТС", "TS")}.pdf`); }
+            try { await downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`, `receipt-${(order.human_number || "request").replace("ТС", "TS")}.docx`); }
             catch (error) { showError(error.message); } finally { receipt.disabled = false; }
           });
           card.append(receipt);
@@ -963,6 +977,7 @@
   }
 
   async function showAdmin(mode = "orders") {
+    $("admin-panel").classList.remove("catalog-editing");
     $("admin-settings").hidden = Boolean(state.role?.pii_only);
     if (state.role?.pii_only) {mode = "orders";document.querySelectorAll("#admin-panel .calendar-sync").forEach(node=>node.hidden=true);}
     document.querySelectorAll(".admin-tabs .admin-mode").forEach((button) => { if (state.role?.pii_only && button.dataset.mode !== "orders") button.hidden = true; });
@@ -998,6 +1013,7 @@
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
     if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
     render();
+    $("admin-panel").querySelector("h2").textContent = ({orders:"Заявки",catalog:"Управление · Каталог",repairs:"Ремонт",support:"Обращения",hidden_tests:"Тестовые заявки"})[mode] || "Управление";
     document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
@@ -1098,12 +1114,14 @@
             ? (state.role?.pii_admin ? "Следующий шаг: проверьте анкету клиента." : "Ждём проверку анкеты сотрудником с доступом к персональным данным.")
             : (order.identity_status === "needs_changes" ? "Ждём исправленную анкету клиента." : "Ждём заполненную анкету клиента.");
         }
-        if (order.status === "pending" && !["manager", "admin"].includes(state.role?.staff_role)) nextStep.textContent = "Ожидаем подтверждения заявки менеджером.";
+
         const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview";
         const nextHeading = document.createElement("h4"); nextHeading.textContent = "Следующий шаг";
         nextOverview.append(nextHeading, nextStep);
+        const jump = plainButton("К действиям ↓", () => { processing.tabIndex = -1; processing.focus({preventScroll:true}); processing.scrollIntoView({block:"start"}); }, "ghost compact");
+        nextOverview.append(jump);
         appendHandoverProgress(processing, order, true);
-        body.append(nextOverview, summary, formHost, processing); accordion.append(toggle, body); card.append(accordion);
+        body.append(nextOverview, processing, summary, formHost); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
         if (reworkTargets[order.status] && (order.status !== "confirmed" || ["manager","admin"].includes(state.role?.staff_role))) {
@@ -1128,7 +1146,7 @@
             const failedCount = order.assets.filter((asset) => inspectionFor(order, asset, "pre_issue")?.result === "fail").length;
             readinessHint.textContent = failedCount
               ? `Неисправность отмечена у ${failedCount} экземпляр(а). Замените неисправную технику, затем повторите проверку.`
-              : "Проверьте все экземпляры. После успешной проверки нажмите «Далее», чтобы подтвердить готовность заказа.";
+              : "Проверьте все экземпляры, затем нажмите «Подтвердить готовность к выдаче».";
             readinessHint.hidden = canConfirm();
           };
           ready.disabled = !canConfirm();
@@ -1427,6 +1445,8 @@
     }
     const response = await fetch(path, { headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store" });
     if (!response.ok) { let detail = "Не удалось скачать документ"; try { detail = (await response.json()).detail || detail; } catch (_) {} throw new Error(detail); }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    filename = /filename="([^"]+)"/.exec(disposition)?.[1] || filename;
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a");
     link.href = url; link.download = filename; link.style.display = "none"; document.body.append(link); link.click(); link.remove();
     // iOS Telegram may start reading the file after the click handler returns.
@@ -1515,15 +1535,34 @@
   }
 
   function renderAdminCatalog(result, editor = null) {
+    setCategories(result.categories || []);
+    $("admin-panel").classList.toggle("catalog-editing", Boolean(editor));
     const content = $("admin-content"); content.replaceChildren();
+    if (editor) {
+      const form = catalogEditor(result, editor);
+      content.append(form);
+      const heading = form.querySelector("h3"); heading.tabIndex = -1;
+      heading.focus({preventScroll:true}); form.scrollIntoView({block:"start"});
+      return;
+    }
+    const operations = document.createElement("details"); operations.className = "catalog-operations";
+    const operationsTitle = document.createElement("summary"); operationsTitle.textContent = "Импорт и настройка комплектов";
+    operations.append(operationsTitle);
     const dependencyNote = document.createElement("p");
-    dependencyNote.textContent = "Зависимости комплектов хранятся справочно. Автоматическое добавление отключено: клиент выбирает и оплачивает каждую позицию отдельно.";
-    content.append(dependencyNote);
-    const toolbar = document.createElement("div"); toolbar.className = "action-row";
+    dependencyNote.textContent = "Зависимости комплектов хранятся справочно. Автоматическое добавление отключено: клиент выбирает каждую позицию отдельно. Аренда бесплатная.";
+    operations.append(dependencyNote);
+    const toolbar = document.createElement("div"); toolbar.className = "action-row catalog-toolbar";
     for (const [label, type, className] of [["Новый артикул", "article", "primary"], ["Новый экземпляр", "equipment", "secondary"], ["Зависимость комплекта", "dependency", "ghost"]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = `button ${className}`; button.textContent = label;
-      button.addEventListener("click", () => renderAdminCatalog(result, { type })); toolbar.append(button);
+      button.addEventListener("click", () => renderAdminCatalog(result, { type })); (type === "dependency" ? operations : toolbar).append(button);
     }
+    toolbar.append(plainButton("Создать категорию", async () => {
+      const category = await createCategoryDialog(); if (!category) return;
+      result.categories = await api("/api/miniapp/catalog/categories").then(data => data.items);
+      const select = content.querySelector('.catalog-form [name="category"]');
+      if (select) select.innerHTML = categoryOptions(category.code);
+      else renderAdminCatalog(result, editor);
+    }, "ghost"));
     content.append(toolbar);
     const controls = document.createElement("div"); controls.className = "catalog-controls";
     controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
@@ -1537,7 +1576,7 @@
       if (selection.start != null && selection.end != null) refreshedSearch?.setSelectionRange(selection.start, selection.end, selection.direction || "none");
     });
     status.addEventListener("change", () => { catalogView.status = status.value; renderAdminCatalog(result, editor); });
-    content.append(controls);
+    content.prepend(controls);
     const importer = document.createElement("details"); importer.className = "catalog-import";
     importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>Поддерживаются технический CSV в UTF-8 (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
     importer.querySelector(".catalog-template-download").addEventListener("click", async (event) => {
@@ -1555,8 +1594,7 @@
         $("admin-content").prepend(notice);
       } catch (error) { showError(error.message); button.disabled = false; }
     });
-    content.append(importer);
-    if (editor) content.append(catalogEditor(result, editor));
+    operations.append(importer);
 
     if (result.dependencies.length) {
       const dependencies = document.createElement("article"); dependencies.className = "admin-card";
@@ -1571,7 +1609,7 @@
         remove.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/catalog/dependencies/${item.parent_article_id}/${item.child_article_id}`, { method: "DELETE" }); await showAdmin("catalog"); } catch (error) { showError(error.message); } });
         row.append(remove); list.append(row);
       }
-      content.append(dependencies);
+      operations.append(dependencies);
     }
 
     const query = catalogView.query.trim().toLocaleLowerCase("ru-RU");
@@ -1583,7 +1621,7 @@
     for (const article of visibleArticles) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
-      card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><div class="order-head"><div><p class="article-type">${escapeHtml(article.description || categoryLabel(article.category))}</p><h3>${escapeHtml(catalogTitle(article))}</h3></div><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p class="article-meta">${escapeHtml(article.sku)} · ${article.equipment.length} шт. · доступно ${availableCount}</p></div></div><details class="article-details"><summary>Параметры модели и комплектация</summary><p><strong>Полное название:</strong> ${escapeHtml(article.name)}</p><p>Профиль проверки: ${escapeHtml(article.inspection_profile)}</p><p><strong>Комплектация для расписки:</strong> ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div>`;
+      card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><div class="order-head"><div><p class="article-type">${escapeHtml(article.description || categoryLabel(article.category))}</p><h3>${escapeHtml(catalogTitle(article))}</h3></div><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p class="article-meta">${escapeHtml(article.sku)} · ${article.equipment.length} шт. · доступно ${availableCount}</p></div></div><details class="article-details"><summary>Параметры модели и комплектация</summary><p><strong>Полное название:</strong> ${escapeHtml(article.name)}</p><p>Профиль проверки: ${escapeHtml(({generic:"Общая проверка",camera:"Камера",optics:"Оптика",light:"Свет",battery:"Аккумулятор"})[article.inspection_profile] || "Общая проверка")}</p><p><strong>Комплектация для расписки:</strong> ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div>`;
       const cardActions = document.createElement("div"); cardActions.className = "action-row";
       const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact"; editArticle.textContent = "Изменить артикул";
       editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
@@ -1633,7 +1671,13 @@
           const data = await workflowDialog("Владелец оборудования",`<label class="field"><span>Имя или организация (необязательно)</span><input name="name" maxlength="200" value="${escapeHtml(asset.owner || "")}"></label><label class="field"><span>Контакт (необязательно)</span><input name="contact" maxlength="300" value="${escapeHtml(asset.owner_contact || "")}"></label>`,"Подтвердить",null,async data=>api(`/api/miniapp/admin/catalog/equipment/${asset.id}/owner`,{method:"PUT",body:JSON.stringify({name:data.get("name"),contact:data.get("contact")})}));
           if(data)await showAdmin("catalog");
         }));
-        row.append(edit, remove); equipmentList.append(row);
+        const moreActions = document.createElement("details"); moreActions.className = "equipment-actions";
+        const moreTitle = document.createElement("summary"); moreTitle.textContent = "Другие действия";
+        moreActions.append(moreTitle);
+        const extra = document.createElement("div"); extra.className = "action-row";
+        for (const button of [...row.querySelectorAll(":scope > button")]) extra.append(button);
+        extra.append(remove); moreActions.append(extra);
+        row.append(edit, moreActions); equipmentList.append(row);
       }
       if (matchingAssets.length > 3) {
         const more = document.createElement("button"); more.type = "button"; more.className = "button ghost compact catalog-more";
@@ -1643,6 +1687,7 @@
       }
       content.append(card);
     }
+    content.append(toolbar, operations);
   }
 
   function catalogEditor(result, editor) {
@@ -1652,11 +1697,15 @@
       return `<option value="${article.id}" ${Number(value.article_id) === article.id ? "selected" : ""}>${escapeHtml(article.name)} · ${escapeHtml(type)} · SKU: ${escapeHtml(article.sku)}</option>`;
     }).join("");
     if (editor.type === "article") {
-      wrapper.innerHTML = `<h3>${value.id ? "Изменить артикул" : "Новый артикул"}</h3><form class="catalog-form form-grid"><label class="field"><span>SKU / артикул</span><input name="sku" value="${escapeHtml(value.sku || "")}" maxlength="80" required></label><label class="field"><span>Полное название</span><input name="name" value="${escapeHtml(value.name || "")}" maxlength="200" required></label><label class="field"><span>Вид (например, camera или Карта памяти)</span><input name="kind" value="${escapeHtml(value.kind || "")}" maxlength="80"></label><label class="field"><span>Бренд</span><input name="brand" value="${escapeHtml(value.brand || "")}" maxlength="100"></label><label class="field"><span>Основная характеристика</span><input name="key_spec" value="${escapeHtml(value.key_spec || "")}" maxlength="120"></label><label class="field wide"><span>Описание</span><textarea name="description" maxlength="4000">${escapeHtml(value.description || "")}</textarea></label><label class="field wide"><span>Комплектация для расписки</span><textarea name="composition" maxlength="4000" placeholder="Оставьте пустым, пока состав комплекта не определён">${escapeHtml(value.composition || "")}</textarea><small>Один элемент на строке. Состав сохраняется для модели и проверяется поэлементно.</small></label><label class="field"><span>Категория</span><select name="category">${selectOptions(["generic", "camera", "optics", "light", "battery", "accessory"], value.category || "generic")}</select></label><label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic", "camera", "optics", "light", "battery"], value.inspection_profile || "generic")}</select></label><label class="field wide"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" value="${escapeHtml(value.image_url || "")}" maxlength="500" placeholder="https://…"></label><label class="check-row wide"><input name="active" type="checkbox" ${value.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить артикул</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
+      wrapper.innerHTML = `<h3>${value.id ? "Изменить артикул" : "Новый артикул"}</h3><form class="catalog-form form-grid"><label class="field"><span>SKU / артикул</span><input name="sku" value="${escapeHtml(value.sku || "")}" maxlength="80" required></label><label class="field"><span>Полное название</span><input name="name" value="${escapeHtml(value.name || "")}" maxlength="200" required></label><label class="field"><span>Вид (например, camera или Карта памяти)</span><input name="kind" value="${escapeHtml(value.kind || "")}" maxlength="80"></label><label class="field"><span>Бренд</span><input name="brand" value="${escapeHtml(value.brand || "")}" maxlength="100"></label><label class="field"><span>Основная характеристика</span><input name="key_spec" value="${escapeHtml(value.key_spec || "")}" maxlength="120"></label><label class="field wide"><span>Описание</span><textarea name="description" maxlength="4000">${escapeHtml(value.description || "")}</textarea></label><label class="field wide"><span>Комплектация для расписки</span><textarea name="composition" maxlength="4000" placeholder="Оставьте пустым, пока состав комплекта не определён">${escapeHtml(value.composition || "")}</textarea><small>Один элемент на строке. Состав сохраняется для модели и проверяется поэлементно.</small></label><label class="field"><span>Категория</span><select name="category">${categoryOptions(value.category || "generic")}</select><button type="button" class="button ghost create-category">Создать категорию</button></label><label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic", "camera", "optics", "light", "battery"], value.inspection_profile || "generic")}</select></label><label class="field wide"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" value="${escapeHtml(value.image_url || "")}" maxlength="500" placeholder="https://…"></label><label class="check-row wide"><input name="active" type="checkbox" ${value.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить артикул</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     } else if (editor.type === "equipment") {
       wrapper.innerHTML = `<h3>${value.id ? "Изменить экземпляр" : "Новый экземпляр"}</h3><form class="catalog-form form-grid"><label class="field wide"><span>Артикул</span><select name="article_id" required><option value="">Выберите артикул</option>${options}</select></label><label class="field"><span>S/N</span><input name="serial" value="${escapeHtml(value.serial || "")}" maxlength="80"></label><label class="field"><span>Инвентарный код</span><input name="inventory_code" value="${escapeHtml(value.inventory_code || "")}" maxlength="80"></label><label class="field"><span>Складская ячейка</span><input name="location" value="${escapeHtml(value.location || "")}" maxlength="120" placeholder="A-01"></label><label class="field"><span>Состояние</span><select name="condition">${selectOptions(["available", "maintenance", "retired"], value.condition || "available")}</select></label><label class="field"><span>Здоровье аккумулятора, %</span><input name="health" type="number" min="0" max="100" value="${value.health ?? ""}" placeholder="Только для аккумулятора"></label><label class="field"><span>Заряд аккумулятора, %</span><input name="charge" type="number" min="0" max="100" value="${value.charge ?? ""}" placeholder="Только для аккумулятора"></label><div class="info-strip wide"><span class="info-icon">i</span><p>S/N может отсутствовать или повторяться. Инвентарный код, если указан, уникален.</p></div><div class="action-row wide"><button class="button primary" type="submit">Сохранить экземпляр</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     } else {
       wrapper.innerHTML = `<h3>Зависимость комплекта</h3><form class="catalog-form form-grid"><label class="field"><span>Основной артикул</span><select name="parent_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Добавляемый артикул</span><select name="child_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Количество на единицу</span><input name="quantity" type="number" min="1" max="30" value="1" required></label><label class="check-row"><input name="billable" type="checkbox"><span>Оплачивается отдельно</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить зависимость</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
+    }
+    if (editor.type === "article") {
+      const form = wrapper.querySelector("form");
+      for (const name of ["inspection_profile", "category", "name", "sku"]) form.prepend(form.querySelector(`[name="${name}"]`).closest("label"));
     }
     if (editor.type === "article" && value.id && state.profile?.system_admin) {
       const flag = document.createElement("label"); flag.className = "check-row wide";
@@ -1664,6 +1713,12 @@
       const label = document.createElement("span"); label.textContent="Тестовый артикул"; flag.append(checkbox,label); wrapper.querySelector("form").prepend(flag);
     }
     wrapper.querySelector(".editor-cancel").addEventListener("click", () => renderAdminCatalog(result));
+    wrapper.querySelector(".create-category")?.addEventListener("click", async () => {
+      try {
+        const category = await createCategoryDialog();
+        if (category) wrapper.querySelector('[name="category"]').innerHTML = categoryOptions(category.code);
+      } catch (error) { showError(error.message); }
+    });
     wrapper.querySelector("form").addEventListener("submit", async (event) => {
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
       try {
@@ -1753,7 +1808,7 @@
     const baseline = view === "orders" ? customerOrdersSnapshot : adminOrdersSnapshot;
     if (baseline === null) return;
     const sequence = view === "orders" ? profileLoadSequence : adminRenderSequence;
-    const path = view === "orders" ? `/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}` : "/api/miniapp/admin/bookings";
+    const path = view === "orders" ? `/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}` : "/api/miniapp/admin/bookings";
     workflowRefreshBusy = true;
     try {
       const result = await api(path);
@@ -1774,23 +1829,48 @@
 
   function receiptSummary(order) {
     const handover = order.handover || {};
-    return `<p>Расписка · ${escapeHtml(order.human_number || "")}</p><ul>${(handover.snapshot || []).map((item) => `<li>${escapeHtml(item.name)}${item.code ? ` #${escapeHtml(item.code)}` : ""}${item.features?.length ? `<ul>${item.features.map((feature) => `<li>${escapeHtml(feature.description)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul>${handover.exceptions?.length ? `<p><strong>Частичная выдача</strong></p><ul>${handover.exceptions.map((item) => `<li>${escapeHtml(item.name)}${item.component ? ` / ${escapeHtml(item.component)}` : ""}: ${escapeHtml(({missing:"Не выдано: отсутствует", faulty:"Не выдано: неисправность", replacement:"Заменено"})[item.reason])}${item.replacement_name ? ` → ${escapeHtml(item.replacement_name)}` : ""} ${escapeHtml(item.note || "")}</li>`).join("")}</ul>` : ""}`;
+    const snapshot = handover.snapshot || [];
+    const items = snapshot.map(item => `<li>${escapeHtml(item.name)}${item.code ? ` #${escapeHtml(item.code)}` : ""}</li>`).join("");
+    const features = snapshot.flatMap(item => (item.features || []).map(feature => `<li><strong>${escapeHtml(item.name)}</strong>: ${escapeHtml(feature.description)}</li>`)).join("");
+    const exceptions = (handover.exceptions || []).map(item => `<li>${escapeHtml(item.name)}${item.component ? ` / ${escapeHtml(item.component)}` : ""}: ${escapeHtml(({missing:"Не выдано: отсутствует",faulty:"Не выдано: неисправность",replacement:"Заменено"})[item.reason] || item.reason || "")}${item.replacement_name ? ` → ${escapeHtml(item.replacement_name)}` : ""} ${escapeHtml(item.note || "")}</li>`).join("");
+    return `<div class="receipt-summary"><section class="receipt-section"><h3>Состав выдачи</h3>${items ? `<ul>${items}</ul>` : "<p>Состав указан в сохранённом документе.</p>"}</section><section class="receipt-section"><h3>Особенности</h3>${features ? `<ul>${features}</ul>` : "<p>Не отмечены</p>"}</section>${exceptions ? `<section class="receipt-section"><h3>Частичная выдача · исключения</h3><ul>${exceptions}</ul></section>` : ""}</div>`;
   }
 
-  const shownStageNotices = new Set();
-  function showStageNotice(order, admin = false) {
-    const status = order.identity_status === "needs_changes" ? "identity_changes" : order.status;
-    if (admin ? !["confirmed","return_inspection","returned"].includes(status) : !["pending","needs_changes","identity_changes","ready","issued","returned"].includes(status)) return;
-    const key = `${admin}:${order.id}:${status}`; if (shownStageNotices.has(key)) return; shownStageNotices.add(key);
-    const notice = document.createElement("div"); notice.className="stage-toast"; notice.setAttribute("role","status");
-    const copy = document.createElement("span"); copy.textContent = status === "identity_changes" ? "Нужно исправить анкету. Откройте заявку." : status === "needs_changes" ? "Нужно исправить заявку. Откройте изменения." : workflowNotice(order);
-    const close=plainButton("×",()=>notice.remove(),"ghost"); close.setAttribute("aria-label","Закрыть уведомление"); notice.append(copy,close); document.body.append(notice); setTimeout(()=>notice.remove(),8000);
+  let stageNoticesBusy = false;
+  function showStageNotice() { void claimStageNotices(); }
+  async function claimStageNotices() {
+    if (!authorized || stageNoticesBusy || document.hidden) return;
+    stageNoticesBusy = true;
+    try {
+      const result = await api("/api/miniapp/notifications/claim", {method:"POST", body:"{}"});
+      for (const item of result.items || []) {
+        const notice = document.createElement("div"); notice.className = "stage-toast"; notice.setAttribute("role", "status");
+        const copy = document.createElement("span"); copy.textContent = `Заявка №${item.booking_id}: ${item.message}`;
+        const close = plainButton("×", () => notice.remove(), "ghost"); close.setAttribute("aria-label", "Закрыть уведомление");
+        notice.append(copy, close); document.body.append(notice); setTimeout(() => notice.remove(), 8000);
+      }
+    } catch (_) { /* The next poll retries without replaying server-claimed events. */ }
+    finally { stageNoticesBusy = false; }
   }
+  setInterval(() => { void claimStageNotices(); }, 5000);
 
   async function previewReceipt(order, admin = false) {
     const path = admin ? `/api/miniapp/admin/bookings/${order.id}/documents/receipt` : `/api/miniapp/bookings/${order.id}/receipt`;
     const response = await fetch(path,{headers:{"X-Telegram-Init-Data":tg?.initData || ""},cache:"no-store"});
     if (!response.ok) throw new Error("Не удалось открыть сохранённую расписку");
+    if (!response.headers.get("Content-Type")?.includes("application/pdf")) {
+      await workflowDialog("Сохранная расписка DOCX", receiptSummary(order) + '<button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
+        dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
+        dialog.querySelector('[type="submit"]').hidden = true;
+        const button = dialog.querySelector(".receipt-download");
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try { await downloadSecure(path, `receipt-${order.id}.docx`); }
+          catch (error) { let message = dialog.querySelector(".receipt-error"); if (!message) { message = document.createElement("p"); message.className = "receipt-error"; message.setAttribute("role", "alert"); button.after(message); } message.textContent = error.message; }
+          finally { button.disabled = false; }
+        });
+      }); return;
+    }
     const url=URL.createObjectURL(await response.blob());
     try { await workflowDialog("Предпросмотр расписки",`<iframe title="Сохранённая расписка PDF" src="${url}"></iframe><p>Если просмотр PDF недоступен на устройстве, скачайте расписку из заявки.</p>`,"Закрыть"); }
     finally { URL.revokeObjectURL(url); }
@@ -1858,7 +1938,7 @@
     appendHandoverProgress(card, order, false);
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
     if (order.receipt_available || order.receipt_preview_available) card.append(plainButton("Предпросмотр расписки",()=>previewReceipt(order)));
-    if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.pdf`)));
+    if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.docx`)));
     if (order.status === "ready" && !order.handover?.received_at) card.append(plainButton("Получил", async () => {
       const data = await workflowDialog("Получение оборудования", receiptSummary(order) + (order.partial_issue ? '<label class="check-row"><input name="acknowledged" type="checkbox" required><span>С перечнем ознакомлен</span></label>' : ""), "Подтверждаю",null,async data=>api(`/api/miniapp/bookings/${order.id}/attest`,{method:"POST",body:JSON.stringify({action:"received",acknowledged:data.get("acknowledged")==="on"})}));
       if (data) await showOrders();
@@ -1884,7 +1964,7 @@
       const data=await workflowDialog("Отклонить заявку",'<label class="field"><span>Причина для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label>',"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/decline`,{method:"POST",body:JSON.stringify({comment:data.get("comment")})}));
     },order.id,"ghost danger"));
     if (order.change_status === "unanswered") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент не ответил на изменения. Решение принимает менеджер."; actions.append(note); }
-    if (order.handover?.snapshot && state.role?.pii_admin) actions.append(actionButton("Скачать расписку PDF", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`,`receipt-${order.id}.pdf`),order.id,"secondary lock-exempt",false));
+    if (order.handover?.snapshot && state.role?.pii_admin) actions.append(actionButton("Скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`,`receipt-${order.id}.docx`),order.id,"secondary lock-exempt",false));
     if (order.handover?.snapshot && state.role?.pii_admin) actions.append(actionButton("Предпросмотр расписки",()=>previewReceipt(order,true),order.id,"secondary lock-exempt",false));
     if (state.role?.pii_admin && order.archived_documents?.includes("issue")) actions.append(actionButton("Архивный акт (устаревший)", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`,`act-${order.id}.docx`),order.id,"ghost lock-exempt",false));
     for(const kind of ["receipt","return","contract"])if(state.role?.pii_admin&&order.archived_documents?.includes(kind))actions.append(actionButton(({receipt:"Архивная расписка DOCX",return:"Архивный акт возврата",contract:"Архивный договор"})[kind],()=>downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/${kind==="receipt"?"legacy_receipt":kind}`,`archive-${kind}-${order.id}.docx`),order.id,"ghost lock-exempt",false));
@@ -1898,7 +1978,7 @@
       const original = order.handover?.snapshot?.find((item) => item.id === asset.id);
       const data = await workflowDialog("Сравнение особенностей", `<p>При выдаче: ${escapeHtml(original?.features?.map((item) => item.description).join("; ") || (order.handover?.legacy_snapshot_unknown ? "снимок отсутствовал" : "особенностей нет"))}</p><label class="field"><span>Результат</span><select name="kind"><option value="existing">Старая черта, выявлено при возврате</option><option value="damage">Новое повреждение</option><option value="lost">Утеря</option></select></label><label class="field"><span>Описание</span><textarea name="description" maxlength="2000" required></textarea></label>`,"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/return-finding`,{method:"POST",body:JSON.stringify({equipment_id:asset.id,kind:data.get("kind"),description:data.get("description")})}));
     },order.id,"secondary handover-action"));
-    if (!manager) actions.querySelectorAll("button").forEach((button) => { if (["Подтвердить заявку","Изменить заявку"].includes(button.textContent)) button.hidden = true; });
+    if (!manager) actions.querySelectorAll("button").forEach((button) => { if (["Изменить заявку"].includes(button.textContent)) button.hidden = true; });
     if (state.role?.pii_only) actions.querySelectorAll("button:not(.lock-exempt)").forEach((button) => { button.hidden=true; });
   }
 
@@ -2267,11 +2347,11 @@
   function applyProfileSearch() {
     clearTimeout(profileSearchTimer);
     if (state.view !== "orders") return;
-    state.profileNumber = $("profile-number").value.trim(); state.profilePage = 0; state.profileFilter = "all"; $("profile-filter").value = "all"; void showOrders();
+    state.profileTargetId = null; state.profileNumber = $("profile-number").value.trim(); state.profilePage = 0; state.profileFilter = "all"; $("profile-filter").value = "all"; void showOrders();
   }
   $("profile-number").addEventListener("input", () => { clearTimeout(profileSearchTimer); profileLoadSequence += 1; profileSearchTimer = setTimeout(applyProfileSearch, 350); });
   $("profile-search").addEventListener("submit", (event) => { event.preventDefault(); applyProfileSearch(); });
-  $("profile-filter").addEventListener("change", (event) => { state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
+  $("profile-filter").addEventListener("change", (event) => { state.profileTargetId = null; state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
   $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
@@ -2354,6 +2434,7 @@
   });
   if (!preview) void api("/api/miniapp/schedule").then((policy)=>{ if (!policy.enforced) return; schedulePolicy=policy; rangeCalendar.render(); applyBookingDateLimits(); render(); }).catch(()=>{});
   const profile = tg?.initDataUnsafe?.user;
+  if (!preview) void api("/api/miniapp/catalog/categories").then(result => { setCategories(result.items || []); render(); }).catch(() => {});
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
   }
@@ -2375,7 +2456,13 @@
           rangeCalendar.setRange($("start-date").value, $("end-date").value); applyBookingDateLimits(); render();
         } else if (hasDraft) saveDraft();
       }
+      void claimStageNotices();
       const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
+      const linkedBooking = /^booking_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("booking");
+      if (linkedBooking && /^\d+$/.test(linkedBooking)) {
+        if (role.admin) { selectedRequestId = Number(linkedBooking); return showAdmin("orders"); }
+        selectedCustomerOrderId = Number(linkedBooking); state.profileTargetId = Number(linkedBooking); state.profileFilter = "all"; $("profile-filter").value = "all"; return showOrders();
+      }
       if (["my_bookings", "orders"].includes(startParam)) return showOrders();
       if (profileState?.start_screen === "blocked") { state.view = "blocked"; render(); return; }
       if (startParam === "booking" && role.admin) { state.view = "admin"; enterClientMode(); return; }

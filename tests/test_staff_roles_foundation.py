@@ -71,18 +71,18 @@ def test_transition_api_checks_subrole_not_pii_membership(monkeypatch, staff_rol
     configure(monkeypatch)
     operator, manager, admin = staff_roles
     monkeypatch.setenv("ADMIN_IDS", f"{operator},{manager},{admin}")
-    monkeypatch.setenv("PII_ADMIN_IDS", str(operator))
+    monkeypatch.setenv("PII_ADMIN_IDS", f"{operator},910099")
     booking_id = pending_booking()
     def headers(user_id):
         return {"X-Telegram-Init-Data": signed_init_data(user_id)}
     url = f"/api/miniapp/admin/bookings/{booking_id}/transition"
     with TestClient(app) as client:
-        assert client.post(url, headers=headers(operator), json={"action": "confirmed"}).status_code == 403
-        assert client.post(url, headers=headers(manager), json={"action": "confirmed"}).status_code == 200
+        assert client.post(url, headers=headers(910099), json={"action": "confirmed"}).status_code == 403
+        assert client.post(url, headers=headers(operator), json={"action": "confirmed"}).status_code == 200
         assert client.get(f"/api/miniapp/admin/bookings/{booking_id}/identity", headers=headers(manager)).status_code == 403
 
 
-def test_bot_and_web_do_not_bypass_transition_role(monkeypatch, staff_roles):
+def test_bot_and_web_allow_operator_confirmation(monkeypatch, staff_roles):
     import asyncio
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -91,13 +91,15 @@ def test_bot_and_web_do_not_bypass_transition_role(monkeypatch, staff_roles):
 
     operator, manager, _ = staff_roles
     monkeypatch.setenv("ADMIN_IDS", f"{operator},{manager}")
-    message = SimpleNamespace(text="/confirm 123", from_user=SimpleNamespace(id=operator), answer=AsyncMock())
+    calls = []
+    monkeypatch.setattr(bot, "transition", lambda *args, **kwargs: calls.append(args) or "confirmed")
+    message = SimpleNamespace(text="/confirm 123", from_user=SimpleNamespace(id=operator, full_name="Тестовый сотрудник"), answer=AsyncMock())
     asyncio.run(bot.change(message, SimpleNamespace()))
-    assert "Недостаточно прав" in message.answer.call_args.args[0]
+    assert calls[0][:3] == (123, "confirmed", operator)
     monkeypatch.setattr(web, "require_admin", lambda request: operator)
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(web.change_booking(SimpleNamespace(), 123, "confirmed"))
-    assert error.value.status_code == 403
+    monkeypatch.setattr(web, "transition", lambda *args, **kwargs: calls.append(args) or "confirmed")
+    assert asyncio.run(web.change_booking(SimpleNamespace(), 123, "confirmed")).status_code == 303
+    assert calls[-1][:3] == (123, "confirmed", operator)
 
 
 def test_migration_seeds_admins_without_importing_pii_roles(monkeypatch):

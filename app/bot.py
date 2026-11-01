@@ -520,7 +520,7 @@ async def change(message: Message, bot: Bot):
     action = {"/confirm": "confirmed", "/cancel": "cancelled", "/prepare": "preparing",
               "/ready": "ready", "/issue": "issued", "/checkin": "return_inspection",
               "/return": "returned"}.get(command.split("@")[0])
-    if not await asyncio.to_thread(staff_allows, message.from_user.id, "manager" if action == "confirmed" else "operator"):
+    if not await asyncio.to_thread(staff_allows, message.from_user.id, "operator"):
         return await message.answer("Недостаточно прав для этого действия")
     try:
         key = number.strip()
@@ -552,7 +552,15 @@ async def main():
             logging.warning("Не удалось настроить меню Mini App: %s", exc)
     dp = Dispatcher()
     dp.include_router(router)
-    await dp.start_polling(bot)
+    from .miniapp_server import notification_loop
+    notifications = asyncio.create_task(notification_loop())
+    try:
+        await dp.start_polling(bot)
+    finally:
+        notifications.cancel()
+        from contextlib import suppress
+        with suppress(asyncio.CancelledError):
+            await notifications
 
 
 if __name__ == "__main__":

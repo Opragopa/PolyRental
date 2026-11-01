@@ -210,7 +210,7 @@ def archived_document(booking_id, kind, actor_id, refresh=False):
 
 
 def operator_document(booking_id, kind, actor_id):
-    """Read saved PDFs or deprecated historical documents, never generate acts."""
+    """Read saved receipts or historical documents, never generate on download."""
     from .roles import configured_ids
     if actor_id not in configured_ids("PII_ADMIN_IDS"):
         raise PermissionError("Нет доступа к персональным данным")
@@ -226,5 +226,5 @@ def operator_document(booking_id, kind, actor_id):
 
 
 def archive_completed_documents():
-    """Historical archives stay intact; new workflow creates PDFs atomically."""
+    """Historical archives stay intact; handover creates new receipts atomically."""
     return 0

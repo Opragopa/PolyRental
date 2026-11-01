@@ -21,7 +21,7 @@ def clean_database(monkeypatch):
     from app.miniapp import _PII_REQUESTS
     _PII_REQUESTS.clear()
     init_db()
-    from app.db import StaffRole, TrustedSigner
+    from app.db import StaffRole, TrustedSigner, CatalogCategory
     with Session.begin() as session:
         session.execute(delete(TrustedSigner))
         for user_id, role in ((100, "admin"), (200, "manager")):
@@ -35,4 +35,5 @@ def clean_database(monkeypatch):
                       RepairTicket, Inspection, BookingAsset, BookingLine, Audit,
                       Occupancy, BookingItem, Booking, ArticleDependency, Equipment, Article):
             session.execute(delete(model))
+        session.execute(delete(CatalogCategory).where(CatalogCategory.code.like("custom_%")))
     yield

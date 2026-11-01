@@ -5,9 +5,11 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
+from sqlalchemy.dialects.postgresql import insert
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
-from .db import Booking, NotificationDelivery, Session
+from .db import Booking, BookingBotCard, BookingEvent, NotificationDelivery, Session
 
 
 logger = logging.getLogger(__name__)
@@ -73,9 +75,48 @@ async def deliver_notification(delivery_id: int) -> bool:
             from .bot import make_bot
             from aiogram.enums import ParseMode
             async with make_bot(token) as bot:
-                await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML), timeout=10)
+                if delivery.delivery_kind == "card":
+                    # One lock across all outbox rows/processes for this card.
+                    acquired = session.scalar(text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"),
+                        {"key": f"booking-card:{delivery.booking_id}:{delivery.recipient_id}"})
+                    if not acquired:
+                        return False  # Never block the event loop behind another Telegram await.
+                    session.execute(insert(BookingBotCard).values(booking_id=delivery.booking_id,
+                        recipient_id=delivery.recipient_id).on_conflict_do_nothing())
+                    card = session.get(BookingBotCard, (delivery.booking_id, delivery.recipient_id))
+                    latest = session.scalar(select(BookingEvent).join(NotificationDelivery,
+                        NotificationDelivery.event_id == BookingEvent.id).where(
+                        NotificationDelivery.booking_id == delivery.booking_id,
+                        NotificationDelivery.recipient_id == delivery.recipient_id,
+                        NotificationDelivery.delivery_kind == "card").order_by(BookingEvent.version.desc()).limit(1))
+                    previous = session.get(BookingEvent, card.event_id) if card.event_id else None
+                    if previous is None or previous.version < latest.version:
+                        if card.message_id:
+                            try:
+                                await asyncio.wait_for(bot.edit_message_text(chat_id=delivery.recipient_id,
+                                    message_id=card.message_id, text=latest.card_text, parse_mode=ParseMode.HTML), timeout=10)
+                            except TelegramBadRequest as exc:
+                                detail = str(exc).lower()
+                                if "message is not modified" in detail:
+                                    pass
+                                elif "message to edit not found" in detail or "message can't be edited" in detail:
+                                    card.message_id = None
+                                else:
+                                    raise
+                        if card.message_id is None:
+                            sent = await asyncio.wait_for(bot.send_message(delivery.recipient_id, latest.card_text,
+                                parse_mode=ParseMode.HTML, disable_notification=True), timeout=10)
+                            card.message_id = sent.message_id
+                        card.event_id, card.updated_at = latest.id, _now()
+                else:
+                    await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML), timeout=10)
         except Exception as exc:
             delivery.attempts += 1
+            if isinstance(exc, TelegramForbiddenError):
+                delivery.cancelled_at = _now()
+                delivery.next_retry_at = None
+                delivery.last_error = type(exc).__name__
+                return False
             delay = min(2 ** min(delivery.attempts, 10), MAX_BACKOFF_SECONDS)
             delivery.last_error = type(exc).__name__
             delivery.next_retry_at = _now() + timedelta(seconds=delay)

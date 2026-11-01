@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
+from docx import Document
 from sqlalchemy import select
 
 from app.db import (Booking, BookingChange, BookingDocument, BookingHandover, EquipmentFeature,
@@ -44,14 +45,14 @@ def ready_booking(monkeypatch, partial=False):
     return booking_id
 
 
-def test_full_cycle_pdf_is_atomic_immutable_and_survives_identity_removal(monkeypatch):
+def test_full_cycle_docx_is_atomic_immutable_and_survives_identity_removal(monkeypatch):
     booking_id = ready_booking(monkeypatch)
     asset_id = get_booking(booking_id).assets[0].equipment_id
     feature_id = save_feature(asset_id,"Царапина на корпусе",100)
     transition(booking_id,"ready",100)
     original = customer_receipt_pdf(booking_id,42)[0]
-    text = "\n".join(page.extract_text() for page in PdfReader(BytesIO(original)).pages)
-    assert "Сотрудник (ФИО)" in text and "Доверенный сотрудник" not in text
+    text = "\n".join(p.text for p in Document(BytesIO(original)).paragraphs)
+    assert "Приложение к сохранной расписке" in text and "Царапина на корпусе" in text
     assert handover_state(booking_id)["snapshot"][0]["features"][0]["description"] == "Царапина на корпусе"
     assert customer_receipt_pdf(booking_id,42)[0] == original
     with pytest.raises(Conflict): transition(booking_id,"issued",100)
@@ -75,7 +76,7 @@ def test_full_cycle_pdf_is_atomic_immutable_and_survives_identity_removal(monkey
     with Session() as session:
         assert session.get(BookingDocument,(booking_id,"issue")) is None
         expiry = session.get(ReceiptArchive,booking_id).expires_at
-        assert session.scalar(select(NotificationDelivery.id).where(NotificationDelivery.booking_id==booking_id,NotificationDelivery.event=="booking_completed_operator"))
+        assert session.scalar(select(NotificationDelivery.id).where(NotificationDelivery.booking_id==booking_id,NotificationDelivery.event=="booking_update"))
     assert purge_expired_receipts(expiry) == 1
     assert handover_state(booking_id)["issued_by"] == 200
     assert handover_state(booking_id)["returned_by"] == 200
@@ -88,9 +89,8 @@ def test_partial_issue_has_appendix_acknowledgement_and_actual_return_count(monk
     transition(booking_id,"ready",100)
     with pytest.raises(Conflict): customer_attest(booking_id,42,"received",False)
     body,_ = customer_receipt_pdf(booking_id,42)
-    reader = PdfReader(BytesIO(body))
-    assert len(reader.pages) == 2
-    assert "Приложение" in reader.pages[1].extract_text()
+    document = Document(BytesIO(body))
+    assert any("Приложение" in p.text for p in document.paragraphs)
     assert availability(booking.starts_at,booking.ends_at)[0]["available_quantity"] == 1
     paper(booking_id)
     transition(booking_id,"issued",100)
@@ -101,15 +101,15 @@ def test_partial_issue_has_appendix_acknowledgement_and_actual_return_count(monk
     assert transition(booking_id,"returned",100) == "returned"
 
 
-def test_failed_pdf_generation_rolls_back_ready_and_archive(monkeypatch):
+def test_failed_docx_generation_rolls_back_ready_and_archive(monkeypatch):
     booking_id = ready_booking(monkeypatch)
-    from app import receipt_pdf
+    from app import receipt_docx
     def fail(*args,**kwargs): raise RuntimeError("Synthetic renderer failure")
-    monkeypatch.setattr(receipt_pdf,"render_receipt_pdf",fail)
+    monkeypatch.setattr(receipt_docx,"render_receipt_docx",fail)
     with pytest.raises(RuntimeError): transition(booking_id,"ready",100)
     assert get_booking(booking_id).status == "preparing"
     with Session() as session:
-        assert session.get(BookingDocument,(booking_id,"receipt_pdf")) is None
+        assert session.get(BookingDocument,(booking_id,"receipt_docx")) is None
     assert not handover_state(booking_id).get("snapshot")
 
 
@@ -254,7 +254,7 @@ def test_ready_pdf_is_draft_until_issue_and_changed_features_require_new_ack(mon
     save_feature(asset,"Особенность найдена до выдачи",100)
     with pytest.raises(Conflict,match="изменились"):transition(booking_id,"issued",100)
     return_for_rework(booking_id,"preparing","Повторить подготовку",100)
-    with Session() as session: assert session.get(BookingDocument,(booking_id,"receipt_pdf")) is None
+    with Session() as session: assert session.get(BookingDocument,(booking_id,"receipt_docx")) is None
     transition(booking_id,"ready",100)
     assert not handover_state(booking_id).get("received_at")
     assert customer_receipt_pdf(booking_id,42)[0]!=body
@@ -307,7 +307,7 @@ def test_legacy_issue_migration_preserves_historical_act_and_unknown_snapshot(mo
     assert state["legacy_snapshot_unknown"] and "issue_signature" not in state
     assert all(not item["features"] for item in state["snapshot"])
     assert operator_document(booking_id,"issue",200)[0]==original
-    assert customer_receipt_pdf(booking_id,42)[0].startswith(b"%PDF")
+    assert customer_receipt_pdf(booking_id,42)[0].startswith(b"PK")
     returning(booking_id)
     for asset in get_booking(booking_id).assets:record_inspection(booking_id,asset.equipment_id,"check_in","pass",{},"",100)
     paper(booking_id,point="return");transition(booking_id,"returned",100)

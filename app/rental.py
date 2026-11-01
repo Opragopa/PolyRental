@@ -20,6 +20,7 @@ from .db import (DeletionIntent, ClientProfile, Article, ArticleTitleAudit, Arti
                  CustomerIdentity, Equipment, Inspection, Occupancy, PIIAudit,
                  RepairTicket, Session)
 from .catalog_titles import catalog_title
+from .catalog_categories import category_exists
 from .request_numbers import format_request_number, parse_request_number
 from .roles import is_staff, staff_subrole
 
@@ -806,6 +807,8 @@ def update_booking_contact(booking_id, customer_id, customer_name, customer_cont
             raise Conflict("Имя и контакт можно изменить только до подтверждения менеджером")
         if not customer_name.strip() or not customer_contact.strip():
             raise ValueError("Укажите имя и телефон или Telegram username")
+        if (booking.customer_name, booking.customer_contact) == (customer_name.strip(), customer_contact.strip()):
+            return booking.id
         booking.customer_name = customer_name.strip()
         booking.customer_contact = customer_contact.strip()
         session.add(Audit(booking_id=booking.id, actor_id=customer_id, action="contact_updated"))
@@ -832,13 +835,15 @@ def list_hidden_test_bookings():
                                .order_by(Booking.created_at.desc()).limit(200)).all()
 
 
-def customer_history_page(customer_id, category, page, page_size=10, number=""):
+def customer_history_page(customer_id, category, page, page_size=10, number="", booking_id=None):
     filters = {"active": ACTIVE_STATUSES, "completed": {"returned"}, "cancelled": {"cancelled", "expired"},
                "all": ACTIVE_STATUSES | {"returned", "cancelled", "expired"}}
     if category not in filters or page < 0:
         raise ValueError("Неверный фильтр истории")
     with Session() as session:
         conditions = [Booking.customer_id == customer_id, Booking.deleted_at.is_(None), Booking.status.in_(filters[category])]
+        if booking_id is not None:
+            conditions.append(Booking.id == booking_id)
         number = number.strip().upper()
         if number:
             if len(number) == 4 and number.isascii() and number.isdigit():
@@ -891,6 +896,7 @@ def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="",
             Booking.id == booking_id).with_for_update())
         if not booking or booking.deleted_at is not None or booking.status not in {"confirmed", "preparing"}:
             raise Conflict("Комплектация доступна только для подтверждённого заказа")
+        starting_preparation = booking.status == "confirmed"
         _claim_stage(session, booking, actor_id, actor_name)
         if booking.identity_status != "verified":
             raise Conflict("Сначала клиент должен заполнить документы и пройти проверку у оператора")
@@ -996,7 +1002,7 @@ def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="",
         old_lease = session.get(BookingOperationLease, (booking.id, "confirmed"))
         if old_lease:
             session.delete(old_lease)
-        session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="preparing"))
+        session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="preparing" if starting_preparation else "composition_updated"))
         return booking.status
 
 
@@ -1137,10 +1143,7 @@ def rework_reason(booking_id,actor_id):
 def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
     if customer_id is None:
         from .inventory import require_role
-        require_role(actor_id, "manager" if action == "confirmed" else "operator")
-    if action in {"issued","return_inspection","returned"}:
-        from .schedule import validate_operation_window
-        validate_operation_window()
+        require_role(actor_id, "operator")
     if customer_id is not None and action != "cancelled":
         raise Conflict("Клиент может только отменить свою заявку")
     if action == "preparing":
@@ -1314,7 +1317,7 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
     if not sku.strip() or not name.strip():
         raise ValueError("Укажите артикул и название модели")
     if (Decimal(str(rate)) < 0 or not 0 <= int(buffer_hours) <= 168 or
-            category not in {"generic", "camera", "optics", "light", "battery", "accessory"} or
+            not category_exists(category) or
             profile not in {"generic", "camera", "optics", "light", "battery"}):
         raise ValueError("Неверная ставка или буфер")
     if image_url and (urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):

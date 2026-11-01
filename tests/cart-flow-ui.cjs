@@ -20,7 +20,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if (url.pathname==='/api/miniapp/cart' && route.request().method()==='GET') return route.fulfill({json:cart});
       if (url.pathname==='/api/miniapp/cart' && route.request().method()==='PUT') {const next=route.request().postDataJSON(); if (next.version!==cart.version) return route.fulfill({status:409,json:{detail:'conflict'}}); cart={...next,version:cart.version+1}; return route.fulfill({json:cart});}
       if (url.pathname==='/api/miniapp/profile/history') return route.fulfill({json:{total:1,items:[{id:7,human_number:'ТС260007',status:'returned',identity_status:'verified',receipt_available:true,starts_at:'2026-10-01T10:00:00+03:00',ends_at:'2026-10-02T10:00:00+03:00',items:[{id:2,name:'Старый штатив',quantity:1}]}]}});
-      if (url.pathname==='/api/miniapp/bookings/7/receipt') return route.fulfill({contentType:'application/pdf',body:'%PDF-synthetic'});
+      if (url.pathname==='/api/miniapp/bookings/7/receipt') return route.fulfill({contentType:'application/pdf',headers:{'Content-Disposition':'attachment; filename="receipt-TS260007.pdf"'},body:'%PDF-synthetic'});
       if (url.pathname==='/api/miniapp/availability') return route.fulfill({json:{items:[item],all_items:[item],unavailable_count:0,unavailable:[]}});
       if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:'text/html'});
@@ -54,7 +54,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#tab-orders').click();
     await page.locator('#orders-content .customer-order-toggle').first().click();
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button',{name:'Скачать расписку PDF'}).click();
+    await page.getByRole('button',{name:'Скачать расписку',exact:true}).click();
     assert.match((await downloadPromise).suggestedFilename(), /\.pdf$/);
     await page.getByRole('button',{name:'Повторить заявку'}).click();
     assert.equal(await page.locator('#start-date').inputValue(), '');

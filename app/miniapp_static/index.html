@@ -8,6 +8,7 @@
   <meta name="description" content="Бронирование фото- и видеотехники PolyRental: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>Политех.АРЕНДА — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
+  <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__">
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__"></script>
@@ -47,7 +48,7 @@
           <div id="range-calendar" class="range-calendar" aria-label="Календарь аренды"></div>
           <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p></div>
           <p id="period-error" class="period-error" role="status"></p>
-          <details class="period-help" hidden><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
+          <details class="period-help"><summary>Условия и быстрый срок · МСК</summary><p id="start-hint"></p><div class="duration-options"><button class="button secondary duration-option" type="button" data-days="1">1 сутки</button><button class="button secondary duration-option" type="button" data-days="2">2 суток</button><label class="field duration-custom"><span>Свой срок, суток</span><input id="duration-days" type="number" min="1" max="365" step="1" inputmode="numeric" placeholder="N"></label><button id="duration-apply" class="button secondary" type="button">Рассчитать возврат</button></div></details>
         </div>
 
         <div id="step-items" class="panel step-panel" hidden>
@@ -85,7 +86,7 @@
       <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
         <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2>Мои заявки</h2></div><span class="panel-icon" aria-hidden="true">≡</span></div>
         <form id="profile-search" class="action-row"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260001 или 0001"></label></form><label class="field"><span>История заявок</span><select id="profile-filter"><option value="all">Все</option><option value="active" selected>Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></label><div id="orders-content" role="status"></div><div id="profile-pagination" class="action-row" hidden><button id="profile-prev" class="button secondary" type="button">Назад</button><span id="profile-page"></span><button id="profile-next" class="button secondary" type="button">Далее</button></div>
-        <details id="profile-header" class="profile-settings"><summary>Настройки профиля</summary><p id="profile-name"></p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><button id="profile-support" class="button secondary" type="button">Поддержка</button><div id="profile-support-status" aria-live="polite"></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></details>
+        <details id="profile-header" class="profile-settings"><summary>Настройки профиля</summary><p id="profile-name"></p><p class="profile-version">PolyRental · v__APP_VERSION__</p><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button><button id="profile-support" class="button secondary" type="button">Поддержка</button><div id="profile-support-status" aria-live="polite"></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></details>
       </section>
 
       <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
@@ -182,7 +183,7 @@
           <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
         </details>
         </details>
-        <label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без владельца</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><div id="admin-content" role="status"></div>
+        <label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без ответственного</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><div id="admin-content" role="status"></div>
       </section>
     </main>
 

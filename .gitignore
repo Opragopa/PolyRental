@@ -11,3 +11,9 @@ tools/telegram-qa/artifacts/
 tools/telegram-qa/vendor/
 tools/telegram-qa/.tma-devkit/
 templates/*.docx
+
+# Local editor settings, design exports and release/test workspaces
+/.idea/
+/.codex/
+/tmp/
+/*.fig
