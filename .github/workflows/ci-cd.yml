@@ -19,7 +19,7 @@ jobs:
         run: cp .env.example .env
       - name: Run tests in the isolated PostgreSQL service
         run: docker compose --profile test run --rm --build test
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Verify an encrypted backup by restoring an isolated test database
@@ -40,7 +40,7 @@ jobs:
         browser: [chromium, webkit]
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
       - run: npm ci --prefix tools/browser-qa
@@ -95,7 +95,7 @@ jobs:
       - run: mkdir -p artifacts
       - name: Synthetic classification benchmark (no personal data)
         run: docker run --rm -v "$PWD/artifacts:/artifacts" polyrental-document-qa python scripts/benchmark_documents.py --output /artifacts/document-benchmark.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: synthetic-document-benchmark
