@@ -161,6 +161,12 @@
     return Boolean($("start-date").value && $("end-date").value);
   }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
+  function shortRequestDateTime(value) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("ru-RU", {
+      timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(value)).map((part) => [part.type, part.value]));
+    return `${parts.day}.${parts.month}.${parts.year}\u00a0\u00a0${parts.hour}:${parts.minute}`;
+  }
   function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
@@ -458,6 +464,42 @@
     return body;
   }
 
+  function updateCartCounters() {
+    const total = [...state.quantities.values()].reduce((sum, value) => sum + value, 0);
+    const selectedCount = $("selected-count");
+    if (selectedCount) selectedCount.textContent = String(total);
+    const floatingCount = $("floating-cart-count");
+    if (floatingCount) {
+      floatingCount.textContent = String(total);
+      floatingCount.classList.toggle("has-items", total > 0);
+    }
+    const floatingBtn = $("floating-cart-button");
+    if (floatingBtn) {
+      floatingBtn.hidden = !(state.view === "flow" && state.step >= 1 && state.step < 4);
+      floatingBtn.classList.toggle("has-items", total > 0);
+      floatingBtn.setAttribute("aria-label", `Открыть корзину: выбрано ${total}`);
+    }
+  }
+
+  function openCartView() {
+    if (!guardStaffNavigation()) return;
+    clearError();
+    if (state.profile?.client_allowed === false) { state.view = "blocked"; render(); return; }
+    if (!$("start").value || !$("end").value) {
+      const startDay = addIsoDays(minimumBookingDate(), 1);
+      const endDay = addIsoDays(startDay, 2);
+      $("start").value = `${startDay}T12:00`;
+      $("end").value = `${endDay}T12:00`;
+      syncDateFields("start"); syncDateFields("end");
+      rangeCalendar.setRange(startDay, endDay);
+    }
+    if (!state.items.length && preview) state.items = [...exampleItems];
+    state.view = "flow";
+    state.step = 2;
+    renderCart();
+    render();
+  }
+
   function render() {
     if (state.view !== "orders") {
       profileIdentitySequence++;
@@ -478,6 +520,11 @@
     $("tab-admin").classList.toggle("active", state.view === "admin");
     $("tab-new").setAttribute("aria-current", state.view === "flow" ? "page" : "false");
     $("tab-orders").setAttribute("aria-current", state.view === "orders" ? "page" : "false");
+    $("tab-admin").setAttribute("aria-current", state.view === "admin" ? "page" : "false");
+    updateCartCounters();
+    if (preview) {
+      try { localStorage.setItem("polyrental-preview-view", state.view); } catch (_) {}
+    }
     $("page-title").textContent = state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки";
     $("page-intro").textContent = state.view === "admin" ? "Комплектация, проверки, возврат, каталог и ремонт." : state.view === "identity" ? "Защищённая передача данных напрямую в ПолиРентал." : state.view === "orders" ? "Здесь можно следить за статусом и отменить активную заявку." : done ? "Менеджер получил запрос и скоро ответит." : "Выберите сроки и оборудование. На оформление уйдёт пара минут.";
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
@@ -542,7 +589,10 @@
     showLoading($("items-grid"), "", 3);
     $("items-status").hidden = false; $("items-status").textContent = "Проверяем доступность оборудования…";
     $("retry-items").hidden = true;
-    $("period-label").textContent = `${dateText(toIso($("start").value))} — ${dateText(toIso($("end").value))} · МСК`;
+    const startIso = toIso($("start").value), endIso = toIso($("end").value);
+    $("period-label").innerHTML = startIso && endIso
+      ? `<span class="period-label-caption">Период аренды · МСК</span><strong class="period-label-value">${escapeHtml(`${shortRequestDateTime(startIso)} — ${shortRequestDateTime(endIso)}`)}</strong>`
+      : `<span class="period-label-caption">Период аренды · МСК</span><strong class="period-label-value">Выберите даты</strong>`;
     try {
       const data = preview ? { items: exampleItems, unavailable_count: 0, unavailable: [] } : await api(availabilityPath(periodStart, periodEnd));
       if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
@@ -651,7 +701,7 @@
     $("client-catalog-pagination").hidden = !clientCatalog.paged || pages <= 1;
     $("client-catalog-prev").disabled = clientCatalog.page <= 0; $("client-catalog-next").disabled = clientCatalog.page + 1 >= pages;
     $("client-catalog-page").textContent = `${clientCatalog.page + 1} / ${pages}`;
-    $("selected-count").textContent = [...state.quantities.values()].reduce((sum, value) => sum + value, 0);
+    updateCartCounters();
     const shortage = [...state.quantities].some(([id, quantity]) => quantity > (state.items.find(item => item.id === id)?.available_quantity || 0));
     $("nearest-period").hidden = !authorized || preview || !shortage;
     if (nearestProposal && nearestProposal.key !== nearestSelectionKey()) { nearestProposal = null; $("nearest-status").textContent = ""; $("nearest-apply").hidden = true; }
@@ -659,6 +709,11 @@
   function nearestSelectionKey() { return JSON.stringify([$("start").value, $("end").value, [...state.quantities].sort((a,b) => a[0] - b[0])]); }
   function renderCart() {
     const container = $("cart-items"); container.replaceChildren();
+    updateCartCounters();
+    if (!state.quantities.size) {
+      const empty = document.createElement("p"); empty.className = "supporting"; empty.textContent = "В корзине пока нет выбранных позиций.";
+      container.append(empty);
+    }
     for (const [id, quantity] of state.quantities) {
       const item = state.items.find((row) => row.id === id) || {id, name:"Позиция недоступна", available_quantity:0};
       const row = document.createElement("article"); row.className = "order-card";
@@ -799,8 +854,8 @@
     $("profile-since").textContent = state.profile?.member_since ? `С нами с ${new Date(state.profile.member_since).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" })}` : "";
     showLoading($("orders-content"), "Загружаем заявки…");
     if (authorized) void loadProfileSupportThreads(0, sequence);
-    if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
     if (keyboardMode) { $("orders-content").textContent = "Вернитесь в чат с ботом и нажмите «Мои заявки». Там же можно узнать статус и связаться с менеджером."; return; }
+    if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
     if (!authorized) { $("orders-content").textContent = "Откройте приложение через Telegram."; return; }
     try {
       const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&sort=${encodeURIComponent(state.profileSort)}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}`);
@@ -818,7 +873,7 @@
         const outer = document.createElement("article"); outer.className = "order-card customer-order-card"; outer.dataset.bookingId = String(order.id);
         const accordion = document.createElement("details"); accordion.className = "customer-order-accordion"; accordion.open = selectedCustomerOrderId === order.id;
         const toggle = document.createElement("summary"); toggle.className = "customer-order-toggle";
-        toggle.innerHTML = `<span class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="customer-order-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span><span class="customer-order-items">${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</span>`;
+        toggle.innerHTML = `<span class="order-head"><strong>№ ${escapeHtml(order.human_number || String(order.id))}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="customer-order-period">${escapeHtml(`${shortRequestDateTime(order.starts_at)} — ${shortRequestDateTime(order.ends_at)} МСК`)}</span><span class="customer-order-items">${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</span>`;
         const card = document.createElement("div"); card.className = "customer-order-body";
         if (order.estimated_until) { const estimate = document.createElement("p"); estimate.textContent = `В обработке, ориентировочно до ${dateText(order.estimated_until)} МСК`; card.append(estimate); }
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
@@ -1174,6 +1229,8 @@
     $("admin-panel").querySelector("h2").textContent = ({orders:"Заявки",catalog:"Управление · Каталог",repairs:"Ремонт",support:"Обращения",hidden_tests:"Тестовые заявки"})[mode] || "Управление";
     document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
+    const previousScrollY = window.scrollY;
+    content.style.minHeight = mode === "orders" && previousCard ? `${content.offsetHeight}px` : "";
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
     if (!content.querySelector(".request-card") || mode !== "orders") showLoading(content, "Загружаем…");
     try {
@@ -1223,60 +1280,92 @@
         const card = document.createElement("article"); card.className = "admin-card request-card"; card.dataset.bookingId = String(order.id);
         const accordion = document.createElement("details"); accordion.className = "request-accordion";
         const toggle = document.createElement("summary"); toggle.className = "request-toggle";
-        toggle.innerHTML = `<span class="order-head"><strong>Заявка ${escapeHtml(order.human_number || `№${order.id}`)}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(dateText(order.starts_at))} — ${escapeHtml(dateText(order.ends_at))} МСК</span>`;
+        toggle.innerHTML = `<span class="order-head"><strong>№ ${escapeHtml(order.human_number || String(order.id))}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(`${shortRequestDateTime(order.starts_at)} — ${shortRequestDateTime(order.ends_at)} МСК`)}</span>`;
         const owner = document.createElement("span"); owner.className = "request-assignee";
         owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ID ${order.assignee_id}`) : "Ответственный не назначен";
         toggle.append(owner);
         if (order.sla?.deadline && order.sla?.stage !== "closed") {
           const sla = document.createElement("span"); sla.className = "request-sla";
-          if (order.sla.breached) sla.classList.add("request-sla-overdue");
-          sla.textContent = `${order.sla.breached ? "Просрочено · " : ""}Срок обработки: ${dateText(order.sla.deadline)} МСК`;
+          if (order.sla.breached) {
+            sla.classList.add("request-sla-overdue");
+            sla.innerHTML = `<strong class="request-sla-alert">Просрочено</strong><span>Срок обработки: ${escapeHtml(dateText(order.sla.deadline))} МСК</span>`;
+          } else {
+            sla.textContent = `Срок обработки: ${dateText(order.sla.deadline)} МСК`;
+          }
           toggle.append(sla);
         }
         const body = document.createElement("div"); body.className = "request-body";
-        const summary = reviewSection("Сроки и техника", "request-summary");
+        const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
+        const summary = reviewSection(hasInspectionCards ? "Сроки и дедлайн" : "Сроки и техника", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
         summary.append(labelledValues([["Ответственный", order.assignee_id ? `ID ${order.assignee_id}` : "Не назначен"], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`]]));
         if (order.sla?.deadline) {
           const deadline = document.createElement("p"); deadline.textContent = `${order.sla.breached ? "Просрочено · " : ""}Дедлайн: ${dateText(order.sla.deadline)} МСК`; summary.append(deadline);
           const progress = document.createElement("progress"); progress.max = 1; progress.value = order.sla.progress; progress.setAttribute("aria-label", "Прошедшая часть срока обработки"); summary.append(progress);
         }
+        let serviceSection = null;
         if (state.profile?.system_admin) {
-          const flag = document.createElement("label"); flag.className = "check-row"; const checkbox = document.createElement("input"); checkbox.type="checkbox"; checkbox.checked = Boolean(order.is_test); const text = document.createElement("span"); text.textContent="Тестовая заявка"; flag.append(checkbox,text); summary.append(flag);
+          serviceSection = reviewSection("Служебный блок", "request-service");
+          const flag = document.createElement("label"); flag.className = "check-row request-test-flag"; const checkbox = document.createElement("input"); checkbox.type="checkbox"; checkbox.checked = Boolean(order.is_test); const text = document.createElement("span"); text.textContent="Тестовая заявка"; flag.append(checkbox,text); serviceSection.append(flag);
           checkbox.addEventListener("change", async () => { checkbox.disabled=true; try { await api(`/api/miniapp/admin/bookings/${order.id}/test-flag`, {method:"PUT",body:JSON.stringify({is_test:checkbox.checked})}); } catch(error) { checkbox.checked=!checkbox.checked; showError(error.message); } finally { checkbox.disabled=false; } });
         }
         const equipment = document.createElement("div"); equipment.className = "request-equipment";
         for (const line of order.lines) {
           if (pendingDeletion?.bookingId === order.id && pendingDeletion.lineId === line.id) continue;
           const row = document.createElement("div"); row.className = "request-equipment-row"; row.dataset.lineId = String(line.id);
-          const label = document.createElement("span"); label.textContent = `${line.title || line.name} × ${line.quantity}`; row.append(label);
-          if (line.title && line.title !== line.name) { const full = document.createElement("small"); full.className = "request-equipment-full"; full.textContent = line.name; row.append(full); }
+          const article = state.items.find((item) => item.id === line.article_id);
+          const mediaItem = {
+            name: line.title || line.name || article?.name || "",
+            category: line.category || article?.category || (/объектив|lens/i.test(line.name || "") ? "optics" : /камера|camera|fx/i.test(line.name || "") ? "camera" : "generic"),
+            image_url: line.image_url || article?.image_url,
+            image_data: line.image_data || article?.image_data,
+          };
+          const thumb = document.createElement("div"); thumb.className = "request-equipment-thumb";
+          thumb.innerHTML = catalogMedia(mediaItem, "request-item");
+          const info = document.createElement("div"); info.className = "request-equipment-info";
+          const label = document.createElement("span"); label.className = "request-equipment-title"; label.textContent = `${line.title || line.name} × ${line.quantity}`; info.append(label);
+          const lineAssets = (order.assets || []).filter((asset) => !(pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id) && (asset.line_id === line.id || (!asset.line_id && asset.article_id === line.article_id)));
+          const assetSummary = lineAssets.map((asset) => `${asset.location ? `${asset.location} · ` : ""}№ ${asset.asset_code || asset.serial}`).join(", ");
+          const fullName = line.title && line.title !== line.name ? line.name : "";
+          const extraDescription = line.description || article?.description || "";
+          const mainBar = document.createElement("div"); mainBar.className = "equipment-card-main";
+          mainBar.append(thumb, info);
           if (order.status === "pending") {
-            const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact";
-            remove.textContent = "Удалить"; remove.setAttribute("aria-label", `Удалить позицию ${line.title || line.name}`);
-            remove.addEventListener("click", () => beginRequestDeletion(order, row, line.id)); row.append(remove);
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact request-equipment-remove";
+            remove.textContent = "×"; remove.title = `Удалить позицию ${line.title || line.name}`; remove.setAttribute("aria-label", `Удалить позицию ${line.title || line.name}`);
+            remove.addEventListener("click", (event) => { event.stopPropagation(); beginRequestDeletion(order, row, line.id); }); mainBar.append(remove);
+          }
+          row.append(mainBar);
+          if (fullName || extraDescription || assetSummary) {
+            row.classList.add("is-expandable");
+            row.tabIndex = 0;
+            row.setAttribute("aria-expanded", "false");
+            const drawer = document.createElement("div"); drawer.className = "equipment-card-drawer";
+            const drawerInner = document.createElement("div"); drawerInner.className = "equipment-card-drawer-inner";
+            if (fullName) { const full = document.createElement("small"); full.className = "request-equipment-full"; full.textContent = fullName; drawerInner.append(full); }
+            if (extraDescription && extraDescription !== fullName) { const desc = document.createElement("small"); desc.className = "request-equipment-desc"; desc.textContent = extraDescription; drawerInner.append(desc); }
+            if (assetSummary) { const meta = document.createElement("small"); meta.className = "inspection-unit-meta"; meta.textContent = assetSummary; drawerInner.append(meta); }
+            drawer.append(drawerInner);
+            row.append(drawer);
+            const toggleRow = (event) => {
+              if (event.target.closest("button")) return;
+              const expanded = row.classList.toggle("is-expanded");
+              row.setAttribute("aria-expanded", String(expanded));
+            };
+            row.addEventListener("click", toggleRow);
+            row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });
           }
           equipment.append(row);
         }
         const emptyEquipment = document.createElement("p"); emptyEquipment.className = "request-equipment-empty"; emptyEquipment.textContent = "В заявке пока нет оборудования.";
         emptyEquipment.hidden = Boolean(equipment.querySelector(".request-equipment-row")); equipment.append(emptyEquipment);
+        equipment.hidden = hasInspectionCards;
         summary.append(equipment);
-        if (order.assets.length) {
-          const assets = document.createElement("ul"); assets.className = "asset-list";
-          for (const asset of order.assets) {
-            if (pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id) continue;
-            const row = document.createElement("li"); const label = document.createElement("span"); label.textContent = `${asset.location || "Без ячейки"} · ${asset.name} · № ${asset.serial}`; row.append(label);
-            if (order.status === "preparing" && !state.role?.pii_only) { const remove = document.createElement("button"); remove.type="button"; remove.className="button ghost danger compact"; remove.textContent="Удалить"; remove.setAttribute("aria-label", `Удалить экземпляр ${asset.name}`); remove.addEventListener("click", () => beginRequestDeletion(order, row, null, asset.id)); row.append(remove); }
-            assets.append(row);
-          }
-          summary.append(assets);
-        }
         const formHost = reviewSection("Анкета клиента", "request-form-host");
         formHost.append(labelledValues([["Имя в заявке", order.customer_name], ["Контакт", order.customer_contact]]));
         const formHint = document.createElement("p"); formHint.textContent = `Анкета: ${identityStatusNames[order.identity_status] || order.identity_status}. ${state.role?.pii_admin ? "Раскройте проверку, чтобы сверить документы и реквизиты." : "Документы и решение по анкете доступны администратору ПД."}`; formHost.append(formHint);
         const actions = document.createElement("div"); actions.className = "action-row";
-        const processing = reviewSection("Действия по заявке", "request-actions");
-        const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status"); processing.append(ownership);
+        const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status");
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
         nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Дождитесь отметки клиента «Получил», затем оформите выдачу.", issued: "Ждём отметку клиента «Сдаю оборудование».", return_inspection: "Проверьте возвращённое оборудование и завершите заявку.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
         if (order.status === "confirmed" && order.identity_status !== "verified") {
@@ -1285,13 +1374,13 @@
             : (order.identity_status === "needs_changes" ? "Ждём исправленную анкету клиента." : "Ждём заполненную анкету клиента.");
         }
 
-        const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview";
+        const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview request-actions";
+        const nextHead = document.createElement("div"); nextHead.className = "request-next-head";
         const nextHeading = document.createElement("h4"); nextHeading.textContent = "Следующий шаг";
-        nextOverview.append(nextHeading, nextStep);
-        const jump = plainButton("К действиям ↓", () => { processing.tabIndex = -1; processing.focus({preventScroll:true}); processing.scrollIntoView({block:"start"}); }, "ghost compact");
-        nextOverview.append(jump);
-        appendHandoverProgress(processing, order, true);
-        body.append(nextOverview, processing, summary, formHost); accordion.append(toggle, body); card.append(accordion);
+        nextHead.append(nextHeading, ownership);
+        nextOverview.append(nextHead, nextStep);
+        appendHandoverProgress(nextOverview, order, true);
+        body.append(nextOverview, summary, formHost); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
         if (reworkTargets[order.status] && (order.status !== "confirmed" || ["manager","admin"].includes(state.role?.staff_role))) {
@@ -1358,24 +1447,49 @@
           updateReturnHint(); actions.append(returnHint, finishReturn);
         }
         appendAdminWorkflow(actions, order);
-        processing.append(actions); updateRequestLease(order, card);
-        card.requestOrder = order;
         if (!state.role?.pii_only && ["pending", "cancelled", "expired"].includes(order.status)) {
           const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact";
-          remove.textContent = "×"; remove.title = "Удалить заявку"; remove.setAttribute("aria-label", `Удалить заявку ${order.human_number || ""}`);
+          remove.textContent = "Удалить заявку"; remove.title = "Удалить заявку"; remove.setAttribute("aria-label", `Удалить заявку ${order.human_number || ""}`);
           remove.addEventListener("click", () => beginRequestDeletion(order, card));
-          processing.append(remove);
+          actions.append(remove);
         }
+        const primaryActions = document.createElement("div"); primaryActions.className = "action-row request-primary-actions";
+        const secondaryGrid = document.createElement("div"); secondaryGrid.className = "request-secondary-grid";
+        const dangerZone = document.createElement("div"); dangerZone.className = "request-danger-zone";
+        for (const node of [...actions.childNodes]) {
+          if (node.nodeType === 1 && node.tagName === "BUTTON") {
+            if (node.hidden) continue;
+            if (node.classList.contains("workflow-next") || node.classList.contains("lock-exempt")) primaryActions.append(node);
+            else if (node.classList.contains("danger")) dangerZone.append(node);
+            else secondaryGrid.append(node);
+          } else {
+            primaryActions.append(node);
+          }
+        }
+        if (primaryActions.childNodes.length) nextOverview.append(primaryActions);
+        if (secondaryGrid.childNodes.length || dangerZone.childNodes.length) {
+          const moreActions = document.createElement("details"); moreActions.className = "request-more-actions"; moreActions.open = true;
+          const moreSummary = document.createElement("summary"); moreSummary.textContent = "Управление заявкой";
+          const moreBody = document.createElement("div"); moreBody.className = "request-more-body";
+          if (secondaryGrid.childNodes.length) moreBody.append(secondaryGrid);
+          if (dangerZone.childNodes.length) moreBody.append(dangerZone);
+          moreActions.append(moreSummary, moreBody);
+          nextOverview.append(moreActions);
+        }
+        updateRequestLease(order, card);
+        card.requestOrder = order;
         const history = document.createElement("details"); history.className="request-section request-history";
         const historyTitle=document.createElement("summary"); historyTitle.textContent="История действий"; history.append(historyTitle);
-        const historyBody = document.createElement("div"); historyBody.className = "request-history-body"; history.append(historyBody); body.append(history);
+        const historyBody = document.createElement("div"); historyBody.className = "request-history-body"; history.append(historyBody);
+        if (serviceSection) body.append(serviceSection);
+        body.append(history);
         const setOpen = (open) => {
           accordion.open = open;
           if (open) { selectedRequestId = order.id; loadRequestHistory(order, card); }
           else { clearRequestReview(card); history.dataset.sequence = String(Number(history.dataset.sequence || 0) + 1); if (selectedRequestId === order.id) selectedRequestId = null; }
         };
         toggle.addEventListener("click", (event) => {
-          event.preventDefault(); const top = toggle.getBoundingClientRect().top; const opening = !accordion.open;
+          event.preventDefault(); content.style.minHeight = ""; const top = toggle.getBoundingClientRect().top; const opening = !accordion.open;
           if (opening) for (const other of content.querySelectorAll(".request-card")) {
             if (other === card) continue;
             other.querySelector(".request-accordion").open = false; clearRequestReview(other);
@@ -1394,7 +1508,13 @@
       }, 1000);
       const selectedCard = content.querySelector(`.request-card[data-booking-id="${selectedRequestId}"]`);
       const selectedToggle = selectedCard?.querySelector(".request-toggle");
-      if (anchoredRequestId === selectedRequestId && previousTop != null && selectedToggle) window.scrollTo(0, window.scrollY + selectedToggle.getBoundingClientRect().top - previousTop);
+      if (anchoredRequestId === selectedRequestId && previousTop != null && selectedToggle) {
+        const targetScrollY = window.scrollY + selectedToggle.getBoundingClientRect().top - previousTop;
+        content.style.minHeight = "";
+        const shortfall = previousScrollY + window.innerHeight - document.documentElement.scrollHeight;
+        if (shortfall > 0) content.style.minHeight = `${content.offsetHeight + shortfall}px`;
+        window.scrollTo(0, targetScrollY);
+      } else { content.style.minHeight = ""; }
       if (anchoredRequestId === selectedRequestId && focused && selectedCard) ([...selectedCard.querySelectorAll("button, summary")].find((node) => node.textContent === focused) || selectedToggle)?.focus({ preventScroll: true });
     } catch (error) {
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
@@ -1409,6 +1529,7 @@
   function appendInspectionGroup(actions, order, stage, onInspectionChange = () => {}) {
     if (!order.assets?.length) return;
     const group = document.createElement("section"); group.className = "inspection-group";
+    const head = document.createElement("div"); head.className = "inspection-group-head";
     const title = document.createElement("h4"); title.className = "inspection-group-title";
     title.textContent = stage === "pre_issue" ? "Проверка перед выдачей" : "Проверка при возврате";
     const progress = document.createElement("p"); progress.className = "inspection-progress";
@@ -1417,29 +1538,76 @@
       const checked = order.assets.length - pending().length;
       progress.textContent = `Проверено ${checked} из ${order.assets.length}`;
     };
-    group.append(title, progress);
+    head.append(title, progress);
+    group.append(head);
     updateProgress();
     for (const asset of order.assets) {
+      if (pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id) continue;
       const saved = inspectionFor(order, asset, stage);
-      const row = document.createElement("div"); row.className = "inspection-row"; row.dataset.equipmentId = String(asset.id);
+      const row = document.createElement("div"); row.className = "inspection-row is-expandable"; row.dataset.equipmentId = String(asset.id);
+      row.tabIndex = 0; row.setAttribute("aria-expanded", "false");
+      const article = state.items.find((item) => item.id === asset.article_id);
+      const mediaItem = {
+        name: asset.name || article?.name || "",
+        category: asset.category || article?.category || (/объектив|lens/i.test(asset.name || "") ? "optics" : /камера|camera|fx/i.test(asset.name || "") ? "camera" : "generic"),
+        image_url: asset.image_url || article?.image_url,
+        image_data: asset.image_data || article?.image_data,
+      };
+      const thumb = document.createElement("div"); thumb.className = "request-equipment-thumb inspection-unit-thumb";
+      thumb.innerHTML = catalogMedia(mediaItem, "request-item");
       const details = document.createElement("div"); details.className = "inspection-unit";
+      const topLine = document.createElement("div"); topLine.className = "inspection-unit-head";
       const name = document.createElement("strong"); name.className = "inspection-unit-name";
       const assetIdentifier = asset.asset_code || asset.inventory_code || asset.serial;
-      name.textContent = assetIdentifier ? `${asset.name} · № ${assetIdentifier}` : `${asset.name} · без номера`;
+      const shortTitle = asset.title || article?.title || asset.name;
+      name.textContent = assetIdentifier ? `${shortTitle} · № ${assetIdentifier}` : `${shortTitle} · без номера`;
       const status = document.createElement("span"); status.className = `inspection-state${saved ? " checked" : ""}`;
       status.textContent = saved ? (saved.result === "pass" ? "Исправно" : "Зафиксирована неисправность") : "Ожидает проверки";
-      details.append(name, status);
-      if (asset.components?.length) {
-        const list=document.createElement("ul");
-        for (const component of asset.components) { const item=document.createElement("li"); item.textContent=(component.replacement_name || component.name)+(component.state==="missing"||component.state==="faulty"?" · не выдано":component.state==="replacement"?" · замена":""); list.append(item); }
-        details.append(list);
-      }
-      row.append(details);
-      const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact";
+      topLine.append(name, status);
+      details.append(topLine);
+      const rowActions = document.createElement("div"); rowActions.className = "inspection-row-actions";
+      const defect = document.createElement("button"); defect.type = "button"; defect.className = "button ghost compact inspection-defect-button";
       if (stage === "check_in") defect.classList.add("handover-action");
-      defect.textContent = saved?.result === "fail" ? "Изменить" : "Неисправность";
-      defect.addEventListener("click", () => openInspection(order, asset, stage, saved));
-      row.append(defect);
+      const defectLabel = saved?.result === "fail" ? `Изменить неисправность: ${asset.name}` : `Отметить неисправность: ${asset.name}`;
+      defect.title = saved?.result === "fail" ? "Изменить неисправность" : "Неисправность";
+      defect.setAttribute("aria-label", defectLabel);
+      defect.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-wrench"></use></svg>';
+      defect.addEventListener("click", (event) => { event.stopPropagation(); openInspection(order, asset, stage, saved, row); });
+      rowActions.append(defect);
+      if (order.status === "preparing" && !state.role?.pii_only) {
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact request-equipment-remove";
+        remove.textContent = "×"; remove.title = `Удалить экземпляр ${asset.name}`; remove.setAttribute("aria-label", `Удалить экземпляр ${asset.name}`);
+        remove.addEventListener("click", (event) => { event.stopPropagation(); beginRequestDeletion(order, row, null, asset.id); });
+        rowActions.append(remove);
+      }
+      const mainBar = document.createElement("div"); mainBar.className = "equipment-card-main";
+      mainBar.append(thumb, details, rowActions);
+      row.append(mainBar);
+      const drawer = document.createElement("div"); drawer.className = "equipment-card-drawer";
+      const drawerInner = document.createElement("div"); drawerInner.className = "equipment-card-drawer-inner";
+      if (asset.name && asset.name !== shortTitle) {
+        const full = document.createElement("small"); full.className = "request-equipment-full"; full.textContent = asset.name;
+        drawerInner.append(full);
+      }
+      if (asset.location || asset.serial) {
+        const meta = document.createElement("small"); meta.className = "inspection-unit-meta";
+        meta.textContent = [asset.location || "Без ячейки", asset.serial ? `S/N ${asset.serial}` : ""].filter(Boolean).join(" · ");
+        drawerInner.append(meta);
+      }
+      if (asset.components?.length) {
+        const list=document.createElement("ul"); list.className = "inspection-components";
+        for (const component of asset.components) { const item=document.createElement("li"); item.textContent=(component.replacement_name || component.name)+(component.state==="missing"||component.state==="faulty"?" · не выдано":component.state==="replacement"?" · замена":""); list.append(item); }
+        drawerInner.append(list);
+      }
+      drawer.append(drawerInner);
+      row.append(drawer);
+      const toggleRow = (event) => {
+        if (event.target.closest("button, .inspection-editor, input, textarea, select, label")) return;
+        const expanded = row.classList.toggle("is-expanded");
+        row.setAttribute("aria-expanded", String(expanded));
+      };
+      row.addEventListener("click", toggleRow);
+      row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });
       group.append(row);
     }
     const markAll = document.createElement("button"); markAll.type = "button"; markAll.className = "button secondary inspection-all-pass";
@@ -1625,13 +1793,13 @@
   }
 
   async function downloadCatalogTemplate() {
-    const path = "/miniapp/static/equipment-import-template.csv";
+    const path = "./equipment-import-template.csv";
     const filename = "equipment-import-template.csv";
     const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
     const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
     if (supportsNativeDownload) {
       try {
-        tg.downloadFile({ url: new URL(path, location.origin).href, file_name: filename });
+        tg.downloadFile({ url: new URL(path, location.href).href, file_name: filename });
         return;
       } catch (_) { /* Fall back to a browser download below. */ }
     }
@@ -2437,14 +2605,44 @@
     });
   }
 
-  function openInspection(order, asset, stage, saved = null) {
+  function openInspection(order, asset, stage, saved = null, hostRow = null) {
     const content = $("admin-content");
+    const targetRow = hostRow || content.querySelector(`.request-card[data-booking-id="${order.id}"] .inspection-row[data-equipment-id="${asset.id}"]`);
+    const existing = targetRow?.querySelector(".inspection-editor");
+    if (existing) {
+      const existingForm = existing.querySelector("form");
+      if (!staffFormDirty(existingForm) || window.confirm("Отменить несохранённые изменения?")) {
+        existing.remove();
+        targetRow.classList.remove("has-inspection-editor");
+      }
+      return;
+    }
+    for (const openEditor of content.querySelectorAll(".inspection-editor")) {
+      const openForm = openEditor.querySelector("form");
+      if (staffFormDirty(openForm) && !window.confirm("Отменить несохранённые изменения?")) return;
+      openEditor.closest(".inspection-row")?.classList.remove("has-inspection-editor");
+      openEditor.remove();
+    }
     const card = document.createElement("article"); card.className = "admin-card inspection-editor";
     card.innerHTML = `<div class="order-head"><div><h3>${stage === "pre_issue" ? "Неисправность перед выдачей" : "Неисправность при возврате"}</h3><p>${escapeHtml(asset.name)} · серийный № ${escapeHtml(asset.serial)}</p></div><button type="button" class="button ghost compact inspection-close">Закрыть</button></div><form class="inspection-form"><div class="form-grid"><label class="field wide"><span>Что произошло</span><textarea name="defect" maxlength="4000" required placeholder="Опишите неисправность"></textarea></label><label class="field wide"><span>Комментарий</span><textarea name="notes" maxlength="2000" placeholder="Дополнительная информация"></textarea></label>${stage === "check_in" ? '<label class="field wide"><span>Фото повреждения (необязательно)</span><input name="damage_photo" type="file" accept="image/*" capture="environment"><small>Фото можно сделать камерой телефона. Новое фото заменит предыдущее.</small></label>' : ""}<label class="field"><span>Оценка ущерба, ₽</span><input name="estimated_cost" type="number" min="0" step="0.01" value="0"></label><label class="check-row"><input name="charge_customer" type="checkbox"><span>Ущерб клиента</span></label></div><div class="action-row"><button class="button primary" type="submit">Сохранить неисправность</button></div></form>`;
     card.querySelector('[name="defect"]').value = saved?.defect || ""; card.querySelector('[name="notes"]').value = saved?.notes || ""; card.querySelector('[name="estimated_cost"]').value = saved?.estimated_cost || "0"; card.querySelector('[name="charge_customer"]').checked = Boolean(saved?.charge_customer);
-    content.prepend(card); card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.addEventListener("click", (event) => event.stopPropagation());
+    card.addEventListener("keydown", (event) => event.stopPropagation());
+    if (targetRow) {
+      targetRow.classList.add("has-inspection-editor");
+      targetRow.append(card);
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } else {
+      content.prepend(card); card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     registerStaffForm(card.querySelector("form"));
-    card.querySelector(".inspection-close").addEventListener("click", () => { const form = card.querySelector("form"); if (!staffFormDirty(form) || window.confirm("Отменить несохранённые изменения?")) card.remove(); });
+    card.querySelector(".inspection-close").addEventListener("click", () => {
+      const form = card.querySelector("form");
+      if (!staffFormDirty(form) || window.confirm("Отменить несохранённые изменения?")) {
+        targetRow?.classList.remove("has-inspection-editor");
+        card.remove();
+      }
+    });
     card.querySelector("form").addEventListener("submit", async (event) => {
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
       if (!String(data.get("defect") || "").trim()) return showError("Опишите неисправность.");
@@ -2754,6 +2952,7 @@
     void maybeShowOnboarding();
   }
   $("tab-new").addEventListener("click", enterClientMode);
+  $("floating-cart-button")?.addEventListener("click", openCartView);
   $("onboarding-reopen").addEventListener("click", openOnboarding);
   $("reminders-enabled").addEventListener("change", async (event) => {
     const checkbox = event.target, previous = state.profile.reminders_enabled;
@@ -2845,6 +3044,21 @@
     input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
+  const adminTabsBar = document.querySelector(".admin-tabs");
+  if (adminTabsBar) {
+    adminTabsBar.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch") return;
+      for (const button of adminTabsBar.querySelectorAll(".admin-mode:not([hidden])")) {
+        const rect = button.getBoundingClientRect();
+        const distance = Math.abs(event.clientX - (rect.left + rect.width / 2));
+        const proximity = Math.max(0, 1 - distance / 120);
+        button.style.setProperty("--tab-scale", (1 + proximity * 0.11).toFixed(3));
+      }
+    });
+    adminTabsBar.addEventListener("pointerleave", () => {
+      for (const button of adminTabsBar.querySelectorAll(".admin-mode")) button.style.removeProperty("--tab-scale");
+    });
+  }
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-status").addEventListener("change", (event) => { state.adminStatus = event.target.value; state.adminQueue = "all"; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-sort").addEventListener("change", (event) => { state.adminSort = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });

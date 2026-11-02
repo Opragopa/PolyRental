@@ -8,12 +8,12 @@
   <meta name="description" content="Бронирование фото- и видеотехники ПолиРентал: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>ПолиРентал — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
-  <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__-calendar1">
+  <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__-make1">
   <script src="/miniapp/static/theme.js?v=__APP_VERSION__"></script>
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
-  <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__-calendar1"></script>
-  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__"></script>
+  <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__-make1"></script>
+  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__-make1"></script>
 </head>
 <body class="dates-view">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -31,6 +31,9 @@
     <symbol id="icon-battery" viewBox="0 0 24 24"><rect x="3" y="7" width="17" height="10" rx="1.5"/><path d="M21 10v4M12 9l-2 4h3l-2 3"/></symbol>
     <symbol id="icon-accessory" viewBox="0 0 24 24"><path d="M7 5h10v14H7Z"/><path d="M10 5V3h4v2m-4 14v2h4v-2"/><circle cx="12" cy="12" r="2"/></symbol>
     <symbol id="icon-equipment" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8M12 8v8"/></symbol>
+    <symbol id="icon-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8L4 17l3 3 4.9-4.9a4.5 4.5 0 0 0 5.8-5.8l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6Z"/></symbol>
+    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+    <symbol id="icon-cart" viewBox="0 0 24 24"><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/><path d="M3.5 5h2.2l1.9 9.5h10.2l1.8-7H6.5"/></symbol>
   </svg>
   <div class="shell">
     <header class="topbar">
@@ -72,9 +75,9 @@
           <div class="catalog-period"><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты <span aria-hidden="true">›</span></button></div>
           <div id="items-status" class="notice" role="status" hidden></div>
           <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button><div id="nearest-period" class="nearest-period" hidden><button id="nearest-search" class="button secondary" type="button">Найти ближайшие сроки для подборки</button><p id="nearest-status" role="status"></p><button id="nearest-apply" class="button primary" type="button" hidden>Выбрать эти сроки</button></div>
-          <label class="field"><span>Поиск в каталоге</span><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"></label><div class="catalog-layout" role="group" aria-label="Вид каталога"><button type="button" class="button ghost" id="catalog-list" aria-pressed="true">Список</button><button type="button" class="button ghost" id="catalog-grid" aria-pressed="false">Плитка</button></div><div id="items-grid" class="items-grid" aria-label="Оборудование"></div><div id="client-catalog-pagination" class="action-row" hidden><button id="client-catalog-prev" class="button secondary" type="button">Назад</button><span id="client-catalog-page"></span><button id="client-catalog-next" class="button secondary" type="button">Далее</button></div>
-          <details id="unavailable-details" class="unavailable-details" hidden><summary>Занятые интервалы и недоступные экземпляры</summary><div id="unavailable-list"></div></details>
+          <label class="field"><span>Поиск в каталоге</span><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"></label><div class="catalog-layout" role="group" aria-label="Вид каталога"><button type="button" class="button ghost catalog-layout-icon" id="catalog-list" aria-pressed="true" aria-label="Список" title="Список"><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg></button><button type="button" class="button ghost catalog-layout-icon" id="catalog-grid" aria-pressed="false" aria-label="Плитка" title="Плитка"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button></div><div id="items-grid" class="items-grid" aria-label="Оборудование"></div><div id="client-catalog-pagination" class="action-row" hidden><button id="client-catalog-prev" class="button secondary" type="button">Назад</button><span id="client-catalog-page"></span><button id="client-catalog-next" class="button secondary" type="button">Далее</button></div>
           <div class="selection-bar"><span>Выбрано <strong id="selected-count">0</strong></span></div>
+          <details id="unavailable-details" class="unavailable-details" hidden><summary>Занятые интервалы и недоступные экземпляры</summary><div id="unavailable-list"></div></details>
         </div>
 
         <div id="step-contact" class="panel step-panel" hidden>
@@ -222,6 +225,10 @@
     </main>
 
     <div id="delete-snackbar" class="delete-snackbar" role="status" aria-live="polite" hidden><span id="delete-message"></span><button id="delete-undo" class="button secondary" type="button">Отменить</button><button id="delete-retry" class="button secondary" type="button" hidden>Повторить</button></div>
+    <button id="floating-cart-button" type="button" class="floating-cart-button" aria-label="Открыть корзину" title="Корзина" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#icon-cart"></use></svg>
+      <span id="floating-cart-count" class="floating-cart-count">0</span>
+    </button>
     <footer id="action-bar" class="action-bar"><button id="back-button" class="button ghost" type="button" hidden>Назад</button><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
   </div>
 </body>
