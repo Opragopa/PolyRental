@@ -23,7 +23,7 @@ def test_support_question_is_not_broadcast_to_admins(monkeypatch):
     saved = []
     monkeypatch.setattr(bot_module, "submit_question", lambda *args: (saved.append(args) or {"id": 1, "owner_id": None}))
     message = SimpleNamespace(text="<b>важно</b> & вопрос", from_user=SimpleNamespace(
-        id=42, full_name="Анна <script>"), answer=AsyncMock())
+        id=42, full_name="Анна <script>"), chat=SimpleNamespace(type="private"), answer=AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock())
     state = SimpleNamespace(clear=AsyncMock())
     asyncio.run(support_message(message, state, bot))
@@ -38,7 +38,7 @@ def test_manager_reply_uses_protected_support_queue(monkeypatch):
     saved = []
     monkeypatch.setattr(bot_module, "support_reply", lambda *args: (saved.append(args) or 5))
     monkeypatch.setattr(bot_module, "deliver_reply", AsyncMock(return_value=True))
-    message = SimpleNamespace(text="/reply 42 <u>текст</u> & ещё", from_user=SimpleNamespace(id=100),
+    message = SimpleNamespace(text="/reply 42 <u>текст</u> & ещё", from_user=SimpleNamespace(id=100), chat=SimpleNamespace(type="private"),
                               answer=AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock())
     asyncio.run(reply_to_customer(message, bot))

@@ -53,7 +53,7 @@ def _ensure_assignee(session, booking, actor_id):
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=f"assignee:{actor_id}"))
 
 
-def reassign_booking(booking_id, actor_id, assignee_id):
+def reassign_booking(booking_id, actor_id, assignee_id, expected_assignee=None, check_current=False):
     from .inventory import require_role
     require_role(actor_id, "manager")
     if staff_subrole(assignee_id) is None:
@@ -64,6 +64,8 @@ def reassign_booking(booking_id, actor_id, assignee_id):
             raise ValueError("Заявка не найдена")
         if booking.status not in ACTIVE_STATUSES:
             raise Conflict("Заявка уже закрыта")
+        if check_current and booking.assignee_id != expected_assignee:
+            raise Conflict("Ответственный изменился. Откройте заявку заново")
         if booking.assignee_id == assignee_id:
             return
         booking.assignee_id = assignee_id
@@ -523,6 +525,8 @@ def cancel_deletion_intent(booking_id, actor_id, intent_id):
             raise ValueError("Действие не найдено")
         if intent.status == "committed":
             raise Conflict("Удаление уже сохранено; требуется восстановление администратором")
+        if intent.status == "failed":
+            raise Conflict("Удаление не выполнено; обновите заявку")
         if intent.status == "pending":
             intent.status = "cancelled"
             session.add(Audit(booking_id=booking_id, actor_id=actor_id,
@@ -630,19 +634,21 @@ def restore_booking(booking_id, actor_id):
         session.add(Audit(booking_id=booking_id, actor_id=actor_id, action="request_restored"))
 
 
-def set_booking_test_flag(booking_id, actor_id, value):
+def set_booking_test_flag(booking_id, actor_id, value, expected_before=None):
     from .inventory import require_role
     require_role(actor_id, "admin")
     with Session.begin() as session:
         booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
         if booking is None:
             raise ValueError("Заявка не найдена")
+        if expected_before is not None and booking.is_test != expected_before:
+            raise Conflict("Тестовая отметка изменилась. Обновите заявку")
         if booking.is_test != value:
             booking.is_test = value
             session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="test_flag_on" if value else "test_flag_off"))
 
 
-def set_article_test_flag(article_id, actor_id, value):
+def set_article_test_flag(article_id, actor_id, value, expected_before=None):
     from .inventory import require_role
     require_role(actor_id, "admin")
     with Session.begin() as session:
@@ -650,6 +656,8 @@ def set_article_test_flag(article_id, actor_id, value):
         if article is None:
             raise ValueError("Артикул не найден")
         before = article.is_test
+        if expected_before is not None and before != expected_before:
+            raise Conflict("Тестовая отметка изменилась. Обновите модель")
         if before != value:
             article.is_test = value
             session.add(ArticleTitleAudit(article_id=article.id, actor_id=actor_id,
@@ -776,7 +784,7 @@ def expire_deletion_intents():
                 set_booking_asset_deleted(booking_id, target_id, actor_id, True, intent_id)
             else:
                 raise Conflict("Неизвестный тип удаления")
-        except (Conflict, ValueError):
+        except (Conflict, ValueError, PermissionError):
             with Session.begin() as session:
                 intent = session.get(DeletionIntent, intent_id, with_for_update=True)
                 if intent and intent.status == "pending":
@@ -998,7 +1006,7 @@ def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="",
 
 
 def record_inspection(booking_id, equipment_id, stage, result, checklist, notes, actor_id,
-                      defect="", estimated_cost=0, charge_customer=False, actor_name=""):
+                      defect="", estimated_cost=0, charge_customer=False, actor_name="", expected_components_signature=None):
     from .inventory import require_role
     require_role(actor_id)
     if stage not in {"pre_issue", "check_in"} or result not in {"pass", "fail"}:
@@ -1014,6 +1022,8 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
             raise ValueError("Экземпляр не назначен заказу")
         from .handover import asset_components,composition_signature
         components=asset_components(session,booking_id,equipment_id)
+        if expected_components_signature is not None and composition_signature(components) != expected_components_signature:
+            raise Conflict("Комплектация изменилась. Откройте проверку заново")
         if result=="pass" and any(not (checklist or {}).get(f"component:{index}") for index,item in enumerate(components) if item["state"] not in {"missing","faulty"}):
             raise Conflict("Проверьте каждый выданный элемент комплектации")
         asset = session.get(Equipment, equipment_id)
@@ -1303,7 +1313,7 @@ def delete_dependency(parent_article_id, child_article_id):
 
 def save_article(sku, name, description, rate, category="generic", profile="generic",
                  buffer_hours=24, image_url="", article_id=None, active=True, composition="",
-                 kind=None, brand=None, key_spec=None, actor_id=None):
+                 kind=None, brand=None, key_spec=None, actor_id=None, expected_before=None):
     rate = validated_rate(rate)
     if not sku.strip() or not name.strip():
         raise ValueError("Укажите артикул и название модели")
@@ -1314,9 +1324,13 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
     if image_url and (urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):
         raise ValueError("Ссылка на фото должна начинаться с HTTPS")
     with Session.begin() as session:
-        article = session.get(Article, article_id) if article_id else Article()
+        article = session.get(Article, article_id, with_for_update=True) if article_id else Article()
         if article is None:
             raise ValueError("Артикул не найден")
+        if expected_before is not None:
+            actual = {key: getattr(article, key) for key in expected_before}
+            if actual != expected_before:
+                raise Conflict("Карточка модели изменилась. Откройте её заново")
         before = {key: getattr(article, key, "") or "" for key in ("category", "kind", "brand", "key_spec", "name")}
         if not article_id:
             article.is_test = sku.strip().upper().startswith("TEST-")
@@ -1345,7 +1359,7 @@ def _optional_identifier(value):
 
 def save_equipment(number, name, description, rate, condition, equipment_id=None, image_url=None,
                    article_id=None, storage_location="", health_percent=None, charge_percent=None,
-                   serial_number=None, asset_inventory_code=None):
+                   serial_number=None, asset_inventory_code=None, expected_before=None):
     rate = validated_rate(rate)
     if condition not in {"available", "maintenance", "retired"} or Decimal(str(rate)) < 0:
         raise ValueError("Неверное состояние или ставка")
@@ -1378,6 +1392,8 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
             session.refresh(item,with_for_update=True)
             if item.article_id not in locked_articles:
                 raise Conflict("Карточка экземпляра изменилась; повторите действие")
+            if expected_before is not None and {key: getattr(item, key) for key in expected_before} != expected_before:
+                raise Conflict("Карточка экземпляра изменилась; откройте её заново")
         if equipment_id and (condition != "available" or item.article_id != article.id):
             active = session.scalar(select(func.count()).select_from(BookingAsset).join(
                 Booking, Booking.id == BookingAsset.booking_id).where(

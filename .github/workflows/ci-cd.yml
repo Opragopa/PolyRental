@@ -89,6 +89,18 @@ jobs:
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/equipment-picker-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/site-auth-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/support-deeplink-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
 
   documents:
     name: Local document robustness

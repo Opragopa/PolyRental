@@ -2,7 +2,9 @@ import asyncio
 import html
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
+import secrets
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -27,6 +29,7 @@ from .support import submit_question, reply as support_reply, deliver_reply, Sup
 from .catalog_titles import catalog_title
 
 router = Router()
+fallback_router = Router(name='booking_fallback')
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 
@@ -63,8 +66,21 @@ class Support(StatesGroup):
 
 
 def parse_time(value):
-    naive = datetime.strptime(value.strip(), "%d.%m.%Y %H:%M")
-    return naive.replace(tzinfo=MOSCOW)
+    value = value.strip().lower().replace('ё', 'е')
+    current = datetime.now(MOSCOW)
+    match = re.fullmatch(r'(сегодня|завтра)\s+(\d{1,2})(?::(\d{2}))?', value)
+    if match:
+        day = current.date() + timedelta(days=match.group(1) == 'завтра')
+        return datetime(day.year, day.month, day.day, int(match.group(2)), int(match.group(3) or 0), tzinfo=MOSCOW)
+    match = re.fullmatch(r'(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?\s+(\d{1,2})(?::(\d{2}))?', value)
+    if not match:
+        raise ValueError('Напишите дату и время, например: 15.11 14:30 или завтра 10:00.')
+    day, month, year, hour, minute = match.groups()
+    year = int(year) if year else current.year
+    result = datetime(year, int(month), int(day), int(hour), int(minute or 0), tzinfo=MOSCOW)
+    if not match.group(3) and result.date() < current.date():
+        result = result.replace(year=year + 1)
+    return result
 
 
 def booking_created_text(booking):
@@ -96,7 +112,7 @@ def main_keyboard():
     # Reply-keyboard WebApps may lack signed initData. Launch through the
     # message handler's inline WebApp so every role is authenticated by API.
     book_button = KeyboardButton(text="Забронировать")
-    return ReplyKeyboardMarkup(keyboard=[[book_button], [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Связаться с менеджером")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[book_button], [KeyboardButton(text="Бронирование в чате")], [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Связаться с менеджером")]], resize_keyboard=True)
 
 
 def flow_keyboard(contact=False):
@@ -107,8 +123,17 @@ def flow_keyboard(contact=False):
 
 
 def equipment_keyboard(items, selected):
-    buttons = [[InlineKeyboardButton(text=f'{"✓ " if item["id"] in selected else ""}{item.get("title") or item["name"]}', callback_data=f'rent:toggle:{item["id"]}')] for item in items]
+    quantities = selected if isinstance(selected, dict) else {item_id: 1 for item_id in selected}
+    buttons = []
+    for item in items:
+        item_id = item["id"]
+        count = quantities.get(str(item_id), quantities.get(item_id, 0))
+        buttons.append([InlineKeyboardButton(text=f'{item.get("title") or item["name"]} · {count} / {item["available_quantity"]}', callback_data=f'rent:info:{item_id}'),
+                        InlineKeyboardButton(text="−", callback_data=f'rent:minus:{item_id}'),
+                        InlineKeyboardButton(text="+", callback_data=f'rent:plus:{item_id}')])
     buttons.append([InlineKeyboardButton(text="Продолжить →", callback_data="rent:next")])
+    buttons.append([InlineKeyboardButton(text="Показать мой выбор", callback_data="rent:selected")])
+    buttons.append([InlineKeyboardButton(text="Изменить сроки", callback_data="rent:dates")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -128,9 +153,10 @@ async def show_equipment(message, state):
     if not available:
         await message.answer("На этот срок свободного оборудования нет. Нажмите «Назад» и измените даты.", reply_markup=flow_keyboard())
         return
-    selected = set(data.get("ids", [])) & {item["id"] for item in available}
-    await state.update_data(ids=sorted(selected))
-    await message.answer("Выберите модели оборудования кнопками. В этом резервном сценарии одна кнопка добавляет одну единицу; количество удобнее менять в Mini App.", reply_markup=flow_keyboard())
+    selected = {str(item["id"]): min(int(data.get("quantities", {}).get(str(item["id"]), 1 if item["id"] in data.get("ids", []) else 0)), item["available_quantity"], 30) for item in available}
+    selected = {key: value for key, value in selected.items() if value > 0}
+    await state.update_data(ids=sorted(map(int, selected)), quantities=selected, equipment_query='')
+    await message.answer("Выберите оборудование кнопками + и −. Для поиска отправьте название или модель.", reply_markup=flow_keyboard())
     await message.answer("Доступно на выбранный срок:", reply_markup=equipment_keyboard(available, selected))
 
 
@@ -143,12 +169,13 @@ async def show_review(message, state):
         await state.set_state(Rent.start)
         return await message.answer("Время начала уже прошло. Выберите новый срок выдачи.", reply_markup=flow_keyboard())
     chosen = [item for item in items if item["id"] in data["ids"]]
-    if len(chosen) != len(data["ids"]) or any(not item["available"] for item in chosen):
+    if len(chosen) != len(data["ids"]) or any(not item["available"] or data.get("quantities", {}).get(str(item["id"]), 1) > item["available_quantity"] for item in chosen):
         await state.set_state(Rent.equipment)
         await message.answer("Выбранное оборудование уже занято. Выберите другое или измените сроки.", reply_markup=flow_keyboard())
         return await show_equipment(message, state)
     await state.update_data(expected_total=None, editing=None)
-    items_text = "\n".join(f"• {html.escape(item.get('title') or item['name'])}" for item in chosen)
+    quantities = data.get("quantities", {})
+    items_text = "\n".join(f"• {html.escape(item.get('title') or item['name'])} × {quantities.get(str(item['id']), 1)}" for item in chosen)
     text = (f"<b>Проверьте заявку</b>\n\n<u>Период</u>: {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
             f"<u>Оборудование</u>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> <tg-spoiler>{html.escape(data['contact'])}</tg-spoiler>\n\n"
             "<i>После отправки заявка будет ждать решения оператора без ограничения по времени.</i>")
@@ -164,7 +191,7 @@ async def show_review(message, state):
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    text = "<b>Политех.АРЕНДА</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
+    text = "<b>ПолиРентал</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
     if not miniapp_url():
         text += " Приложение бронирования временно недоступно."
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
@@ -209,12 +236,13 @@ async def begin_chat_booking(message, state):
     await state.clear()
     await state.update_data(request_id=str(uuid4()))
     await state.set_state(Rent.start)
-    await message.answer("Когда получите оборудование? Введите дату и время по Москве: ДД.ММ.ГГГГ ЧЧ:ММ", reply_markup=flow_keyboard())
+    await message.answer("Когда получите оборудование? Напишите дату и время по Москве, например: 15.11 14:30 или завтра 10:00.", reply_markup=flow_keyboard())
 
 
 @router.message(Command("book_chat"))
+@router.message(F.text == "Бронирование в чате")
 async def book_chat(message: Message, state: FSMContext):
-    await book(message, state)
+    await begin_chat_booking(message, state)
 
 
 @router.callback_query(F.data == "rent:chat")
@@ -231,8 +259,16 @@ async def book_chat_button(query: CallbackQuery, state: FSMContext):
 @router.message(F.text == "Отмена")
 @router.message(Command("cancel_booking"))
 async def cancel_flow(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Оформление отменено. Можно начать заново в любое время.", reply_markup=main_keyboard())
+    if (await state.get_state()) not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.review.state}:
+        return await message.answer('Нет незавершённого бронирования.', reply_markup=main_keyboard())
+    await ask_cancel(message, state)
+
+
+async def ask_cancel(message, state):
+    nonce = secrets.token_hex(4)
+    await state.update_data(cancel_nonce=nonce)
+    await message.answer('Точно хотите отменить оформление?', reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='Да, отменить', callback_data=f'rent:cancel:yes:{nonce}'), InlineKeyboardButton(text='Нет, продолжить', callback_data=f'rent:cancel:no:{nonce}')]]))
 
 
 @router.message(F.text == "Назад")
@@ -257,10 +293,10 @@ async def rental_start(message: Message, state: FSMContext):
     try:
         start_at = parse_time(message.text or "")
     except ValueError:
-        return await message.answer("Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ")
+        return await message.answer("Напишите дату и время, например: 15.11 14:30 или завтра 10:00.")
     await state.update_data(start=start_at.isoformat())
     await state.set_state(Rent.end)
-    await message.answer("Когда вернёте оборудование? Введите дату и время по Москве: ДД.ММ.ГГГГ ЧЧ:ММ", reply_markup=flow_keyboard())
+    await message.answer("Когда вернёте оборудование? Например: 16.11 17:00 или завтра 17:00. Время московское.", reply_markup=flow_keyboard())
 
 
 @router.message(Rent.end)
@@ -272,6 +308,10 @@ async def rental_end(message: Message, state: FSMContext):
     except ValueError as exc:
         return await message.answer(str(exc))
     await state.update_data(end=end_at.isoformat())
+    data = await state.get_data()
+    if data.get('editing') == 'start' and data.get('name') and data.get('contact'):
+        await state.set_state(Rent.review)
+        return await show_review(message, state)
     await state.set_state(Rent.equipment)
     await show_equipment(message, state)
 
@@ -285,13 +325,85 @@ async def rental_equipment(message: Message, state: FSMContext):
         if not ids or not set(ids).issubset({item["id"] for item in items if item["available"]}):
             raise ValueError()
     except ValueError:
-        return await message.answer("Выберите оборудование кнопками под списком или укажите ID свободных экземпляров через запятую.")
-    await state.update_data(ids=ids)
+        query = (message.text or "").strip().casefold()
+        if not query:
+            return await message.answer("Введите название или модель для поиска.")
+        data = await state.get_data()
+        try:
+            items = await asyncio.to_thread(availability, datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]))
+        except ValueError:
+            return await message.answer("Проверьте сроки заявки.")
+        found = [item for item in items if item["available"] and query in " ".join(str(item.get(k) or "") for k in ("name", "title", "sku", "brand", "description")).casefold()]
+        await state.update_data(equipment_query=query)
+        if not found:
+            return await message.answer("Ничего не найдено. Введите другое название или нажмите «Назад».")
+        return await message.answer("Результаты поиска:", reply_markup=equipment_keyboard(found, data.get("quantities", {})))
+    await state.update_data(ids=ids, quantities={str(item_id): 1 for item_id in ids})
     if data.get("editing") in {"start", "equipment"} and data.get("name") and data.get("contact"):
         await state.set_state(Rent.review)
         return await show_review(message, state)
     await state.set_state(Rent.name)
     await message.answer("Как к вам обращаться? Введите имя для документов:", reply_markup=flow_keyboard())
+
+
+@router.callback_query(F.data.startswith("rent:info:"))
+async def equipment_info(query: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if await state.get_state() != Rent.equipment.state:
+        return await query.answer('Откройте выбор оборудования заново.', show_alert=True)
+    items = await asyncio.to_thread(availability, datetime.fromisoformat(data['start']), datetime.fromisoformat(data['end']))
+    item = next((item for item in items if str(item['id']) == query.data.rsplit(':', 1)[-1]), None)
+    if not item: return await query.answer('Позиция больше недоступна.', show_alert=True)
+    await query.answer()
+    await query.message.answer(f"{item.get('title') or item['name']}\nВыбрано: {data.get('quantities', {}).get(str(item['id']), 0)} шт.\nДоступно: {item['available_quantity']} шт.")
+
+
+@router.callback_query(F.data == 'rent:selected')
+async def show_selection(query: CallbackQuery, state: FSMContext):
+    if await state.get_state() != Rent.equipment.state:
+        return await query.answer('Откройте выбор оборудования заново.', show_alert=True)
+    data = await state.get_data()
+    items = await asyncio.to_thread(availability, datetime.fromisoformat(data['start']), datetime.fromisoformat(data['end']))
+    lines = [f"• {item.get('title') or item['name']} × {data['quantities'][str(item['id'])]}" for item in items if str(item['id']) in data.get('quantities', {})]
+    await query.answer()
+    await query.message.answer('Ваш выбор:\n' + ('\n'.join(lines) if lines else 'Пока ничего не выбрано.'))
+
+
+@router.callback_query(F.data == 'rent:dates')
+async def change_dates(query: CallbackQuery, state: FSMContext):
+    if await state.get_state() != Rent.equipment.state:
+        return await query.answer('Откройте оформление заново.', show_alert=True)
+    await state.update_data(editing='start')
+    await state.set_state(Rent.start)
+    await query.answer()
+    await query.message.answer('Новая дата и время получения, например: 15.11 14:30 или завтра 10:00. Ваш выбор сохранён.', reply_markup=flow_keyboard())
+
+
+@router.callback_query(F.data.startswith("rent:plus:") | F.data.startswith("rent:minus:"))
+async def change_equipment_quantity(query: CallbackQuery, state: FSMContext):
+    if await state.get_state() != Rent.equipment.state:
+        return await query.answer("Начните бронирование заново", show_alert=True)
+    data = await state.get_data()
+    _, action, raw_id = query.data.split(":")
+    item_id = int(raw_id)
+    try:
+        items = await asyncio.to_thread(availability, datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]))
+    except ValueError:
+        return await query.answer("Проверьте сроки заявки", show_alert=True)
+    item = next((row for row in items if row["id"] == item_id), None)
+    quantities = dict(data.get("quantities", {}))
+    count = int(quantities.get(raw_id, 0))
+    limit = min(30, item["available_quantity"]) if item else 0
+    if action == "plus" and count >= limit:
+        return await query.answer("Больше свободных единиц нет", show_alert=True)
+    count = count + 1 if action == "plus" else max(0, count - 1)
+    if count: quantities[raw_id] = count
+    else: quantities.pop(raw_id, None)
+    await state.update_data(ids=sorted(map(int, quantities)), quantities=quantities)
+    await query.answer("Выбор обновлён")
+    search = data.get("equipment_query", "")
+    visible = [row for row in items if row["available"] and search in " ".join(str(row.get(k) or "") for k in ("name", "title", "sku", "brand", "description")).casefold()]
+    await query.message.edit_reply_markup(reply_markup=equipment_keyboard(visible, quantities))
 
 
 @router.callback_query(F.data.startswith("rent:toggle:"))
@@ -370,14 +482,33 @@ async def edit_booking_step(query: CallbackQuery, state: FSMContext):
     await state.update_data(editing=target)
     await state.set_state(states[target]); await query.answer()
     if target == "equipment": return await show_equipment(query.message, state)
-    prompts = {"start": "Введите новую дату и время выдачи по Москве: ДД.ММ.ГГГГ ЧЧ:ММ", "name": "Введите новое имя:", "contact": "Введите новый телефон или Telegram:"}
+    prompts = {"start": "Новая дата и время получения, например: 15.11 14:30 или завтра 10:00. Ваш выбор сохранён.", "name": "Введите новое имя:", "contact": "Введите новый телефон или Telegram:"}
     await query.message.answer(prompts[target], reply_markup=flow_keyboard(contact=target == "contact"))
 
 
 @router.callback_query(F.data == "rent:cancel")
 async def cancel_review(query: CallbackQuery, state: FSMContext):
-    await state.clear(); await query.answer("Оформление отменено")
-    await query.message.answer("Оформление отменено.", reply_markup=main_keyboard())
+    if await state.get_state() != Rent.review.state:
+        return await query.answer('Эта кнопка устарела.', show_alert=True)
+    await query.answer()
+    await ask_cancel(query.message, state)
+
+
+@router.callback_query(F.data.startswith('rent:cancel:'))
+async def confirm_cancel_flow(query: CallbackQuery, state: FSMContext):
+    current = await state.get_state()
+    parts = query.data.split(':')
+    data = await state.get_data()
+    if (current not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.review.state}
+            or len(parts) != 4 or parts[2] not in {'yes', 'no'} or not data.get('cancel_nonce') or parts[3] != data['cancel_nonce']):
+        return await query.answer('Эта кнопка устарела.', show_alert=True)
+    if parts[2] == 'no':
+        await state.update_data(cancel_nonce=None)
+        await query.answer('Продолжаем оформление')
+        return await query.message.answer('Продолжайте оформление с предыдущего шага.', reply_markup=flow_keyboard(contact=current == Rent.contact.state))
+    await state.clear()
+    await query.answer('Оформление отменено')
+    await query.message.answer('Оформление отменено.', reply_markup=main_keyboard())
 
 
 @router.callback_query(F.data == "rent:confirm")
@@ -387,7 +518,7 @@ async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
     await query.answer("Создаём заявку…")
     try:
-        requested = [{"article_id": article_id, "quantity": 1} for article_id in data["ids"]]
+        requested = [{"article_id": article_id, "quantity": data.get("quantities", {}).get(str(article_id), 1)} for article_id in data["ids"]]
         booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), None, return_created=True)
     except (Conflict, ValueError) as exc:
         return await query.message.answer(f"Не удалось создать заявку: {exc}. Измените сроки или оборудование и попробуйте снова.")
@@ -398,23 +529,19 @@ async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
         await notify_managers(bot, booking_id)
 
 
+@fallback_router.message(F.text.regexp(r'(?i)^\s*(?:сегодня|завтра|\d{1,2}[./]\d{1,2}).*'))
+async def orphaned_booking_date(message: Message, state: FSMContext):
+    if message.chat and message.chat.type == 'private' and await state.get_state() is None:
+        await message.answer('Не вижу незавершённого бронирования: возможно, бот перезапускался. Нажмите «Бронирование в чате», чтобы начать.', reply_markup=main_keyboard())
+
+
 @router.message(Command("mybookings"))
 @router.message(F.text == "Мои заявки")
 async def my_bookings(message: Message):
-    bookings = await asyncio.to_thread(list_customer_bookings, message.from_user.id)
-    if not bookings:
-        return await message.answer("Заявок пока нет. Нажмите «Забронировать», чтобы начать.", reply_markup=main_keyboard())
-    names = {"pending": "ждёт менеджера", "confirmed": "подтверждена — заполните документы",
-             "preparing": "комплектуется", "ready": "готова к выдаче", "issued": "в аренде",
-             "return_inspection": "проверяется после возврата", "returned": "завершена",
-             "cancelled": "отменена", "expired": "удержание истекло"}
-    lines = []
-    for booking in bookings[:10]:
-        status = html.escape(names.get(booking.status, booking.status))
-        if booking.status in {"cancelled", "expired"}:
-            status = f"<s>{status}</s>"
-        lines.append(f"• <b>{getattr(booking, 'human_number', None) or f'№{booking.id}'}</b> · {status} · {booking.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m %H:%M} МСК")
-    await message.answer("<b>Ваши заявки</b>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+    if not message.chat or message.chat.type != "private":
+        return await message.answer("Откройте личный чат с ботом.")
+    from .chat_workflows import customer_list
+    await customer_list(message, message.from_user.id)
 
 
 @router.message(Command("find"))
@@ -435,12 +562,17 @@ async def find_request(message: Message):
 
 @router.message(F.text == "Связаться с менеджером")
 async def contact_manager(message: Message, state: FSMContext):
+    if not message.chat or message.chat.type != "private":
+        return await message.answer("Откройте личный чат с ботом.")
     await state.set_state(Support.message)
-    await message.answer("Напишите вопрос одним сообщением. Я передам его менеджеру. Для выхода нажмите «Отмена».", reply_markup=flow_keyboard())
+    await message.answer("Напишите вопрос одним сообщением. Не отправляйте в чат паспортные данные и фотографии документов. Для выхода нажмите «Отмена».", reply_markup=flow_keyboard())
 
 
 @router.message(Support.message)
 async def support_message(message: Message, state: FSMContext, bot: Bot):
+    if not message.chat or message.chat.type != "private":
+        await state.clear()
+        return await message.answer("Откройте личный чат с ботом.")
     if not message.text or not message.text.strip():
         return await message.answer("Отправьте вопрос текстом.")
     try:
@@ -457,6 +589,8 @@ async def support_message(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(Command("reply"))
 async def reply_to_customer(message: Message, bot: Bot):
+    if not message.chat or message.chat.type != "private":
+        return await message.answer("Откройте личный чат с ботом.")
     if message.from_user.id not in configured_ids("PII_ADMIN_IDS"):
         return
     try:
@@ -506,10 +640,13 @@ async def set_equipment(message: Message):
 
 @router.message(Command("bookings"))
 async def bookings(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    data = await asyncio.to_thread(list_bookings)
-    await message.answer("\n".join(f"<b>{b.human_number or f'№{b.id}'}</b> · {html.escape(b.status)} · <tg-spoiler>{html.escape(b.customer_name)}</tg-spoiler>: {b.starts_at.astimezone(MOSCOW):%d.%m %H:%M}–{b.ends_at.astimezone(MOSCOW):%d.%m %H:%M}" for b in data[:30]) or "Заявок нет", parse_mode=ParseMode.HTML)
+    if not message.chat or message.chat.type != "private":
+        return await message.answer("Откройте личный чат с ботом.")
+    from .chat_workflows import staff_list
+    try:
+        await staff_list(message, message.from_user.id)
+    except ValueError as exc:
+        await message.answer(str(exc))
 
 
 @router.message(Command("confirm", "cancel", "prepare", "ready", "issue", "checkin", "return"))
@@ -552,15 +689,32 @@ async def main():
             logging.warning("Не удалось настроить меню Mini App: %s", exc)
     dp = Dispatcher()
     dp.include_router(router)
-    from .miniapp_server import notification_loop
+    from .chat_workflows import router as chat_workflows_router
+    dp.include_router(chat_workflows_router)
+    from .chat_catalog import router as chat_catalog_router
+    dp.include_router(chat_catalog_router)
+    from .chat_inventory import router as chat_inventory_router
+    dp.include_router(chat_inventory_router)
+    from .chat_settings import router as chat_settings_router
+    dp.include_router(chat_settings_router)
+    from .chat_admin import router as chat_admin_router
+    dp.include_router(chat_admin_router)
+    from .chat_deletions import router as chat_deletions_router
+    dp.include_router(chat_deletions_router)
+    dp.include_router(fallback_router)
+    from .miniapp_server import deletion_loop, notification_loop
     notifications = asyncio.create_task(notification_loop())
+    deletions = asyncio.create_task(deletion_loop())
     try:
         await dp.start_polling(bot)
     finally:
         notifications.cancel()
+        deletions.cancel()
         from contextlib import suppress
         with suppress(asyncio.CancelledError):
             await notifications
+        with suppress(asyncio.CancelledError):
+            await deletions
 
 
 if __name__ == "__main__":

@@ -109,3 +109,22 @@ def test_support_does_not_assign_staff_without_pii(monkeypatch):
     reassign_booking(booking_id, 100, 100)
     thread = submit_question(42, booking_id, 'request', 'Вопрос')
     assert thread['owner_id'] is None
+
+
+def test_closed_thread_rejects_stale_claim_and_transfer(monkeypatch):
+    import pytest
+    from datetime import datetime, timezone
+    from app.support import reassign_thread, reply, resolve_thread
+    configure(monkeypatch)
+    thread_id = submit_question(42, None, 'profile', 'Вопрос')['id']
+    claim_thread(thread_id, 200)
+    message_id = reply(thread_id, 200, 'Ответ')
+    with Session.begin() as session:
+        session.get(SupportMessage, message_id).delivered_at = datetime.now(timezone.utc)
+    resolve_thread(thread_id, 200)
+    with pytest.raises(SupportConflict, match='закрыто'):
+        claim_thread(thread_id, 200)
+    with pytest.raises(SupportConflict, match='закрыто'):
+        reassign_thread(thread_id, 200, 200)
+    with Session() as session:
+        assert session.get(SupportThread, thread_id).status == 'resolved'

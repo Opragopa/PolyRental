@@ -36,7 +36,7 @@ def inventory_details(equipment_id, session=None, customer=False):
     return result
 
 
-def save_owner(equipment_id, name, contact, actor_id):
+def save_owner(equipment_id, name, contact, actor_id, expected_before=None):
     require_role(actor_id, "manager")
     name, contact = name.strip(), contact.strip()
     if len(name) > 200 or len(contact) > 300 or (contact and not name):
@@ -46,6 +46,9 @@ def save_owner(equipment_id, name, contact, actor_id):
             raise ValueError("Экземпляр не найден")
         owner = session.get(EquipmentOwner, equipment_id)
         before = {"name": owner.name, "contact": owner.contact} if owner else {}
+        if expected_before is not None and before != expected_before:
+            from .rental import Conflict
+            raise Conflict("Данные владельца изменились. Откройте карточку заново")
         if owner is None:
             owner = EquipmentOwner(equipment_id=equipment_id)
             session.add(owner)
@@ -54,7 +57,7 @@ def save_owner(equipment_id, name, contact, actor_id):
                                   action="owner_updated", detail={"before": before, "after": {"name": name, "contact": contact}}))
 
 
-def save_feature(equipment_id, description, actor_id, feature_id=None, remove=False, source="catalog"):
+def save_feature(equipment_id, description, actor_id, feature_id=None, remove=False, source="catalog", expected_before=None):
     require_role(actor_id, "admin" if feature_id is not None else "operator")
     description = description.strip()
     if not remove and (not description or len(description) > 2000):
@@ -68,6 +71,9 @@ def save_feature(equipment_id, description, actor_id, feature_id=None, remove=Fa
         if feature_id is not None and (not feature or feature.equipment_id != equipment_id or feature.deleted_at):
             raise ValueError("Особенность не найдена")
         before = feature.description if feature else ""
+        if expected_before is not None and before != expected_before:
+            from .rental import Conflict
+            raise Conflict("Особенность изменилась. Откройте карточку заново")
         if feature is None:
             feature = EquipmentFeature(equipment_id=equipment_id, actor_id=actor_id, source=source)
             session.add(feature)

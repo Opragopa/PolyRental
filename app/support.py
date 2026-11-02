@@ -72,6 +72,8 @@ def claim_thread(thread_id, actor_id):
         thread = session.scalar(select(SupportThread).where(SupportThread.id == thread_id).with_for_update())
         if not thread:
             raise ValueError('Обращение не найдено')
+        if thread.status == 'resolved':
+            raise SupportConflict('Обращение закрыто')
         if thread.owner_id is not None and thread.owner_id != actor_id:
             raise SupportConflict('Обращение уже закреплено за другим оператором')
         if thread.owner_id is None:
@@ -87,6 +89,8 @@ def reassign_thread(thread_id, actor_id, new_owner):
         thread = session.scalar(select(SupportThread).where(SupportThread.id == thread_id).with_for_update())
         if not thread:
             raise ValueError('Обращение не найдено')
+        if thread.status == 'resolved':
+            raise SupportConflict('Обращение закрыто')
         if thread.owner_id != actor_id and actor_id not in configured_ids('ADMIN_IDS'):
             raise SupportConflict('Переназначить обращение может владелец или администратор')
         if thread.owner_id != new_owner:

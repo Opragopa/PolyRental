@@ -41,7 +41,10 @@ async def retention_loop():
 
 async def deletion_loop():
     while True:
-        await asyncio.to_thread(expire_deletion_intents)
+        try:
+            await asyncio.to_thread(expire_deletion_intents)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Deletion worker will retry after %s", type(exc).__name__)
         await asyncio.sleep(1)
 
 
@@ -86,6 +89,8 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, version=__version__)
+from .site_auth import router as site_auth_router
+app.include_router(site_auth_router)
 app.include_router(router)
 app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-static")
 

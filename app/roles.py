@@ -68,3 +68,25 @@ def audit_admin_access(user_id, entry_point):
         "admin_access id=%s time=%s entry=%s", user_id,
         datetime.now(timezone.utc).isoformat(), entry_point,
     )
+
+
+def set_staff_role(actor_id, telegram_id, role, expected_role=None, check_current=False):
+    """Change an existing configured employee's role with an optional stale-view check."""
+    from .db import PIIAudit, Session, StaffRole
+    from .rental import Conflict
+    if not staff_allows(actor_id, "admin"):
+        raise PermissionError("Недостаточно прав для этого действия")
+    if telegram_id not in configured_ids("ADMIN_IDS") or role not in STAFF_ROLES:
+        raise ValueError("Укажите ID из ADMIN_IDS и допустимую роль")
+    if telegram_id == actor_id and role != "admin":
+        raise Conflict("Собственную роль администратора понизить нельзя")
+    with Session.begin() as session:
+        row = session.get(StaffRole, telegram_id, with_for_update=True)
+        if check_current and (row.role if row else None) != expected_role:
+            raise Conflict("Роль сотрудника изменилась. Откройте настройки заново")
+        if row is None:
+            row = StaffRole(telegram_id=telegram_id)
+            session.add(row)
+        if row.role != role:
+            row.role = role
+            session.add(PIIAudit(booking_id=None, actor_id=actor_id, action="staff_role_updated"))

@@ -2,6 +2,7 @@
 .codex
 .idea
 .env
+.env.acceptance
 .venv
 .pytest_cache
 __pycache__

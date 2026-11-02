@@ -1,4 +1,5 @@
 .env
+.env.acceptance
 /local-qa-data/
 /tools/browser-qa/.browsers/
 /artifacts/

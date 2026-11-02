@@ -48,10 +48,15 @@ def record_client_mode(user_id):
         session.add(ClientActivity(telegram_id=user_id, action="operator_client_mode"))
 
 
-def set_client_block(user_id, actor_id, blocked):
+def set_client_block(user_id, actor_id, blocked, expected_before=None):
+    from .inventory import require_role
+    from .rental import Conflict
+    require_role(actor_id, "admin")
     with Session.begin() as session:
         session.execute(text("INSERT INTO client_profiles (telegram_id, created_at) VALUES (:id, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT DO NOTHING"), {"id": user_id})
         profile = session.get(ClientProfile, user_id, with_for_update=True)
+        if expected_before is not None and profile.client_blocked != expected_before:
+            raise Conflict("Ограничение клиента изменилось. Откройте заявку заново")
         if profile.client_blocked != blocked:
             profile.client_blocked = blocked
             session.add(ClientActivity(telegram_id=user_id, actor_id=actor_id, action="client_blocked" if blocked else "client_unblocked"))

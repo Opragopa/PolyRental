@@ -27,7 +27,7 @@ def _decode(change):
 
 def _snapshot(booking):
     return {"start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat(),
-            "lines": [{"article_id": row.article_id, "quantity": row.quantity,"name":row.article.name} for row in booking.lines]}
+            "lines": sorted([{"article_id": row.article_id, "quantity": row.quantity,"name":row.article.name} for row in booking.lines], key=lambda row: row["article_id"])}
 
 
 def queue(session, booking, event, message, recipient=None, sensitive=False):
@@ -38,7 +38,7 @@ def queue(session, booking, event, message, recipient=None, sensitive=False):
                                      event=event, message=message, next_retry_at=now()))
 
 
-def decline_request(booking_id, actor_id, comment):
+def decline_request(booking_id, actor_id, comment, expected_before=None):
     require_role(actor_id,"manager")
     if not comment.strip() or len(comment)>2000:
         raise ValueError("Укажите причину отклонения до 2000 символов")
@@ -48,6 +48,8 @@ def decline_request(booking_id, actor_id, comment):
         if not booking or booking.deleted_at: raise ValueError("Заявка не найдена")
         if booking.status not in {"pending","needs_changes","confirmed"}:
             raise Conflict("Отклонение доступно до начала подготовки")
+        if expected_before is not None and _snapshot(booking) != expected_before:
+            raise Conflict("Заявка изменилась. Откройте её заново")
         nonce=os.urandom(12)
         payload={"before":_snapshot(booking),"after":_snapshot(booking),"comment":comment.strip()}
         session.add(BookingChange(booking_id=booking_id,actor_id=actor_id,change_type="rejected",status="rejected",
@@ -61,7 +63,7 @@ def decline_request(booking_id, actor_id, comment):
         queue(session,booking,"request_rejected",f"Заявка {escape(booking.human_number or str(booking_id))} отклонена. Причина: {escape(comment.strip())}",sensitive=True)
 
 
-def propose_change(booking_id, actor_id, change_type, comment, proposed=None):
+def propose_change(booking_id, actor_id, change_type, comment, proposed=None, expected_before=None):
     require_role(actor_id, "manager")
     if change_type not in {"client_fix", "manager_edit"} or not comment.strip() or len(comment) > 2000:
         raise ValueError("Укажите тип изменения и обязательный комментарий до 2000 символов")
@@ -72,6 +74,8 @@ def propose_change(booking_id, actor_id, change_type, comment, proposed=None):
         if booking.status not in {"pending", "confirmed"}:
             raise Conflict("Изменения заявки доступны до начала подготовки")
         before = _snapshot(booking)
+        if expected_before is not None and before != expected_before:
+            raise Conflict("Заявка изменилась во время редактирования. Откройте её заново")
         after = proposed or before
         if change_type == "manager_edit":
             start, end = datetime.fromisoformat(after["start"]), datetime.fromisoformat(after["end"])
@@ -115,7 +119,7 @@ def change_view(booking_id, actor_id, pii=False):
                 "deadline": change.deadline.isoformat() if change.deadline else None, **payload}
 
 
-def update_request(booking_id, customer_id, start, end, lines, change_id=None, accept=True, comment=""):
+def update_request(booking_id, customer_id, start, end, lines, change_id=None, accept=True, comment="", expected_before=None):
     """A response is bound to the exact proposal; replay never applies a newer edit."""
     with Session.begin() as session:
         booking = session.get(Booking, booking_id, with_for_update=True)
@@ -123,6 +127,8 @@ def update_request(booking_id, customer_id, start, end, lines, change_id=None, a
             raise ValueError("Заявка не найдена")
         if booking.status not in {"pending", "needs_changes"}:
             raise Conflict("Редактирование доступно до подтверждения")
+        if expected_before is not None and _snapshot(booking) != expected_before:
+            raise Conflict("Заявка изменилась во время редактирования. Откройте её заново")
         change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id)
                                 .order_by(BookingChange.id.desc()).limit(1))
         if change_id is not None:

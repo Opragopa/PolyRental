@@ -22,9 +22,11 @@ if os.environ.get("DATABASE_URL", "").rsplit("/", 1)[-1] != "polyrental_test":
 os.environ.update(BOT_TOKEN="123:local-qa-only", ADMIN_IDS="100", PII_ADMIN_IDS="200",
                   PII_MASTER_KEY=base64.urlsafe_b64encode(b"q" * 32).decode(),
                   OPERATOR_NAME="QA оператор", OPERATOR_ADDRESS="Тестовая среда",
-                  OPERATOR_CONTACT="qa@example.test", PRIVACY_POLICY_VERSION="qa-v1")
+                  OPERATOR_CONTACT="qa@example.test", PRIVACY_POLICY_VERSION="qa-v1",
+                  ENFORCE_HANDOVER_SCHEDULE="false")
 
 from fastapi.responses import HTMLResponse
+from app import miniapp_server
 from app.miniapp_server import app
 from app import miniapp
 from app.db import Article, Session, init_db
@@ -37,6 +39,8 @@ async def no_notification(*args):
 
 
 miniapp.notify_new_booking = miniapp.notify_booking_status = miniapp.notify_cancelled_booking = no_notification
+miniapp_server.retry_pending_notifications = no_notification
+miniapp_server.retry_support_replies = no_notification
 
 
 @app.get("/qa/{role}", response_class=HTMLResponse)
@@ -101,4 +105,4 @@ if __name__ == "__main__":
         review_identity(booking_id, 200, True)
         assign_booking_assets(booking_id, 100)
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("QA_PORT", "8000")))
+    uvicorn.run(app, host=os.environ.get("QA_HOST", "127.0.0.1"), port=int(os.environ.get("QA_PORT", "8000")))

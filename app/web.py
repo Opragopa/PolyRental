@@ -98,6 +98,8 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan, version=__version__)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "change-me-before-deploy"), same_site="lax", https_only=os.getenv("PUBLIC_URL", "").startswith("https://"))
+from .site_auth import router as site_auth_router
+app.include_router(site_auth_router)
 app.include_router(miniapp_router)
 app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-static")
 
@@ -159,7 +161,7 @@ def dashboard(request: Request):
         docs = " ".join(f'<a href="/admin/bookings/{booking.id}/documents/{kind}">{label}</a>' for kind, label in (("contract", "Договор"), ("issue", "Акт выдачи"), ("return", "Акт возврата")))
         parts.append(f'<tr><td>{escape(booking.human_number or "Заявка")}</td><td>{escape(booking.customer_name)}<br>{escape(booking.customer_contact)}</td><td>{booking.starts_at.astimezone(MOSCOW):%d.%m.%Y %H:%M}–{booking.ends_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК</td><td>{items}</td><td>{booking.status}</td><td>{actions}<br>{docs}</td></tr>')
     parts.append('</table></section>')
-    return page("PolyRental — менеджер", "".join(parts))
+    return page("ПолиРентал — менеджер", "".join(parts))
 
 
 @app.post("/admin/bookings/{booking_id}/{action}")
@@ -221,7 +223,7 @@ def calendar_feed(token: str):
         event.add("uid", f"booking-{booking.id}@polyrental")
         equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
         event.add("summary", f"Аренда {booking.human_number or 'заявка'}: {equipment or 'оборудование'}")
-        event.add("description", f"PolyRental · статус: {booking.status}")
+        event.add("description", f"ПолиРентал · статус: {booking.status}")
         event.add("dtstart", booking.starts_at)
         event.add("dtend", booking.ends_at)
         cal.add_component(event)

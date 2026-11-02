@@ -56,7 +56,7 @@ def composition_signature(components):
     return hashlib.sha256(json.dumps(components,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
 
-def set_trusted_signer(actor_id, telegram_id, full_name, active):
+def set_trusted_signer(actor_id, telegram_id, full_name, active, expected_before=None):
     require_role(actor_id, "admin")
     if telegram_id not in configured_ids("ADMIN_IDS") or not full_name.strip() or len(full_name) > 200:
         raise ValueError("Укажите действующего сотрудника и его ФИО")
@@ -64,7 +64,10 @@ def set_trusted_signer(actor_id, telegram_id, full_name, active):
         role = session.get(StaffRole, telegram_id)
         if role is None:
             raise ValueError("Сначала назначьте роль сотруднику")
-        row = session.get(TrustedSigner, telegram_id)
+        row = session.get(TrustedSigner, telegram_id, with_for_update=True)
+        before = {"full_name":row.full_name,"active":row.active} if row else {}
+        if expected_before is not None and before != expected_before:
+            raise Conflict("Данные подписанта изменились. Откройте настройки заново")
         if row is None:
             row = TrustedSigner(telegram_id=telegram_id)
             session.add(row)
@@ -151,7 +154,11 @@ def migrate_legacy_receipt(booking_id, actor_id):
         session.add(Audit(booking_id=booking_id, actor_id=actor_id, action="legacy_receipt_migrated"))
 
 
-def customer_attest(booking_id, customer_id, action, acknowledged=False):
+def handover_summary_signature(data):
+    return hashlib.sha256(json.dumps({"snapshot":data.get("snapshot", []), "exceptions":data.get("exceptions", [])}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def customer_attest(booking_id, customer_id, action, acknowledged=False, expected_summary_signature=None):
     with Session.begin() as session:
         booking = session.get(Booking, booking_id, with_for_update=True)
         if not booking or booking.customer_id != customer_id or booking.deleted_at:
@@ -163,6 +170,8 @@ def customer_attest(booking_id, customer_id, action, acknowledged=False):
         if data.get("recipient_id") != customer_id:
             raise Conflict("Вернуть оборудование может только получатель")
         if action == "received":
+            if expected_summary_signature is not None and handover_summary_signature(data) != expected_summary_signature:
+                raise Conflict("Состав выдачи изменился. Ознакомьтесь с перечнем заново")
             if booking.status != "ready" or not data.get("snapshot"):
                 raise Conflict("Получение доступно для готовой заявки")
             if data.get("exceptions") and not acknowledged:

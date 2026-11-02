@@ -98,10 +98,11 @@ def test_customer_isolation_and_bot_api_sync(monkeypatch):
         for staff in (100, 200):
             rows = client.get("/api/miniapp/admin/bookings", headers={"X-Telegram-Init-Data": signed_init_data(staff)}).json()["items"]
             assert {row["id"] for row in rows} >= {first, second}
-        message = SimpleNamespace(from_user=SimpleNamespace(id=42), answer=AsyncMock())
+        message = SimpleNamespace(from_user=SimpleNamespace(id=42), chat=SimpleNamespace(type="private"), answer=AsyncMock())
         asyncio.run(bot.my_bookings(message))
-        assert get_booking(first).human_number in message.answer.call_args.args[0]
-        assert get_booking(second).human_number not in message.answer.call_args.args[0]
+        labels = [button.text for row in message.answer.call_args.kwargs["reply_markup"].inline_keyboard for button in row]
+        assert any(get_booking(first).human_number in label for label in labels)
+        assert all(get_booking(second).human_number not in label for label in labels)
         third_start = start + timedelta(days=6)
         payload = {"request_id": str(uuid4()), "start": third_start.isoformat(), "end": (third_start + timedelta(hours=1)).isoformat(),
                    "lines": [{"article_id": article, "quantity": 1}], "name": "Клиент", "contact": "@sync1"}
@@ -109,7 +110,8 @@ def test_customer_isolation_and_bot_api_sync(monkeypatch):
         assert created.status_code == 201
         assert client.post("/api/miniapp/bookings", headers=customer, json=payload).json()["id"] == created.json()["id"]
         asyncio.run(bot.my_bookings(message))
-        assert created.json()["human_number"] in message.answer.call_args.args[0]
+        labels = [button.text for row in message.answer.call_args.kwargs["reply_markup"].inline_keyboard for button in row]
+        assert any(created.json()["human_number"] in label for label in labels)
 
 
 def noisy_image():

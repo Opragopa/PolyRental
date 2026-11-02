@@ -19,7 +19,7 @@ from uuid import UUID
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, Query, UploadFile)
+                     HTTPException, Query, Request, UploadFile)
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from aiogram.enums import ParseMode
@@ -122,8 +122,9 @@ def verify_init_data(raw: str):
         return None
 
 
-def require_customer(x_telegram_init_data: str = Header(default="")):
-    user = verify_init_data(x_telegram_init_data)
+def require_customer(request: Request, x_telegram_init_data: str = Header(default="")):
+    from .site_auth import site_user
+    user = verify_init_data(x_telegram_init_data) if x_telegram_init_data else site_user(request)
     if user is None:
         raise HTTPException(401, "Откройте приложение через Telegram ещё раз")
     return user
@@ -297,6 +298,15 @@ async def notify_booking_status(booking_id: int, customer_id: int, status: str, 
 async def notify_identity_submitted(booking_id: int):
     """Tell operators that identity data was submitted or corrected; never include PII."""
     return None
+
+
+@router.get("/site")
+def site_page(request: Request):
+    from .site_auth import site_user
+    from fastapi.responses import RedirectResponse
+    if not site_user(request):
+        return RedirectResponse("/site/login", status_code=303)
+    return HTMLResponse(miniapp_html(), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 @router.get("/miniapp")
@@ -1404,14 +1414,11 @@ async def admin_inspection(booking_id: int, payload: InspectionRequest, user=Dep
         raise HTTPException(409, str(exc)) from exc
 
 
-@router.post("/api/miniapp/admin/bookings/{booking_id}/inspection-photo")
-async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
-                                photo: UploadFile = File(...), user=Depends(require_admin)):
+async def save_inspection_photo_bytes(booking_id, equipment_id, raw, content_type, user):
     if not await asyncio.to_thread(staff_allows, user["id"], "operator"):
         raise HTTPException(403, "Недостаточно прав для этого действия")
-    raw = await photo.read(8 * 1024 * 1024 + 1)
     try:
-        normalized, _ = sanitize_image(raw, photo.content_type or "")
+        normalized, _ = sanitize_image(raw, content_type or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     claimed = False
@@ -1439,6 +1446,13 @@ async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
         # A rejected upload must not block the return-inspection stage for ten minutes.
         if claimed and not saved:
             await asyncio.to_thread(release_booking_operation, booking_id, user["id"])
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/inspection-photo")
+async def admin_inspection_photo(booking_id: int, equipment_id: int = Form(...),
+                                photo: UploadFile = File(...), user=Depends(require_admin)):
+    raw = await photo.read(8 * 1024 * 1024 + 1)
+    return await save_inspection_photo_bytes(booking_id, equipment_id, raw, photo.content_type, user)
 
 
 @router.post("/api/miniapp/admin/bookings/{booking_id}/act-signed")
@@ -1661,18 +1675,8 @@ class StaffRoleRequest(BaseModel):
 
 @router.put("/api/miniapp/admin/staff/{telegram_id}/role")
 async def admin_staff_role(telegram_id: int, payload: StaffRoleRequest, user=Depends(require_system_admin)):
-    from .db import StaffRole, PIIAudit
-    if telegram_id not in configured_ids("ADMIN_IDS") or payload.role not in {"operator", "manager", "admin"}:
-        raise HTTPException(422, "Укажите ID из ADMIN_IDS и допустимую роль")
-    if telegram_id == user["id"] and payload.role != "admin":
-        raise HTTPException(409, "Собственную роль администратора понизить нельзя")
-    with Session.begin() as session:
-        row = session.get(StaffRole, telegram_id, with_for_update=True)
-        if row is None:
-            row = StaffRole(telegram_id=telegram_id)
-            session.add(row)
-        row.role = payload.role
-        session.add(PIIAudit(booking_id=None, actor_id=user["id"], action="staff_role_updated"))
+    from .roles import set_staff_role
+    await workflow_call(set_staff_role, user["id"], telegram_id, payload.role)
     return {"status": "saved"}
 
 
