@@ -135,12 +135,14 @@ def test_each_selected_item_is_booked_separately():
     assert battery_line.quantity == 1 and battery_line.billable_quantity == 1
 
 
-def test_low_battery_cannot_be_assigned():
-    article_id = article_with_assets("BAT", 1, category="battery", health=79, charge=100)
+@pytest.mark.parametrize("health,charge", [(None, None), (79, 50)])
+def test_battery_assignment_does_not_require_health_or_charge(health, charge):
+    article_id = article_with_assets("BAT", 1, category="battery", health=health, charge=charge)
     start = now() + timedelta(days=4, hours=3)
     end = start + timedelta(hours=1)
     booking_id = create_booking(1, "Клиент", "@client", start, end,
                                 [{"article_id": article_id, "quantity": 1}])
     transition(booking_id, "confirmed", 100)
-    with pytest.raises(Conflict):
-        assign_booking_assets(booking_id, 100)
+    with Session.begin() as session:
+        session.get(Booking, booking_id).identity_status = "verified"
+    assert assign_booking_assets(booking_id, 100) == "preparing"

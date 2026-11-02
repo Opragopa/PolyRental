@@ -877,11 +877,6 @@ def _asset_conflicts(session, booking, equipment_id):
 def _validate_asset(asset, article_id):
     if not asset or asset.article_id != article_id or asset.condition != "available":
         raise Conflict("Экземпляр не соответствует артикулу или недоступен")
-    if asset.article and asset.article.category == "battery":
-        if asset.health_percent is None or asset.health_percent < 80:
-            raise Conflict(f"Аккумулятор {asset.inventory_number}: здоровье ниже 80%")
-        if asset.charge_percent is None or asset.charge_percent < 95:
-            raise Conflict(f"Аккумулятор {asset.inventory_number}: заряд ниже 95%")
 
 
 def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="", exceptions=None):
