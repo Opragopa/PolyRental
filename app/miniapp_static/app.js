@@ -2523,8 +2523,7 @@
   }
   tg?.onEvent?.("activated", () => { if (state.view === "orders") showOrders(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "orders") showOrders(); });
-  const applyTheme = () => { document.documentElement.dataset.theme = tg?.colorScheme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); };
-  applyTheme(); tg?.onEvent?.("themeChanged", applyTheme);
+
   tg?.ready?.();
   render();
 })();

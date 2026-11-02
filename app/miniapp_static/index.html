@@ -9,6 +9,7 @@
   <title>ПолиРентал — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
   <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__">
+  <script src="/miniapp/static/theme.js?v=__APP_VERSION__"></script>
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__"></script>
@@ -34,7 +35,7 @@
   <div class="shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">П</span><span>ПолиРентал</span><span id="app-version" class="app-version" aria-label="Версия приложения">v__APP_VERSION__</span></div>
-      <span class="topbar-note">Аренда оборудования</span>
+      <div class="theme-switch" role="radiogroup" aria-label="Тема оформления"><label><input type="radio" name="theme" value="light"><span>Светлая</span></label><label><input type="radio" name="theme" value="dark"><span>Тёмная</span></label><label><input type="radio" name="theme" value="auto"><span>Авто</span></label></div>
     </header>
 
     <main>
