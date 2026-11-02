@@ -118,6 +118,6 @@ button, summary { -webkit-tap-highlight-color: transparent; }
   .button, .item-card, .tab { transition:background-color .2s, border-color .2s, color .2s, box-shadow .2s, transform .2s; }
   .button:not(:disabled):hover, .item-card:hover { transform:translateY(-2px); }
   .step-panel:not([hidden]), .login-card { animation:surface-enter .35s ease-out both; }
-  @keyframes surface-enter { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes surface-enter { from { opacity:0; } to { opacity:1; } }
 }
 @media (prefers-reduced-motion: reduce) { .theme-switch span { transition:none; } }

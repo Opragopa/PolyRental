@@ -2,6 +2,8 @@
   "use strict";
 
   const tg = window.Telegram?.WebApp;
+  window.polyRentalApplyTheme?.();
+  tg?.onEvent?.("themeChanged", () => window.polyRentalApplyTheme?.());
   const preview = new URLSearchParams(location.search).get("preview") === "1";
   let siteProfile = null;
   if (!tg?.initData && location.pathname === "/site") {

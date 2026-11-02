@@ -5,11 +5,14 @@
   try { choice = localStorage.getItem(key) || 'auto'; } catch (_) {}
   if (!['light', 'dark', 'auto'].includes(choice)) choice = 'auto';
   function apply() {
-    const theme = choice === 'auto' ? (media.matches ? 'dark' : 'light') : choice;
+    const telegram = window.Telegram?.WebApp;
+    const automatic = telegram?.initData && ['light', 'dark'].includes(telegram.colorScheme) ? telegram.colorScheme : (media.matches ? 'dark' : 'light');
+    const theme = choice === 'auto' ? automatic : choice;
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     document.querySelectorAll('.theme-switch input').forEach(input => { input.checked = input.value === choice; });
   }
+  window.polyRentalApplyTheme = apply;
   apply();
   media.addEventListener?.('change', apply);
   document.addEventListener('DOMContentLoaded', () => {
