@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import select
 import pytest
 
 from app.bot import main_keyboard, miniapp_url
@@ -135,6 +136,17 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
                                      "text_hash": consent["text_hash"]}, files=files)
         assert response.status_code == 200
         assert notified == [booking_id]
+        public_profile = client.get("/api/miniapp/profile", headers=customer)
+        assert "passport_number" not in public_profile.text
+        assert client.get("/api/miniapp/profile/identity").status_code == 401
+        other = client.get("/api/miniapp/profile/identity", headers={"X-Telegram-Init-Data": signed_init_data(43)})
+        assert other.json() == {"fields": {}}
+        revealed = client.get("/api/miniapp/profile/identity", headers=customer)
+        assert revealed.headers["cache-control"] == "no-store"
+        assert revealed.json()["fields"]["passport_number"] == "123456"
+        with Session() as session:
+            assert session.scalar(select(PIIAudit.id).where(PIIAudit.booking_id == booking_id,
+                PIIAudit.actor_id == 42, PIIAudit.action == "profile_identity_revealed"))
         customer_orders = client.get("/api/miniapp/bookings", headers=customer).json()["items"]
         assert next(order for order in customer_orders if order["id"] == booking_id)["identity_status"] == "submitted"
         assert client.get(f"/api/miniapp/bookings/{booking_id}/identity", headers=customer).json()["status"] == "submitted"

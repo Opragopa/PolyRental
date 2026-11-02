@@ -15,6 +15,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:${POSTGRES_PASSWORD:-polyrental}@db:5432/polyrental
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       PUBLIC_URL: https://polyrental.cloudopragopa.online
     ports:
       - "127.0.0.1:8000:8000"

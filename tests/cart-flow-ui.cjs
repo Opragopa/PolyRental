@@ -9,6 +9,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
   try {
     const page = await browser.newPage({viewport:{width:390,height:844}}), errors=[];
     page.on('pageerror', error => errors.push(error.message));
+    let nearestPayload=null;
     let cart={start:'2026-11-01T10:00',end:'2026-11-02T10:00',lines:[],version:0};
     const item={id:1,name:'Камера Sony',title:'Камера Sony',description:'',sku:'CAM',available:true,available_quantity:3};
     await page.route('**/*', async route => {
@@ -21,7 +22,8 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if (url.pathname==='/api/miniapp/cart' && route.request().method()==='PUT') {const next=route.request().postDataJSON(); if (next.version!==cart.version) return route.fulfill({status:409,json:{detail:'conflict'}}); cart={...next,version:cart.version+1}; return route.fulfill({json:cart});}
       if (url.pathname==='/api/miniapp/profile/history') return route.fulfill({json:{total:1,items:[{id:7,human_number:'ТС260007',status:'returned',identity_status:'verified',receipt_available:true,starts_at:'2026-10-01T10:00:00+03:00',ends_at:'2026-10-02T10:00:00+03:00',items:[{id:2,name:'Старый штатив',quantity:1}]}]}});
       if (url.pathname==='/api/miniapp/bookings/7/receipt') return route.fulfill({contentType:'application/pdf',headers:{'Content-Disposition':'attachment; filename="receipt-TS260007.pdf"'},body:'%PDF-synthetic'});
-      if (url.pathname==='/api/miniapp/availability') return route.fulfill({json:{items:[item],all_items:[item],unavailable_count:0,unavailable:[]}});
+      if (url.pathname==='/api/miniapp/availability/nearest') { nearestPayload=route.request().postDataJSON(); return route.fulfill({json:{period:{start:'2026-11-09T10:00:00+03:00',end:'2026-11-10T10:00:00+03:00'},horizon_days:90}}); }
+      if (url.pathname==='/api/miniapp/availability') { const available = url.searchParams.get('start')?.startsWith('2026-11-09') ? {...item,id:2,name:'Старый штатив',title:'Старый штатив',available_quantity:1} : item; const unavailable = {...item,id:3,name:'Недоступный свет',title:'Недоступный свет',available:false,available_quantity:0}; return route.fulfill({json:{items:[available],all_items:[available,unavailable],unavailable_count:1,unavailable:[]}}); }
       if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:'text/html'});
     });
@@ -66,6 +68,16 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.clock.runFor(400);
     await page.waitForFunction(() => !document.querySelector('#mode-banner').textContent.includes('Не удалось синхронизировать'));
     assert.deepEqual(cart.lines, [{article_id:2, quantity:1}]);
+    await page.getByRole('button',{name:'Найти ближайшие сроки для подборки'}).click();
+    await page.getByRole('button',{name:'Выбрать эти сроки'}).waitFor();
+    assert.deepEqual(nearestPayload.lines, [{article_id:2, quantity:1}]);
+    await page.getByRole('button',{name:'Выбрать эти сроки'}).click();
+    await page.getByText('Новые сроки выбраны, доступность проверена.').waitFor();
+    assert.equal(await page.locator('#start-date').inputValue(), '2026-11-09');
+    assert.equal(await page.locator('#end-date').inputValue(), '2026-11-10');
+    await page.getByRole('button',{name:'Добавить для поиска сроков: Недоступный свет'}).click();
+    await page.getByRole('button',{name:'Найти ближайшие сроки для подборки'}).waitFor();
+    assert.equal(await page.locator('#selected-count').innerText(), '2');
     assert.deepEqual(errors, []);
     console.log('Versioned cart and date change checks passed');
   } finally { await browser.close(); }

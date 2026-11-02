@@ -190,6 +190,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
 
     {
       const { page, errors, reviews } = await fixture(browser, { orders: Array.from({ length: 20 }, (_, index) => order(index + 7)) });
+      await page.emulateMedia({ reducedMotion: "reduce" });
       const selected = card(page, 15);
       await selected.locator(".request-toggle").focus();
       const summaryBounds = await selected.locator(".request-toggle").boundingBox();

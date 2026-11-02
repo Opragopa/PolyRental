@@ -56,7 +56,7 @@ def verified_user(data):
     expected = hmac.new(hashlib.sha256(token.encode()).digest(), check.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, data["hash"]):
         return None
-    return {"id": int(data["id"]), **{key: data[key] for key in ("first_name", "last_name", "username") if key in data}}
+    return {"id": int(data["id"]), **{key: data[key] for key in ("first_name", "last_name", "username", "photo_url") if key in data}}
 
 
 def site_user(request: Request):

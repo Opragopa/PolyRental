@@ -44,9 +44,14 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         assert.equal(await page.locator("#app-version").isVisible(), true);
         await page.locator('[data-date="2026-10-30"]').click();
         assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
+        assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el => getComputedStyle(el).animationName), "calendar-day-pop");
         assert.equal(await page.locator("#start-time").isDisabled(),true);
         await page.locator('[data-date="2026-11-02"]').click();
         assert.equal(await page.locator(".calendar-day.in-range").count(),2);
+        assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "calendar-day-reveal");
+        await page.emulateMedia({reducedMotion:"reduce"});
+        assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "none");
+        await page.emulateMedia({reducedMotion:"no-preference"});
         assert.equal(await page.locator("#start-time").isDisabled(),false);
         assert.equal(await page.locator("#main-button").isDisabled(),false);
         await page.locator("#start-time").fill("10:00");
@@ -169,6 +174,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     });
     await native.clock.install({time:new Date("2026-10-26T10:00:00Z")});
     await native.goto("http://polyrental.test/miniapp");
+    await native.locator("#action-bar").waitFor({state:"visible"});
     assert.equal(await native.locator("#action-bar").isVisible(),true);
     assert.equal(await native.locator(".tabs").isVisible(),true);
     assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);

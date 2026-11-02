@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy import and_, case, delete, func, literal, or_, select, text, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -192,6 +192,31 @@ def booking_history(booking_id):
                                                int(item["id"].split(":")[1])))
 
 
+def booking_history_page(booking_id, page, page_size=20):
+    """Page the allowlisted audit streams together before loading records."""
+    if page < 0 or not 1 <= page_size <= 100:
+        raise ValueError("Неверная страница истории")
+    audit_actions = or_(Audit.action.in_(_HISTORY_STATUS_ACTIONS | _HISTORY_OPERATION_ACTIONS),
+        Audit.action.like("line_deleted:%"), Audit.action.like("line_restored:%"), Audit.action.like("asset_deleted:%"),
+        Audit.action.like("asset_restored:%"), Audit.action.like("%_delete_intent%"), Audit.action.like("%_delete_undo%"),
+        Audit.action.like("assignee:%"), Audit.action.like("sla_%"))
+    support_actions = or_(SupportActivity.action.in_({"created", "reopened", "claimed", "resolved", "client_message", "operator_reply", "routed_to_assignee"}), SupportActivity.action.like("owner:%"))
+    events = union_all(
+        select(Audit.id.label("event_id"), Audit.action.label("action"), Audit.actor_id.label("actor_id"), Audit.created_at.label("created_at"), literal("audit").label("source")).where(Audit.booking_id == booking_id, audit_actions),
+        select(PIIAudit.id, PIIAudit.action, PIIAudit.actor_id, PIIAudit.created_at, literal("pii")).where(PIIAudit.booking_id == booking_id, PIIAudit.action.in_(_HISTORY_IDENTITY_ACTIONS)),
+        select(SupportActivity.id, SupportActivity.action, SupportActivity.actor_id, SupportActivity.created_at, literal("support")).join(SupportThread, SupportThread.id == SupportActivity.thread_id).where(SupportThread.booking_id == booking_id, support_actions),
+    ).subquery()
+    with Session() as session:
+        if session.get(Booking, booking_id) is None:
+            raise ValueError("Заявка не найдена")
+        total = session.scalar(select(func.count()).select_from(events))
+        rows = session.execute(select(events).order_by(events.c.created_at, events.c.source, events.c.event_id).offset(page * page_size).limit(page_size)).all()
+        items = [{"id":f"{row.source}:{row.event_id}", "action":f"support_{row.action}" if row.source == "support" else row.action,
+                  "actor_id":row.actor_id, "created_at":row.created_at.isoformat(),
+                  "category":"identity" if row.source == "pii" else "support" if row.source == "support" else "status" if row.action in _HISTORY_STATUS_ACTIONS else "operation"} for row in rows]
+        return items, total
+
+
 def validated_rate(value):
     try:
         rate = Decimal(str(value))
@@ -308,39 +333,210 @@ def _nearest_free_start(session, article, start, end, capacity):
     return None
 
 
+class AvailabilitySnapshot:
+    """Batch the equipment and reservation data used for availability queries."""
+
+    def __init__(self, session, article_ids, start, end):
+        from .db import BookingHandover, EquipmentBlock, EquipmentOwner
+        from .inventory import MAIN_OWNER
+        self.capacities = defaultdict(int)
+        self.owners = defaultdict(set)
+        self.reservations = defaultdict(list)
+        self.blocks = defaultdict(list)
+        self.reference_time = now()
+        if not article_ids:
+            return
+        equipment_rows = session.execute(select(Equipment.article_id, Equipment.condition, EquipmentOwner.name)
+            .outerjoin(EquipmentOwner, EquipmentOwner.equipment_id == Equipment.id)
+            .where(Equipment.article_id.in_(article_ids)))
+        for article_id, condition, owner in equipment_rows:
+            if condition == "available":
+                self.capacities[article_id] += 1
+            if owner and owner.casefold() != MAIN_OWNER.casefold():
+                self.owners[article_id].add(owner)
+        for article_id, block in session.execute(select(Equipment.article_id, EquipmentBlock)
+            .join(EquipmentBlock, EquipmentBlock.equipment_id == Equipment.id)
+            .where(Equipment.article_id.in_(article_ids), EquipmentBlock.released_at.is_(None),
+                   EquipmentBlock.starts_at < end, EquipmentBlock.ends_at > start)):
+            self.blocks[article_id].append(block)
+        booking_conditions = (Booking.status.in_(RESERVING_STATUSES),
+            or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"), Booking.starts_at < end,
+            or_(Booking.ends_at > start, and_(Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= self.reference_time)))
+        bookings = session.execute(select(Booking.id, Booking.status, Booking.starts_at, Booking.ends_at, BookingHandover.data)
+            .outerjoin(BookingHandover, BookingHandover.booking_id == Booking.id).where(*booking_conditions)).all()
+        if not bookings:
+            return
+        # Join instead of constructing one SQL parameter per booking; this also
+        # remains usable when a long search horizon contains many reservations.
+        lines = session.execute(select(BookingLine.id, BookingLine.booking_id, BookingLine.article_id, BookingLine.quantity, BookingLine.deleted_at)
+            .join(Booking, Booking.id == BookingLine.booking_id).where(*booking_conditions)).all()
+        lines_by_booking = defaultdict(list)
+        lines_by_id = {}
+        for line in lines:
+            lines_by_booking[line.booking_id].append(line)
+            lines_by_id[line.id] = line
+        requested = set(article_ids)
+        for booking in bookings:
+            quantities = defaultdict(int)
+            exceptions = (booking.data or {}).get("exceptions", [])
+            by_line = defaultdict(list)
+            for exception in exceptions:
+                if not exception.get("component") and "line_id" in exception:
+                    by_line[exception["line_id"]].append(exception)
+            for line in lines_by_booking[booking.id]:
+                if line.deleted_at is not None or line.article_id not in requested:
+                    continue
+                removed = sum(1 for ex in by_line[line.id] if ex.get("reason") != "replacement" or ex.get("replacement_article_id") != line.article_id)
+                quantities[line.article_id] += max(0, line.quantity - removed)
+            for exception in exceptions:
+                if exception.get("component") or exception.get("reason") != "replacement":
+                    continue
+                replacement = exception.get("replacement_article_id")
+                line = lines_by_id.get(exception.get("line_id"))
+                if replacement in requested and line and line.article_id != replacement:
+                    quantities[replacement] += 1
+            occupied_end = booking.ends_at
+            if booking.status in {"issued", "return_inspection"} and booking.ends_at <= self.reference_time:
+                occupied_end = datetime.max.replace(tzinfo=timezone.utc)
+            for article_id, quantity in quantities.items():
+                if quantity:
+                    self.reservations[article_id].append((booking.starts_at, occupied_end, quantity))
+
+    def peak(self, article_id, start, end):
+        events = []
+        for left, right, quantity in self.reservations[article_id]:
+            if left < end and right > start:
+                events.extend(((max(start, left), quantity), (min(end, right), -quantity)))
+        for block in self.blocks[article_id]:
+            if block.starts_at < end and block.ends_at > start:
+                events.extend(((max(start, block.starts_at), 1), (min(end, block.ends_at), -1)))
+        current = peak = 0
+        for _, delta in sorted(events):
+            current += delta
+            peak = max(peak, current)
+        return peak
+
+    def candidate_ends(self, article_ids, start, end):
+        dates = set()
+        for article_id in article_ids:
+            dates.update(right for _, right, _ in self.reservations[article_id] if start <= right < end)
+            dates.update(block.ends_at for block in self.blocks[article_id] if start <= block.ends_at < end)
+        return sorted(dates)
+
+
+def _availability_rows(session, articles, start, end):
+    from .catalog_images import image_data
+    previews = image_data(session, [article.id for article in articles])
+    article_ids = [article.id for article in articles]
+    horizon = end + timedelta(days=366)
+    snapshot = AvailabilitySnapshot(session, article_ids, start, horizon)
+    result = []
+    for article in articles:
+        owners = sorted(snapshot.owners[article.id])
+        blocks = [block for block in snapshot.blocks[article.id] if block.starts_at < end and block.ends_at > start]
+        capacity = snapshot.capacities[article.id]
+        reserved = snapshot.peak(article.id, start, end)
+        available_count = max(0, capacity - reserved)
+        next_start = None
+        if not available_count and capacity:
+            duration = end - start
+            for candidate in snapshot.candidate_ends([article.id], start, horizon)[:50]:
+                if candidate + duration <= horizon and capacity - snapshot.peak(article.id, candidate, candidate + duration) > 0:
+                    next_start = candidate.isoformat()
+                    break
+        result.append({
+            "id": article.id, "sku": article.sku, "name": article.name,
+            "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+            "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
+            "description": article.description, "image_url": article.image_url,
+            "image_data": previews.get(article.id, ""),
+            "category": article.category,
+            "owners": owners,
+            "unavailability": [{"reason":row.reason,"start":row.starts_at.isoformat(),"end":row.ends_at.isoformat()} for row in blocks],
+            "buffer_hours": article.buffer_hours, "capacity": capacity,
+            "available_quantity": available_count, "available": available_count > 0,
+            "next_available_start": next_start,
+            "dependencies": [],
+            "billable_dependencies": [],
+        })
+    return result
+
+
 def availability(start, end):
     validate_interval(start, end)
     with Session.begin() as session:
         expire_holds(session)
-        articles = session.scalars(select(Article).where(Article.is_active.is_(True)).order_by(Article.name)).all()
-        from .catalog_images import image_data
-        previews = image_data(session, [article.id for article in articles])
-        result = []
-        for article in articles:
-            from .inventory import inventory_details
-            owners = sorted({inventory_details(asset.id, session, customer=True).get("owner", "") for asset in article.equipment} - {""})
-            from .db import EquipmentBlock
-            blocks=session.scalars(select(EquipmentBlock).join(Equipment,Equipment.id==EquipmentBlock.equipment_id).where(
-                Equipment.article_id==article.id,EquipmentBlock.released_at.is_(None),EquipmentBlock.starts_at<end,EquipmentBlock.ends_at>start)).all()
-            capacity = _capacity(session, article.id)
-            reserved = _reserved_quantity(session, article.id, start, end)
-            available_count = max(0, capacity - reserved)
-            result.append({
-                "id": article.id, "sku": article.sku, "name": article.name,
-                "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
-                "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
-                "description": article.description, "image_url": article.image_url,
-                "image_data": previews.get(article.id, ""),
-                "category": article.category,
-                "owners": owners,
-                "unavailability": [{"reason":row.reason,"start":row.starts_at.isoformat(),"end":row.ends_at.isoformat()} for row in blocks],
-                "buffer_hours": article.buffer_hours, "capacity": capacity,
-                "available_quantity": available_count, "available": available_count > 0,
-                "next_available_start": _nearest_free_start(session, article, start, end, capacity) if not available_count else None,
-                "dependencies": [],
-                "billable_dependencies": [],
-            })
-        return result
+        articles = session.scalars(select(Article).where(Article.is_active.is_(True)).order_by(Article.name, Article.id)).all()
+        return _availability_rows(session, articles, start, end)
+
+
+def availability_page(start, end, page=0, page_size=20, query="", selected_ids=()):
+    """Return the catalogue page and separately refresh all selected articles."""
+    validate_interval(start, end)
+    if page < 0 or not 1 <= page_size <= 100 or len(query) > 200 or len(selected_ids) > 30 or any(item <= 0 for item in selected_ids):
+        raise ValueError("Неверные параметры каталога")
+    selected_ids = list(dict.fromkeys(selected_ids))
+    conditions = [Article.is_active.is_(True)]
+    if query.strip():
+        term = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        searchable = func.concat_ws(" ", Article.name, Article.kind, Article.brand, Article.key_spec, Article.description, Article.sku)
+        conditions.append(searchable.ilike(f"%{term}%", escape="\\"))
+    with Session.begin() as session:
+        expire_holds(session)
+        total = session.scalar(select(func.count()).select_from(Article).where(*conditions))
+        articles = session.scalars(select(Article).where(*conditions).order_by(Article.name, Article.id).offset(page * page_size).limit(page_size)).all()
+        page_ids = {article.id for article in articles}
+        additional_ids = set(selected_ids) - page_ids
+        selected_articles = session.scalars(select(Article).where(Article.id.in_(additional_ids), Article.is_active.is_(True))).all() if additional_ids else []
+        rows = _availability_rows(session, articles + selected_articles, start, end)
+        by_id = {row["id"]: row for row in rows}
+        return [by_id[article.id] for article in articles], [by_id[item] for item in selected_ids if item in by_id], total
+
+
+def nearest_available_period(start, end, requested, horizon_days=90):
+    """Find a quarter-hour slot for the complete selection within the search horizon."""
+    from .schedule import validate_planned_slot, next_working_slot, schedule_enforced
+    validate_interval(start, end, enforce_booking_notice=True)
+    quantities = defaultdict(int)
+    for entry in requested:
+        article_id, quantity = int(entry["article_id"]), int(entry["quantity"])
+        if article_id <= 0 or quantity <= 0:
+            raise ValueError("Укажите оборудование и количество")
+        quantities[article_id] += quantity
+    if not quantities or len(quantities) > 30 or any(quantity > 30 for quantity in quantities.values()):
+        raise ValueError("Укажите не более 30 позиций и 30 единиц каждой позиции")
+    duration = end - start
+    limit = start + timedelta(days=horizon_days)
+    with Session() as session:
+        ids = set(session.scalars(select(Article.id).where(Article.id.in_(quantities), Article.is_active.is_(True))))
+        if ids != set(quantities):
+            return None
+        snapshot = AvailabilitySnapshot(session, list(quantities), start, limit + duration)
+        if any(snapshot.capacities[article_id] < quantity for article_id, quantity in quantities.items()):
+            return None
+        # The date/time controls accept quarter-hour steps; round upward rather
+        # than suggesting a time that the interface cannot represent.
+        utc_start = start.astimezone(timezone.utc)
+        seconds = int(utc_start.timestamp())
+        if utc_start.microsecond or seconds % 900:
+            seconds = (seconds // 900 + 1) * 900
+        candidate = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        while candidate <= limit:
+            if schedule_enforced():
+                candidate = next_working_slot(candidate).astimezone(timezone.utc)
+                if candidate > limit:
+                    break
+                try:
+                    validate_planned_slot(candidate, "Выдача")
+                    validate_planned_slot(candidate + duration, "Приём")
+                except ValueError:
+                    candidate += timedelta(minutes=15)
+                    continue
+            if all(snapshot.capacities[article_id] - snapshot.peak(article_id, candidate, candidate + duration) >= quantity
+                   for article_id, quantity in quantities.items()):
+                return {"start": candidate.isoformat(), "end": (candidate + duration).isoformat()}
+            candidate += timedelta(minutes=15)
+    return None
 
 
 def _normalize_lines(session, requested):
@@ -825,6 +1021,54 @@ def list_bookings(limit=200):
         return session.scalars(_booking_query().where(Booking.deleted_at.is_(None)).order_by(Booking.created_at.desc()).limit(limit)).all()
 
 
+def admin_booking_page(actor_id, page=0, page_size=20, status="all", sort="date", scope="all", booking_id=None, queue="all"):
+    """Filter and order the full staff queue before selecting a page."""
+    from .request_sla import request_sla
+    statuses = ("pending", "needs_changes", "confirmed", "preparing", "ready", "issued",
+                "return_inspection", "returned", "cancelled", "expired")
+    if status not in ("all", *statuses) or sort not in {"date", "status"} or scope not in {"all", "mine", "unassigned", "overdue", "soon"} or page < 0 or queue not in {"all", "review", "handover", "return"}:
+        raise ValueError("Неверный фильтр заявок")
+    with Session.begin() as session:
+        expire_holds(session)
+        conditions = [Booking.deleted_at.is_(None)]
+        if booking_id is not None:
+            conditions.append(Booking.id == booking_id)
+        if queue == "review":
+            conditions.append(Booking.status == "pending")
+        elif queue == "handover":
+            conditions.append(Booking.status.in_({"confirmed", "preparing", "ready"}))
+        elif queue == "return":
+            conditions.append(or_(Booking.status == "return_inspection", and_(Booking.status == "issued", Booking.ends_at <= now())))
+        if status != "all":
+            conditions.append(Booking.status == status)
+        if scope == "mine":
+            conditions.append(Booking.assignee_id == actor_id)
+        elif scope == "unassigned":
+            conditions.extend((Booking.assignee_id.is_(None), Booking.sla_closed_at.is_(None), Booking.status.in_(ACTIVE_STATUSES)))
+        elif scope in {"overdue", "soon"}:
+            candidates = session.scalars(select(Booking).where(*conditions, Booking.sla_closed_at.is_(None), Booking.status.in_(ACTIVE_STATUSES))).all()
+            at = now()
+            matching = [booking.id for booking in candidates if request_sla(booking, at)["breached" if scope == "overdue" else "soon"]]
+            conditions.append(Booking.id.in_(matching))
+        total = session.scalar(select(func.count()).select_from(Booking).where(*conditions))
+        active_first = case((Booking.status.in_(ACTIVE_STATUSES), 0), else_=1)
+        status_order = case({item: index for index, item in enumerate(statuses)}, value=Booking.status, else_=99)
+        ordering = (active_first, status_order, Booking.created_at.desc(), Booking.id.desc()) if sort == "status" else (active_first, Booking.created_at.desc(), Booking.id.desc())
+        items = session.scalars(_booking_query().where(*conditions).order_by(*ordering).offset(page * page_size).limit(page_size)).all()
+        return items, total
+
+
+def admin_queue_counts():
+    """Count actionable staff queues without loading sensitive booking data."""
+    with Session() as session:
+        review, handover, returning = session.execute(select(
+            func.count().filter(Booking.status == "pending"),
+            func.count().filter(Booking.status.in_({"confirmed", "preparing", "ready"})),
+            func.count().filter(or_(Booking.status == "return_inspection", and_(Booking.status == "issued", Booking.ends_at <= now()))),
+        ).where(Booking.deleted_at.is_(None))).one()
+        return {"review": review, "handover": handover, "return": returning}
+
+
 def list_customer_bookings(customer_id):
     with Session.begin() as session:
         expire_holds(session)
@@ -839,10 +1083,12 @@ def list_hidden_test_bookings():
                                .order_by(Booking.created_at.desc()).limit(200)).all()
 
 
-def customer_history_page(customer_id, category, page, page_size=10, number="", booking_id=None):
+def customer_history_page(customer_id, category, page, page_size=10, number="", booking_id=None, sort="date"):
     filters = {"active": ACTIVE_STATUSES, "completed": {"returned"}, "cancelled": {"cancelled", "expired"},
                "all": ACTIVE_STATUSES | {"returned", "cancelled", "expired"}}
-    if category not in filters or page < 0:
+    filters.update({status: {status} for status in filters["all"] if status not in filters})
+    filters["status_cancelled"] = {"cancelled"}
+    if category not in filters or page < 0 or sort not in {"date", "status"}:
         raise ValueError("Неверный фильтр истории")
     with Session() as session:
         conditions = [Booking.customer_id == customer_id, Booking.deleted_at.is_(None), Booking.status.in_(filters[category])]
@@ -856,8 +1102,11 @@ def customer_history_page(customer_id, category, page, page_size=10, number="", 
                 parse_request_number(number)
                 conditions.append(Booking.human_number == number)
         total = session.scalar(select(func.count()).select_from(Booking).where(*conditions))
+        active_first = case((Booking.status.in_(ACTIVE_STATUSES), 0), else_=1)
+        status_order = case({status: index for index, status in enumerate(("pending", "needs_changes", "confirmed", "preparing", "ready", "issued", "return_inspection", "returned", "cancelled", "expired"))}, value=Booking.status, else_=99)
+        ordering = (active_first, status_order, Booking.created_at.desc(), Booking.id.desc()) if sort == "status" else (active_first, Booking.created_at.desc(), Booking.id.desc())
         query = (select(Booking).options(selectinload(Booking.lines).selectinload(BookingLine.article))
-                 .where(*conditions).order_by(Booking.created_at.desc(), Booking.id.desc())
+                 .where(*conditions).order_by(*ordering)
                  .offset(page * page_size).limit(page_size))
         return session.scalars(query).all(), total
 
@@ -1273,9 +1522,36 @@ def list_articles():
         return session.scalars(select(Article).options(selectinload(Article.equipment)).order_by(Article.name)).all()
 
 
+def _catalog_conditions(query="", condition="all"):
+    if condition not in {"all", "available", "maintenance", "retired"}:
+        raise ValueError("Неверное состояние оборудования")
+    conditions = []
+    if query.strip():
+        term = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{term}%"
+        article_text = func.concat_ws(" ", Article.name, Article.kind, Article.brand, Article.key_spec, Article.description, Article.sku)
+        equipment_text = func.concat_ws(" ", Equipment.serial_number, Equipment.asset_inventory_code, Equipment.inventory_number, Equipment.storage_location)
+        conditions.append(or_(article_text.ilike(pattern, escape="\\"), Article.equipment.any(equipment_text.ilike(pattern, escape="\\"))))
+    if condition != "all":
+        conditions.append(Article.equipment.any(Equipment.condition == condition))
+    return conditions
+
+
+def list_articles_page(page, page_size=20, query="", condition="all", options_only=False):
+    if page < 0 or not 1 <= page_size <= 100 or len(query) > 200:
+        raise ValueError("Неверные параметры каталога")
+    conditions = _catalog_conditions(query, condition)
+    with Session() as session:
+        total = session.scalar(select(func.count()).select_from(Article).where(*conditions))
+        statement = select(Article).where(*conditions).order_by(Article.name, Article.id).offset(page * page_size).limit(page_size)
+        if not options_only:
+            statement = statement.options(selectinload(Article.equipment))
+        return session.scalars(statement).all(), total
+
+
 def list_dependencies():
     with Session() as session:
-        return session.scalars(select(ArticleDependency).order_by(
+        return session.scalars(select(ArticleDependency).options(selectinload(ArticleDependency.parent), selectinload(ArticleDependency.child)).order_by(
             ArticleDependency.parent_article_id, ArticleDependency.child_article_id)).all()
 
 

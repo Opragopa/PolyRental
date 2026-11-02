@@ -36,6 +36,21 @@ def inventory_details(equipment_id, session=None, customer=False):
     return result
 
 
+def inventory_details_batch(equipment_ids, session):
+    """Load operator-visible owner and feature details in two queries."""
+    result = {equipment_id: {"features": []} for equipment_id in equipment_ids}
+    if not result:
+        return result
+    for owner in session.scalars(select(EquipmentOwner).where(EquipmentOwner.equipment_id.in_(result))):
+        if owner.name:
+            result[owner.equipment_id]["owner"] = owner.name
+            if owner.contact:
+                result[owner.equipment_id]["owner_contact"] = owner.contact
+    for feature in session.scalars(select(EquipmentFeature).where(EquipmentFeature.equipment_id.in_(result), EquipmentFeature.deleted_at.is_(None)).order_by(EquipmentFeature.id)):
+        result[feature.equipment_id]["features"].append({"id": feature.id, "description": feature.description, "source": feature.source})
+    return result
+
+
 def save_owner(equipment_id, name, contact, actor_id, expected_before=None):
     require_role(actor_id, "manager")
     name, contact = name.strip(), contact.strip()

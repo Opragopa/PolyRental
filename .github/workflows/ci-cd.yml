@@ -65,6 +65,10 @@ jobs:
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/cart-optimistic-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/soft-delete-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
@@ -94,6 +98,30 @@ jobs:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/site-auth-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/loading-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/staff-drafts-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/client-catalog-pages-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/catalog-pages-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/history-support-pages-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/admin-queue-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}

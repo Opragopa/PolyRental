@@ -24,9 +24,9 @@ def test_availability_endpoint_accepts_today_and_rejects_past(monkeypatch):
     monkeypatch.setattr(rental, "now", lambda: fixed)
     monkeypatch.setattr(miniapp, "availability", lambda start, end: [])
     today = datetime(2026, 10, 28, 9, tzinfo=timezone.utc)
-    asyncio.run(miniapp.equipment_availability(today, today + timedelta(hours=1)))
+    asyncio.run(miniapp.equipment_availability(today, today + timedelta(hours=1), page=None))
     past = fixed - timedelta(hours=1)
     with pytest.raises(HTTPException) as error:
-        asyncio.run(miniapp.equipment_availability(past, past + timedelta(hours=2)))
+        asyncio.run(miniapp.equipment_availability(past, past + timedelta(hours=2), page=None))
     assert error.value.status_code == 422
     assert error.value.detail == "Начало аренды уже прошло"

@@ -311,7 +311,7 @@ def test_fresh_migration_chain(monkeypatch):
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 6
-            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261101_34"
+            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261102_36"
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

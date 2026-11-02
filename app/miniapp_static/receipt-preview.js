@@ -31,9 +31,9 @@ export function renderReceiptPdf(host, bytes) {
       await renderTask.promise;
       renderTask = null; page.cleanup();
     }
-    if (!closed) {status.textContent = `Страниц: ${pdf.numPages}`; host.dataset.previewReady = 'true';}
+    if (!closed) {host.querySelector('.receipt-preview-skeleton')?.remove(); status.textContent = `Страниц: ${pdf.numPages}`; host.dataset.previewReady = 'true';}
   })().catch(() => {
-    if (!closed) { status.textContent = 'Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.'; status.setAttribute('role', 'alert'); }
+    if (!closed) { host.querySelector('.receipt-preview-skeleton')?.remove(); status.textContent = 'Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.'; status.setAttribute('role', 'alert'); }
   });
   return {ready, close() {
     closed = true; renderTask?.cancel();

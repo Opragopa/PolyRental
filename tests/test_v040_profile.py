@@ -110,3 +110,113 @@ def test_blocked_client_cannot_create_but_can_open_profile(monkeypatch):
         assert client.get("/api/miniapp/profile/history", headers=headers(42)).status_code == 200
         assert client.put(url, headers=headers(100), json={"blocked": False}).status_code == 200
         assert client.post("/api/miniapp/bookings", headers=headers(42), json=payload).status_code == 201
+
+
+def test_history_status_filter_and_sort_before_pagination(monkeypatch):
+    configure(monkeypatch)
+    base_time = now() - timedelta(days=30)
+    with Session.begin() as session:
+        for i in range(15):
+            status = 'cancelled' if i % 3 == 0 else ('confirmed' if i % 2 else 'pending')
+            session.add(Booking(customer_id=42, customer_name='QA', customer_contact='@qa',
+                                starts_at=now(), ends_at=now() + timedelta(hours=1),
+                                status=status, created_at=base_time + timedelta(minutes=i)))
+        session.add(Booking(customer_id=43, customer_name='Other', customer_contact='@other',
+                            starts_at=now(), ends_at=now() + timedelta(hours=1), status='pending'))
+    with TestClient(app) as client:
+        url = '/api/miniapp/profile/history?category=all&sort=date'
+        first = client.get(url + '&page=0', headers=headers(42)).json()
+        second = client.get(url + '&page=1', headers=headers(42)).json()
+        assert first['total'] == 15
+        assert all(item['status'] != 'cancelled' for item in first['items'])
+        assert all(item['status'] == 'cancelled' for item in second['items'])
+        statuses = client.get('/api/miniapp/profile/history?category=all&sort=status', headers=headers(42)).json()['items']
+        assert [item['status'] for item in statuses] == sorted([item['status'] for item in statuses], key={'pending': 0, 'confirmed': 1}.get)
+        cancelled = client.get('/api/miniapp/profile/history?category=status_cancelled', headers=headers(42)).json()
+        assert cancelled['total'] == 5 and all(item['status'] == 'cancelled' for item in cancelled['items'])
+        assert client.get('/api/miniapp/profile/history?sort=invalid', headers=headers(42)).status_code == 422
+
+
+def test_staff_history_filters_and_sorts_before_pagination(monkeypatch):
+    configure(monkeypatch)
+    base_time = now() - timedelta(days=30)
+    with Session.begin() as session:
+        for i in range(27):
+            status = 'cancelled' if i % 3 == 0 else ('confirmed' if i % 2 else 'pending')
+            session.add(Booking(customer_id=42, customer_name='QA', customer_contact='@qa',
+                                starts_at=now(), ends_at=now() + timedelta(hours=1),
+                                assignee_id=100 if i % 2 else None,
+                                status=status, created_at=base_time + timedelta(minutes=i)))
+    with TestClient(app) as client:
+        base = '/api/miniapp/admin/bookings?page_size=10&page='
+        assert client.get(base + '0', headers=headers(42)).status_code == 403
+        first = client.get(base + '0', headers=headers(100)).json()
+        second = client.get(base + '1', headers=headers(100)).json()
+        third = client.get(base + '2', headers=headers(100)).json()
+        assert first['total'] == 27 and len(first['items']) == 10
+        assert first['queues'] == {'review': 9, 'handover': 9, 'return': 0}
+        review = client.get(base + '0&queue=review', headers=headers(100)).json()
+        assert review['total'] == 9 and all(row['status'] == 'pending' for row in review['items'])
+        assert all(row['status'] != 'cancelled' for row in first['items'])
+        assert all(row['status'] != 'cancelled' for row in second['items'][:8])
+        assert all(row['status'] == 'cancelled' for row in third['items'])
+        assert len({row['id'] for row in first['items'] + second['items'] + third['items']}) == 27
+        chosen = client.get(base + '0&status=cancelled&sort=status', headers=headers(100)).json()
+        assert chosen['total'] == 9 and all(row['status'] == 'cancelled' for row in chosen['items'])
+        mine = client.get(base + '0&scope=mine', headers=headers(100)).json()
+        assert mine['total'] == 13 and all(row['assignee_id'] == 100 for row in mine['items'])
+        target = third['items'][0]['id']
+        linked = client.get(base + f'0&booking_id={target}', headers=headers(100)).json()
+        assert linked['total'] == 1 and linked['items'][0]['id'] == target
+        assert client.get(base + '0&status=fake', headers=headers(100)).status_code == 422
+
+
+def test_staff_history_pages_preserve_allowlist_and_order(monkeypatch):
+    from app.db import Audit, PIIAudit, SupportActivity, SupportThread
+    from app.rental import booking_history
+    configure(monkeypatch)
+    with Session.begin() as session:
+        booking = Booking(customer_id=42, customer_name='QA', customer_contact='@qa', starts_at=now(), ends_at=now()+timedelta(hours=1), status='pending')
+        session.add(booking); session.flush(); booking_id = booking.id
+        session.add_all([Audit(booking_id=booking_id, actor_id=100, action='confirmed') for _ in range(25)])
+        session.add(PIIAudit(booking_id=booking_id, actor_id=200, action='verified'))
+        session.add(PIIAudit(booking_id=booking_id, actor_id=200, action='profile_identity_revealed'))
+        thread = SupportThread(customer_id=42, booking_id=booking_id, request_number='QA', screen='request')
+        session.add(thread); session.flush()
+        session.add(SupportActivity(thread_id=thread.id, actor_id=100, action='claimed'))
+    expected = booking_history(booking_id)
+    with TestClient(app) as client:
+        url = f'/api/miniapp/admin/bookings/{booking_id}/history?page_size=10&page='
+        assert client.get(url+'0', headers=headers(42)).status_code == 403
+        pages = [client.get(url+str(page), headers=headers(100)).json() for page in range(3)]
+        assert all(page['total'] == 27 for page in pages)
+        assert [item for page in pages for item in page['items']] == expected
+        assert 'profile_identity_revealed' not in str(pages)
+        assert client.get(url+'-1', headers=headers(100)).status_code == 422
+
+
+def test_support_thread_pagination_is_private_and_stable(monkeypatch):
+    from app.db import SupportMessage, SupportThread
+    configure(monkeypatch)
+    with Session.begin() as session:
+        for index in range(25):
+            thread = SupportThread(customer_id=42, request_number=f'QA-{index}', screen='profile', created_at=now()-timedelta(minutes=index))
+            session.add(thread); session.flush()
+            if index == 0:
+                session.add(SupportMessage(thread_id=thread.id, sender_id=100, direction='operator', ciphertext=b'x', nonce=b'x', delivered_at=now()))
+        session.add(SupportThread(customer_id=43, request_number='OTHER', screen='profile'))
+    with TestClient(app) as client:
+        url='/api/miniapp/support/threads?page_size=10&page='
+        first=client.get(url+'0', headers=headers(42)).json()
+        second=client.get(url+'1', headers=headers(42)).json()
+        third=client.get(url+'2', headers=headers(42)).json()
+        assert first['total']==25 and [len(part['items']) for part in (first,second,third)]==[10,10,5]
+        assert len({row['id'] for part in (first,second,third) for row in part['items']})==25
+        assert first['items'][0]['status']=='Оператор ответил'
+        assert all(row['request_number']!='OTHER' for part in (first,second,third) for row in part['items'])
+        staff=client.get('/api/miniapp/admin/support?page=0&page_size=10', headers=headers(100)).json()
+        assert staff['total']==26
+        target=third['items'][0]['id']
+        linked=client.get(f'/api/miniapp/admin/support?page=0&thread_id={target}', headers=headers(100)).json()
+        assert linked['total']==1 and linked['items'][0]['id']==target
+        assert client.get('/api/miniapp/admin/support?page=0', headers=headers(42)).status_code==403

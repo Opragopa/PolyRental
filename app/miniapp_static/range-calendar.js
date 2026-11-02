@@ -40,7 +40,7 @@
       date.setUTCMonth(date.getUTCMonth() + amount);
       this.month = date.toISOString().slice(0, 10); this.render();
     }
-    render(focusDay = "") {
+    render(focusDay = "", motion = {}) {
       const doc = this.element.ownerDocument;
       this.element.replaceChildren();
       const header = doc.createElement("div"); header.className = "calendar-head";
@@ -57,6 +57,15 @@
       for (const name of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) { const cell = doc.createElement("span"); cell.textContent = name; weekdays.append(cell); }
       const grid = doc.createElement("div"); grid.className = "calendar-days"; grid.setAttribute("role", "group"); grid.setAttribute("aria-label", "Выбор диапазона дат");
       const first = addDays(this.month, -((new Date(`${this.month}T12:00:00Z`).getUTCDay() + 6) % 7));
+      const revealDays = [];
+      if (motion.revealRange && this.range.start && this.range.end) {
+        for (let index = 0; index < 42; index += 1) {
+          const day = addDays(first, index);
+          if (day >= this.range.start && day <= this.range.end) revealDays.push(day);
+        }
+      }
+      const revealStep = revealDays.length > 1 ? Math.min(32, 460 / (revealDays.length - 1)) : 0;
+      const revealPositions = new Map(revealDays.map((day, index) => [day, index]));
       for (let index = 0; index < 42; index += 1) {
         const day = addDays(first, index);
         const button = doc.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.dataset.date = day;
@@ -65,9 +74,18 @@
         const selected = day === this.range.start || day === this.range.end;
         button.classList.toggle("selected", selected);
         button.classList.toggle("in-range", Boolean(this.range.start && this.range.end && day > this.range.start && day < this.range.end));
+        button.classList.toggle("calendar-day-pop", day === motion.clickedDay);
+        if (revealPositions.has(day)) {
+          button.classList.add("calendar-day-reveal");
+          button.style.setProperty("--range-reveal-delay", `${Math.round(110 + revealPositions.get(day) * revealStep)}ms`);
+        }
         button.setAttribute("aria-pressed", String(selected));
         button.setAttribute("aria-label", new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : ""));
-        button.addEventListener("click", () => { this.range = selectRange(this.range, day, this.minimum); this.onChange(this.range); this.render(day); });
+        button.addEventListener("click", () => {
+          this.range = selectRange(this.range, day, this.minimum);
+          this.onChange(this.range);
+          this.render(day, { clickedDay: day, revealRange: Boolean(this.range.start && this.range.end) });
+        });
         button.addEventListener("keydown", (event) => {
           const offsets = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7, Home: -((index % 7)), End: 6 - (index % 7) };
           if (!(event.key in offsets)) return;

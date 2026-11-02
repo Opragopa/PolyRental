@@ -3,7 +3,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, exists, func, select, text
 from .db import Audit, Booking, PIIAudit, RepairTicket, Session, SupportActivity, SupportMessage, SupportThread
 from .pii import _master_key
 from .roles import staff_allows, configured_ids
@@ -56,15 +56,28 @@ def submit_question(customer_id, booking_id, screen, question):
         return {'id':thread.id, 'owner_id':thread.owner_id, 'request_number':number}
 
 
-def list_threads(owner_id=None, customer_id=None):
+def support_threads_page(customer_id=None, page=0, page_size=20, thread_id=None):
+    if page < 0 or not 1 <= page_size <= 100:
+        raise ValueError('Неверная страница обращений')
+    conditions = []
+    if customer_id is not None:
+        conditions.append(SupportThread.customer_id == customer_id)
+    if thread_id is not None:
+        conditions.append(SupportThread.id == thread_id)
+    responded = exists(select(SupportMessage.id).where(SupportMessage.thread_id == SupportThread.id,
+        SupportMessage.direction == 'operator', SupportMessage.delivered_at.is_not(None)))
     with Session() as session:
-        query = select(SupportThread).order_by(SupportThread.created_at.desc()).limit(100)
-        if customer_id is not None:
-            query = query.where(SupportThread.customer_id == customer_id)
-        rows = session.scalars(query).all()
+        total = session.scalar(select(func.count()).select_from(SupportThread).where(*conditions))
+        rows = session.execute(select(SupportThread, responded.label('responded')).where(*conditions)
+            .order_by(SupportThread.created_at.desc(), SupportThread.id.desc()).offset(page * page_size).limit(page_size)).all()
         return [{'id':row.id, 'request_number':row.request_number, 'status':row.status,
                  'owner_id':row.owner_id, 'screen':row.screen, 'created_at':row.created_at.isoformat(),
-                 'customer_state': 'Оператор ответил' if session.scalar(select(SupportMessage.id).where(SupportMessage.thread_id == row.id, SupportMessage.direction == 'operator', SupportMessage.delivered_at.is_not(None)).limit(1)) else 'Обращение получено'} for row in rows]
+                 'customer_state':'Оператор ответил' if responded else 'Обращение получено'} for row, responded in rows], total
+
+
+def list_threads(owner_id=None, customer_id=None):
+    # Preserve the existing unpaged API contract for older bot and site clients.
+    return support_threads_page(customer_id=customer_id, page_size=100)[0]
 
 
 def claim_thread(thread_id, actor_id):

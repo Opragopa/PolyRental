@@ -36,7 +36,7 @@ from .catalog_titles import catalog_title
 from .catalog_categories import list_categories, create_category
 from .booking_events import claim_notices
 from .request_sla import request_sla
-from .support import (SupportConflict, submit_question, list_threads as list_support_threads,
+from .support import (SupportConflict, submit_question, list_threads as list_support_threads, support_threads_page,
                       claim_thread, read_messages as read_support_messages, reply as support_reply,
                       resolve_thread, reassign_thread, deliver_reply)
 from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode, set_reminders_enabled, set_client_block
@@ -49,14 +49,14 @@ from .db import BookingDocument, Inspection, ReceiptArchive, Session, SupportMes
 from .receipt_archive import ReceiptExpired, customer_receipt_pdf
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
-                  reusable_identity_fields,
+                  reusable_identity_fields, profile_identity_fields,
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
-from .rental import (ClientBlocked, Conflict, assign_booking_assets, availability, booking_history,
-                     claim_booking_operation, create_booking, operation_lease_states,
+from .rental import (ClientBlocked, Conflict, assign_booking_assets, availability, availability_page, booking_history, booking_history_page,
+                     claim_booking_operation, create_booking, operation_lease_states, nearest_available_period,
                      close_repair, delete_booking, restore_booking, set_booking_line_deleted, set_booking_asset_deleted, create_deletion_intent, cancel_deletion_intent, schedule_legacy_deletion, deletion_undo_seconds, reassign_booking, hide_test_booking, set_booking_test_flag, set_article_test_flag, delete_dependency, delete_equipment, get_booking,
-                     list_articles, list_bookings, list_customer_bookings, list_hidden_test_bookings, customer_history_page,
+                     list_articles, list_articles_page, list_bookings, admin_booking_page, admin_queue_counts, list_customer_bookings, list_hidden_test_bookings, customer_history_page,
                      list_dependencies, list_equipment, list_repairs, mark_act_signed,
                      record_inspection, release_booking_operation, save_article, save_dependency, save_equipment,
                      transition, update_booking_contact, validate_interval, return_for_rework)
@@ -147,7 +147,8 @@ async def claim_booking_notifications(user=Depends(require_customer)):
 
 @router.get("/api/miniapp/catalog/categories")
 async def catalog_categories():
-    return {"items": await asyncio.to_thread(list_categories)}
+    from .public_cache import cached_public_value
+    return {"items": await asyncio.to_thread(cached_public_value, "categories", {}, list_categories, 300)}
 
 
 class CategoryRequest(BaseModel):
@@ -368,18 +369,32 @@ async def availability_events(user=Depends(require_customer)):
 
 
 @router.get("/api/miniapp/availability")
-async def equipment_availability(start: datetime = Query(), end: datetime = Query()):
+async def equipment_availability(start: datetime = Query(), end: datetime = Query(),
+                                 page: int | None = Query(default=None, ge=0, le=100000),
+                                 page_size: int = Query(default=20, ge=1, le=100),
+                                 q: str = Query(default="", max_length=200),
+                                 selected: list[int] = Query(default=[])):
     try:
         validate_interval(start, end, enforce_booking_notice=True)
-        items = await asyncio.to_thread(availability, start, end)
+        from .public_cache import cached_public_value
+        if page is None:
+            items = await asyncio.to_thread(cached_public_value, "availability", {"start":start.isoformat(), "end":end.isoformat()},
+                                            lambda: availability(start, end), 5)
+            selected_items, total = [], len(items)
+        else:
+            if len(selected) > 30 or any(item <= 0 for item in selected):
+                raise ValueError("Выберите не более 30 позиций")
+            selected_ids = sorted(set(selected))
+            params = {"start":start.isoformat(), "end":end.isoformat(), "page":page, "page_size":page_size, "q":q, "selected":selected_ids}
+            items, selected_items, total = await asyncio.to_thread(cached_public_value, "availability-page", params,
+                lambda: availability_page(start, end, page, page_size, q, selected_ids), 5)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-
-
     available = [item for item in items if item["available"]]
     return {
         "items": available,
-        "all_items": available + [item for item in items if not item["available"]],
+        "all_items": (available + [item for item in items if not item["available"]]) if page is None else items,
+        "selected_items": selected_items, "page":page, "page_size":page_size, "total":total,
         "unavailable_count": len(items) - len(available),
         "unavailable": [{"name": item["name"], "sku": item["sku"], "available_quantity": 0}
                         for item in items if not item["available"]],
@@ -387,10 +402,30 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
     }
 
 
+class NearestAvailabilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: datetime
+    end: datetime
+    lines: list[BookingLineRequest] = Field(min_length=1, max_length=30)
+
+
+@router.post("/api/miniapp/availability/nearest")
+async def nearest_availability(payload: NearestAvailabilityRequest, user=Depends(require_customer)):
+    _limit_pii(user["id"], "availability_search", 30)
+    try:
+        period = await asyncio.to_thread(nearest_available_period, payload.start, payload.end,
+                                         [line.model_dump() for line in payload.lines])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"period": period, "horizon_days": 90}
+
+
 @router.get("/api/miniapp/schedule")
 async def handover_schedule():
     from .schedule import schedule_policy
-    return schedule_policy()
+    from .public_cache import cached_public_value
+    policy_env = {key: os.getenv(key, "") for key in ("NON_WORKING_DATES", "WORKING_DATES", "ENFORCE_HANDOVER_SCHEDULE")}
+    return await asyncio.to_thread(cached_public_value, "schedule", policy_env, schedule_policy, 300, revision=False)
 
 
 @router.post("/api/miniapp/bookings", status_code=201)
@@ -510,14 +545,26 @@ async def support_question(payload: SupportQuestion, tasks: BackgroundTasks, use
 
 
 @router.get("/api/miniapp/support/threads")
-async def customer_support_threads(user=Depends(require_customer)):
-    rows = await asyncio.to_thread(list_support_threads, customer_id=user["id"])
-    return {"items": [{"id": row["id"], "request_number": row["request_number"], "status": row["customer_state"]} for row in rows]}
+async def customer_support_threads(page: int | None = Query(default=None, ge=0, le=100000),
+                                   page_size: int = Query(default=20, ge=1, le=100), user=Depends(require_customer)):
+    if page is None:
+        rows = await asyncio.to_thread(list_support_threads, customer_id=user["id"])
+        total = len(rows)
+    else:
+        rows, total = await asyncio.to_thread(support_threads_page, customer_id=user["id"], page=page, page_size=page_size)
+    return {"items": [{"id": row["id"], "request_number": row["request_number"], "status": row["customer_state"]} for row in rows], "total":total, "page":page, "page_size":page_size}
 
 
 @router.get("/api/miniapp/admin/support")
-async def admin_support_threads(user=Depends(require_admin)):
-    return {"items": await asyncio.to_thread(list_support_threads), "eligible_owners": sorted(uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator"))}
+async def admin_support_threads(page: int | None = Query(default=None, ge=0, le=100000),
+                                page_size: int = Query(default=20, ge=1, le=100),
+                                thread_id: int | None = Query(default=None, gt=0), user=Depends(require_admin)):
+    if page is None:
+        rows = await asyncio.to_thread(list_support_threads)
+        total = len(rows)
+    else:
+        rows, total = await asyncio.to_thread(support_threads_page, page=page, page_size=page_size, thread_id=thread_id)
+    return {"items": rows, "total":total, "page":page, "page_size":page_size, "eligible_owners": sorted(uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator"))}
 
 
 @router.post("/api/miniapp/admin/support/{thread_id}/claim")
@@ -593,6 +640,12 @@ async def client_profile(user=Depends(require_customer)):
             "start_screen": "management" if role["admin"] else ("booking" if state["client_allowed"] else "blocked")}
 
 
+@router.get("/api/miniapp/profile/identity")
+async def client_profile_identity(user=Depends(require_customer)):
+    _limit_pii(user["id"], "customer_read", 20)
+    return await asyncio.to_thread(profile_identity_fields, user["id"])
+
+
 class ReminderPreference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = Field(strict=True)
@@ -628,11 +681,11 @@ async def customer_bookings(user=Depends(require_customer)):
 
 
 @router.get("/api/miniapp/profile/history")
-async def client_history(category: str = Query(default="active", pattern="^(active|completed|cancelled|all)$"),
+async def client_history(category: str = Query(default="active", pattern="^(active|completed|all|pending|needs_changes|confirmed|preparing|ready|issued|return_inspection|returned|cancelled|status_cancelled|expired)$"),
                          page: int = Query(default=0, ge=0, le=100000), number: str = Query(default="", max_length=32),
-                         booking_id: int | None = Query(default=None, gt=0), user=Depends(require_customer)):
+                         booking_id: int | None = Query(default=None, gt=0), sort: str = Query(default="date", pattern="^(date|status)$"), user=Depends(require_customer)):
     try:
-        bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number, booking_id)
+        bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number, booking_id, sort)
     except ValueError as exc:
         raise HTTPException(422, "Введите полный номер заявки или последние четыре цифры") from exc
     with Session() as session:
@@ -900,9 +953,21 @@ def admin_booking_view(booking):
 
 
 @router.get("/api/miniapp/admin/bookings")
-async def admin_bookings(user=Depends(require_reviewer)):
-    bookings, leases = await asyncio.gather(asyncio.to_thread(list_bookings),
-                                            asyncio.to_thread(operation_lease_states))
+async def admin_bookings(page: int | None = Query(default=None, ge=0, le=100000),
+                         page_size: int = Query(default=20, ge=1, le=100),
+                         status: str = Query(default="all", pattern="^(all|pending|needs_changes|confirmed|preparing|ready|issued|return_inspection|returned|cancelled|expired)$"),
+                         sort: str = Query(default="date", pattern="^(date|status)$"),
+                         scope: str = Query(default="all", pattern="^(all|mine|unassigned|overdue|soon)$"),
+                         booking_id: int | None = Query(default=None, gt=0),
+                         queue: str = Query(default="all", pattern="^(all|review|handover|return)$"),
+                         user=Depends(require_reviewer)):
+    if page is None:
+        bookings, leases = await asyncio.gather(asyncio.to_thread(list_bookings), asyncio.to_thread(operation_lease_states))
+        total = len(bookings)
+    else:
+        (bookings, total), leases = await asyncio.gather(
+            asyncio.to_thread(admin_booking_page, user["id"], page, page_size, status, sort, scope, booking_id, queue),
+            asyncio.to_thread(operation_lease_states))
     items = []
     for booking in bookings:
         state = leases.get(booking.id)
@@ -914,13 +979,17 @@ async def admin_bookings(user=Depends(require_reviewer)):
                   if state and not state["expired"] else None)
         items.append(admin_booking_view(booking) | {"operation_lease": active,
                                                    "operation_lease_state": state})
-    return {"items": items, "undo_seconds": deletion_undo_seconds()}
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "queues": await asyncio.to_thread(admin_queue_counts), "undo_seconds": deletion_undo_seconds()}
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/history")
-async def admin_booking_history(booking_id: int, user=Depends(require_reviewer)):
+async def admin_booking_history(booking_id: int, page: int | None = Query(default=None, ge=0, le=100000),
+                                page_size: int = Query(default=20, ge=1, le=100), user=Depends(require_reviewer)):
     try:
-        return {"items": await asyncio.to_thread(booking_history, booking_id)}
+        if page is None:
+            return {"items": await asyncio.to_thread(booking_history, booking_id)}
+        items, total = await asyncio.to_thread(booking_history_page, booking_id, page, page_size)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -1152,12 +1221,19 @@ async def admin_hidden_test_bookings(user=Depends(require_system_admin)):
 
 
 @router.get("/api/miniapp/admin/catalog")
-async def admin_catalog(user=Depends(require_admin)):
-    from .inventory import inventory_details
+async def admin_catalog(page: int | None = Query(default=None, ge=0, le=100000), page_size: int = Query(default=20, ge=1, le=100),
+                        q: str = Query(default="", max_length=200), condition: str = Query(default="all", pattern="^(all|available|maintenance|retired)$"),
+                        user=Depends(require_admin)):
+    from .inventory import inventory_details_batch
     from .catalog_images import image_data
-    articles = await asyncio.to_thread(list_articles)
+    if page is None:
+        articles = await asyncio.to_thread(list_articles)
+        total = len(articles)
+    else:
+        articles, total = await asyncio.to_thread(list_articles_page, page, page_size, q, condition)
     with Session() as session:
         previews = image_data(session, [article.id for article in articles])
+        details = inventory_details_batch([asset.id for article in articles for asset in article.equipment], session)
     dependencies = await asyncio.to_thread(list_dependencies)
     return {"categories": await asyncio.to_thread(list_categories), "articles": [{"id": article.id, "sku": article.sku, "name": article.name,
                            "is_test": article.is_test,
@@ -1176,13 +1252,22 @@ async def admin_catalog(user=Depends(require_admin)):
                                           "inventory_code": asset.asset_inventory_code or "",
                                           "condition": asset.condition, "location": asset.storage_location,
                                           "health": asset.health_percent, "charge": asset.charge_percent,
-                                          **inventory_details(asset.id)}
+                                          **details[asset.id]}
                                          for asset in article.equipment]}
                           for article in articles],
             "dependencies": [{"parent_article_id": item.parent_article_id,
                                "child_article_id": item.child_article_id,
+                               "parent_name": item.parent.name, "child_name": item.child.name,
                                "quantity": item.quantity, "billable": item.billable}
-                              for item in dependencies]}
+                              for item in dependencies], "total":total, "page":page, "page_size":page_size}
+
+
+@router.get("/api/miniapp/admin/catalog/options")
+async def admin_catalog_options(page: int = Query(default=0, ge=0, le=100000), page_size: int = Query(default=20, ge=1, le=100),
+                                q: str = Query(default="", max_length=200), user=Depends(require_admin)):
+    articles, total = await asyncio.to_thread(list_articles_page, page, page_size, q, "all", True)
+    return {"items":[{"id": article.id, "name": article.name, "sku":article.sku, "description":article.description, "category":article.category} for article in articles],
+            "total":total, "page":page, "page_size":page_size}
 
 
 @router.put("/api/miniapp/admin/catalog/articles/{article_id}/photo")
@@ -1219,6 +1304,22 @@ async def admin_import_catalog_csv(file: UploadFile = File(...), user=Depends(re
         raise HTTPException(409, "Артикул или серийный номер уже добавлен другим оператором") from exc
 
 
+class ArticleExpected(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sku: str | None = None
+    name: str | None = None
+    kind: str | None = None
+    brand: str | None = None
+    key_spec: str | None = None
+    description: str | None = None
+    composition: str | None = None
+    category: str | None = None
+    inspection_profile: str | None = None
+    buffer_hours: int | None = None
+    image_url: str | None = None
+    is_active: bool | None = None
+
+
 class ArticleRequest(BaseModel):
     id: int | None = None
     sku: str = Field(min_length=1, max_length=80)
@@ -1234,6 +1335,7 @@ class ArticleRequest(BaseModel):
     buffer_hours: int = Field(default=24, ge=0, le=168)
     image_url: str = Field(default="", max_length=500)
     active: bool = True
+    expected_before: ArticleExpected | None = None
 
 
 @router.post("/api/miniapp/admin/catalog/articles")
@@ -1243,12 +1345,26 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
             save_article, payload.sku, payload.name, payload.description, Decimal("0"),
             payload.category, payload.inspection_profile, payload.buffer_hours,
             payload.image_url, payload.id, payload.active, payload.composition,
-            payload.kind, payload.brand, payload.key_spec, user["id"])
+            payload.kind, payload.brand, payload.key_spec, user["id"],
+            expected_before=payload.expected_before.model_dump(exclude_unset=True) if payload.id and payload.expected_before else None)
         return {"id": article_id}
     except IntegrityError as exc:
         raise HTTPException(422, "Артикул с таким SKU уже существует") from exc
-    except (ValueError, Conflict) as exc:
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+class EquipmentExpected(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    article_id: int | None = None
+    serial_number: str | None = None
+    asset_inventory_code: str | None = None
+    condition: str | None = None
+    storage_location: str | None = None
+    health_percent: int | None = None
+    charge_percent: int | None = None
 
 
 class EquipmentRequest(BaseModel):
@@ -1260,6 +1376,7 @@ class EquipmentRequest(BaseModel):
     location: str = Field(default="", max_length=120)
     health: int | None = Field(default=None, ge=0, le=100)
     charge: int | None = Field(default=None, ge=0, le=100)
+    expected_before: EquipmentExpected | None = None
 
 
 @router.post("/api/miniapp/admin/catalog/equipment")
@@ -1268,11 +1385,14 @@ async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_a
         equipment_id = await asyncio.to_thread(
             save_equipment, "", "", "", 0, payload.condition, payload.id,
             None, payload.article_id, payload.location, payload.health, payload.charge,
-            payload.serial, payload.inventory_code)
+            payload.serial, payload.inventory_code,
+            expected_before=payload.expected_before.model_dump(exclude_unset=True) if payload.id and payload.expected_before else None)
         return {"id": equipment_id}
     except IntegrityError as exc:
         raise HTTPException(422, "Экземпляр с таким инвентарным кодом уже существует") from exc
-    except (ValueError, Conflict) as exc:
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
 

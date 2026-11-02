@@ -1,4 +1,13 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
   db:
     image: postgres:16
     environment:
@@ -16,6 +25,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:${POSTGRES_PASSWORD:-polyrental}@db:5432/polyrental
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"
     volumes:
@@ -48,8 +58,11 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://polyrental:polyrental_test@db_test:5432/polyrental_test
       ADMIN_IDS: '100'
+      POLYRENTAL_TEST_REDIS_URL: redis://redis:6379/15
     depends_on:
       db_test:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 volumes:
   pgdata:
