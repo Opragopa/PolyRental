@@ -55,6 +55,18 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       await page.locator('#tab-orders').click();
       assert.equal(identityRequests, 0);
       assert.equal(await page.locator('#profile-avatar-fallback').innerText(), 'Q');
+      for (const width of [320, 390, 1440]) {
+        await page.setViewportSize({width, height:844});
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `Profile overflows at ${width}px`);
+        const layout = await page.evaluate(() => {
+          const card = document.querySelector('.profile-card').getBoundingClientRect();
+          const identity = document.querySelector('.profile-private').getBoundingClientRect();
+          return { cardTop:card.top, cardBottom:card.bottom, identityTop:identity.top };
+        });
+        if (width <= 390) assert.ok(layout.identityTop >= layout.cardBottom - 1);
+        else assert.ok(Math.abs(layout.identityTop - layout.cardTop) < 2);
+      }
+      await page.setViewportSize({width:390, height:844});
       await page.getByRole('button',{name:'Показать данные'}).click();
       assert.equal(identityRequests, 1);
       await page.locator('#profile-identity-fields').getByText('Номер паспорта:', {exact:false}).waitFor();
