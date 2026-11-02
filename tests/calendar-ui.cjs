@@ -146,7 +146,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     assert.deepEqual(reviews[1].fields,["student_front"]);
     assert.deepEqual(errors,[]);
     await page.close();
-    // Exercise native SDK button/activation/theme semantics, separately from DOM buttons.
+    // Telegram keeps the action in the Web App, above fixed bottom navigation.
     const native=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
     const nativeErrors=[];native.on("pageerror",error=>nativeErrors.push(error.message));
     const sdk=`window.__qaSdk={visible:false,enabled:false,theme:"light",events:{}};
@@ -166,16 +166,17 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     });
     await native.clock.install({time:new Date("2026-10-26T10:00:00Z")});
     await native.goto("http://polyrental.test/miniapp");
-    assert.equal(await native.locator("#action-bar").isHidden(),true);
+    assert.equal(await native.locator("#action-bar").isVisible(),true);
     assert.equal(await native.locator(".tabs").isVisible(),true);
-    assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[true,false]);
+    assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);
     await native.locator('[data-date="2026-10-30"]').tap();
     await native.locator('[data-date="2026-10-31"]').tap();
-    assert.equal(await native.evaluate(()=>__qaSdk.enabled),true);
+    assert.equal(await native.locator("#main-button").isEnabled(),true);
+    assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);
     await native.evaluate(()=>{Telegram.WebApp.colorScheme="dark";__qaSdk.events.themeChanged();});
     assert.equal(await native.locator("html").getAttribute("data-theme"),"dark");
     await native.locator('[data-date="2026-10-30"]').tap();
-    assert.equal(await native.evaluate(()=>__qaSdk.enabled),false);
+    assert.equal(await native.locator("#main-button").isDisabled(),true);
     assert.deepEqual(nativeErrors,[]);await native.close();
     console.log(JSON.stringify({engine:engineName,passed:results.length+3,viewports:results},null,2));
   } finally { await browser.close(); }

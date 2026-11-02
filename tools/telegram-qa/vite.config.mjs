@@ -12,6 +12,12 @@ const appSource = fileURLToPath(new URL("../../app/miniapp_static/app.js", impor
 const releaseVersion = readFileSync(new URL("../../VERSION", import.meta.url), "utf8").trim();
 
 export default defineConfig({
+  resolve: {
+    // The production HTML uses this absolute path. Vite needs the matching
+    // source mapping as well, otherwise TMA Studio cannot pre-bundle dynamic
+    // imports such as receipt-preview.js.
+    alias: { "/miniapp/static": fileURLToPath(new URL("../../app/miniapp_static", import.meta.url)) },
+  },
   cacheDir: `node_modules/.vite-${mode}`,
   plugins: [
     {
@@ -19,6 +25,21 @@ export default defineConfig({
       enforce: "pre",
       configureServer(server) {
         server.middlewares.use((req, _res, next) => {
+          const assetPath = req.url?.split("?")[0] || "";
+          if (assetPath.startsWith("/miniapp/static/")) {
+            const filename = assetPath.slice("/miniapp/static/".length);
+            if (!filename.includes("/") && filename && filename !== "." && filename !== "..") {
+              try {
+                const asset = new URL(`../../app/miniapp_static/${filename}`, import.meta.url);
+                const contentType = filename.endsWith(".css") ? "text/css" : filename.endsWith(".mjs") ? "text/javascript" : filename.endsWith(".js") ? "text/javascript" : "application/octet-stream";
+                _res.setHeader("Content-Type", contentType);
+                _res.end(readFileSync(asset));
+                return;
+              } catch {
+                // Let Vite provide its normal 404 response for an unknown asset.
+              }
+            }
+          }
           if (mode === "devkit" && req.url?.split("?")[0] === "/qa/devkit-sdk.js") {
             _res.setHeader("Content-Type", "application/javascript");
             _res.end(devkitSdk());

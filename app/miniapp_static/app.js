@@ -5,7 +5,6 @@
   const preview = new URLSearchParams(location.search).get("preview") === "1";
   const authorized = Boolean(tg?.initData);
   const keyboardMode = !authorized && !preview && Boolean(tg?.sendData) && Boolean(tg?.platform) && tg.platform !== "unknown";
-  const nativeButtons = (authorized || keyboardMode) && Boolean(tg?.MainButton);
   const draftKey = `polyrental-booking-draft-v2:${tg?.initDataUnsafe?.user?.id || "local"}`;
   const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
@@ -40,11 +39,11 @@
     return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
   const categoryMeta = {
-    camera: ["Камера", "◉"], optics: ["Оптика", "◌"], light: ["Свет", "✦"],
-    battery: ["Питание", "▰"], accessory: ["Аксессуар", "◆"], generic: ["Оборудование", "▣"],
+    camera: ["Камера", "camera"], optics: ["Оптика", "lens"], light: ["Свет", "light"],
+    battery: ["Питание", "battery"], accessory: ["Аксессуар", "accessory"], generic: ["Оборудование", "equipment"],
   };
   function setCategories(categories) {
-    for (const category of categories) categoryMeta[category.code] = [category.name, categoryMeta[category.code]?.[1] || "▣"];
+    for (const category of categories) categoryMeta[category.code] = [category.name, categoryMeta[category.code]?.[1] || "equipment"];
   }
   function categoryOptions(selected) {
     return Object.entries(categoryMeta).map(([code, meta]) => `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(meta[0])}</option>`).join("");
@@ -68,7 +67,7 @@
     if(item.image_data && /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(item.image_data))return `<img class="${className}-photo" src="${escapeHtml(item.image_data)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">`;
     if (item.image_url && /^https:\/\//i.test(item.image_url)) return `<img class="${className}-photo" src="${escapeHtml(item.image_url)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">`;
     const meta = categoryMeta[item.category] || categoryMeta.generic;
-    return `<div class="${className}-placeholder" aria-label="${escapeHtml(meta[0])}"><span aria-hidden="true">${meta[1]}</span><small>${escapeHtml(meta[0])}</small></div>`;
+    return `<div class="${className}-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><small>${escapeHtml(meta[0])}</small></div>`;
   }
   function conditionLabel(condition) { return ({ available: "Доступен", maintenance: "На ремонте", retired: "Выведен из эксплуатации" })[condition] || condition; }
   function toIso(value) {
@@ -380,18 +379,15 @@
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
     const showAction = state.view === "flow" && !done && $("onboarding-dialog").hidden && $("support-dialog").hidden;
-    $("action-bar").hidden = !showAction || nativeButtons;
+    $("action-bar").hidden = !showAction;
     $("back-button").hidden = state.step === 0;
     const labels = ["Далее к каталогу", "К подборке", "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
     $("main-button").disabled = state.busy || (state.step === 0 && Boolean(dateValidationMessage())) || (!authorized && !keyboardMode && !preview);
-    if (nativeButtons) {
-      tg.MainButton.setText(state.busy ? "Подождите…" : labels[state.step] || "Продолжить");
-      if (showAction) tg.MainButton.show(); else tg.MainButton.hide();
-      if ($("main-button").disabled) tg.MainButton.disable(); else tg.MainButton.enable();
-      if (state.step > 0 && !done && state.view === "flow") tg.BackButton?.show(); else tg.BackButton?.hide();
-      if (state.busy) tg.MainButton.showProgress?.(); else tg.MainButton.hideProgress?.();
-    }
+    // A previously displayed native control can survive a Mini App reopen.
+    // Always remove it before rendering the in-app action bar.
+    tg?.MainButton?.hide();
+    tg?.BackButton?.hide();
     if (tg && (authorized || keyboardMode)) {
       if (done) tg.disableClosingConfirmation?.(); else tg.enableClosingConfirmation?.();
     }
@@ -2449,7 +2445,7 @@
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
   else if (hasDraft && restoredPeriod) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
-  if (nativeButtons) { tg.MainButton.onClick(next); tg.BackButton?.onClick(back); tg.expand?.(); }
+  tg?.expand?.();
   if (authorized) {
     Promise.all([api("/api/miniapp/me"), api("/api/miniapp/profile").catch(() => null), api("/api/miniapp/cart").catch(() => null)]).then(([role, profileState, cart]) => {
       state.role = role; state.profile = profileState; $("tab-admin").hidden = !role.admin; $("admin-hidden-tests").hidden = !profileState?.system_admin;

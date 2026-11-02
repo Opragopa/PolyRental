@@ -7,7 +7,8 @@
     "emulator": "node run-emulator.mjs",
     "devkit": "tma-devkit dev --port 15188 --app http://localhost:15174/miniapp",
     "check:init-data": "node check-init-data.mjs",
-    "check:emulator": "node check-emulator.mjs"
+    "check:emulator": "node check-emulator.mjs",
+    "qa:visual": "node ../../tests/visual-qa.cjs"
   },
   "devDependencies": {
     "telegram-mock-init-data": "0.1.0",
