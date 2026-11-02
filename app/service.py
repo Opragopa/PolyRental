@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -21,11 +20,6 @@ def now():
 def validate_interval(start, end, enforce_booking_notice=False):
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("Укажите корректные дату и время начала и возврата")
-    if enforce_booking_notice:
-        moscow = ZoneInfo("Europe/Moscow")
-        earliest_date = now().astimezone(moscow).date() + timedelta(days=3)
-        if start.astimezone(moscow).date() < earliest_date:
-            raise ValueError("Бронирование доступно минимум за 3 дня")
     if start < now() - timedelta(minutes=1):
         raise ValueError("Начало аренды уже прошло")
 

@@ -96,7 +96,7 @@
     return `${parts.year}-${parts.month}-${parts.day}`;
   }
   const addIsoDays = window.PolyRentalCalendar.addDays;
-  function minimumBookingDate() { return addIsoDays(moscowDateIso(), 3); }
+  function minimumBookingDate() { return moscowDateIso(); }
   function bookingDateLabel(value) {
     return new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long"}).format(new Date(`${value}T12:00:00Z`));
   }
@@ -1890,7 +1890,7 @@
 
   async function editRequestDialog(order, manager = false, change = null) {
     const values = change?.after || {start:order.starts_at,end:order.ends_at,lines:order.items.map(item=>({article_id:item.id,quantity:item.quantity,name:item.title||item.name}))};
-    const content=`<p>Время по МСК. Начало — минимум через 3 дня, в рабочее время.</p><label class="field"><span>Начало</span><input name="start" type="datetime-local" min="${minimumBookingDate()}T00:00" value="${moscowInput(values.start)}" required></label><label class="field"><span>Возврат</span><input name="end" type="datetime-local" value="${moscowInput(values.end)}" required></label><div class="request-edit-lines">${values.lines.map(line=>`<label class="field"><span>${escapeHtml(line.name||order.items.find(item=>item.id===line.article_id)?.name||String(line.article_id))}</span><input name="quantity-${line.article_id}" type="number" min="0" max="30" value="${line.quantity}" required></label>`).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>Клиенту придёт уведомление. На подтверждение — 24 часа.</p>':""}`;
+    const content=`<p>Время по МСК. Начало — с текущего дня, в рабочее время.</p><label class="field"><span>Начало</span><input name="start" type="datetime-local" min="${minimumBookingDate()}T00:00" value="${moscowInput(values.start)}" required></label><label class="field"><span>Возврат</span><input name="end" type="datetime-local" value="${moscowInput(values.end)}" required></label><div class="request-edit-lines">${values.lines.map(line=>`<label class="field"><span>${escapeHtml(line.name||order.items.find(item=>item.id===line.article_id)?.name||String(line.article_id))}</span><input name="quantity-${line.article_id}" type="number" min="0" max="30" value="${line.quantity}" required></label>`).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>Клиенту придёт уведомление. На подтверждение — 24 часа.</p>':""}`;
     const data=await workflowDialog(manager?"Изменить заявку":"Исправить заявку",content,manager?"Подтвердить":"Подтверждаю",dialog=>{
       const add=dialog.querySelector(".request-add-position");
       add.addEventListener("click",async()=>{

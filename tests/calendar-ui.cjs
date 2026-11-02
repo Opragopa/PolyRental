@@ -38,7 +38,10 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         });
         assert.equal(await page.locator(".calendar-day").count(),42);
         assert.equal(await page.locator("#main-button").isDisabled(),true);
-        assert.equal(await page.locator('[data-date="2026-10-26"]').isDisabled(),true);
+        assert.equal(await page.locator('[data-date="2026-10-26"]').isDisabled(),false);
+        assert.equal(await page.locator('[data-date="2026-10-25"]').isDisabled(),true);
+        assert.equal(await page.locator("#app-version").innerText(), `v${version}`);
+        assert.equal(await page.locator("#app-version").isVisible(), true);
         await page.locator('[data-date="2026-10-30"]').click();
         assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
         assert.equal(await page.locator("#start-time").isDisabled(),true);

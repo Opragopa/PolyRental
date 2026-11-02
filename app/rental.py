@@ -203,11 +203,7 @@ def validated_rate(value):
 def validate_interval(start, end, enforce_booking_notice=False):
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("Укажите корректные дату и время начала и возврата")
-    moscow = ZoneInfo("Europe/Moscow")
     if enforce_booking_notice:
-        earliest_date = now().astimezone(moscow).date() + timedelta(days=3)
-        if start.astimezone(moscow).date() < earliest_date:
-            raise ValueError("Бронирование доступно минимум за 3 дня")
         from .schedule import validate_planned_slot
         validate_planned_slot(start, "Выдача")
         validate_planned_slot(end, "Приём")

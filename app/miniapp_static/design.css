@@ -4,7 +4,7 @@
 .shell, .dates-view .shell { padding-top: max(20px, env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px)); padding-left: max(20px, env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px)); }
 .topbar, .dates-view .topbar { min-height: 24px; padding: 0; margin-bottom: 16px; border: 0; }
 .brand { font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: 0; }
-.brand-mark, .topbar-note, .topbar .app-version, .step-kicker { display: none; }
+.brand-mark, .topbar-note, .step-kicker { display: none; }
 .panel-head, .dates-view #step-dates .panel-head { margin: 0 0 16px; gap: 12px; }
 .panel-head h2, .dates-view #step-dates h2 { font-size: 24px; font-weight: 700; line-height: 1.2; letter-spacing: -.025em; }
 .button { min-height: 48px; padding: 14px 16px; font-size: 14px; font-weight: 700; border-radius: var(--card-radius); }
