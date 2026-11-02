@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from app import __version__
+
 router = APIRouter()
 COOKIE = "polyrental_site_session"
 STATE_COOKIE = "polyrental_login_state"
@@ -86,7 +88,7 @@ def site_login():
         raise HTTPException(503, "Вход через Telegram ещё не настроен")
     nonce = secrets.token_urlsafe(32)
     callback = escape(f"{_origin()}/site/auth?state={nonce}", quote=True)
-    page = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход — ПолиРентал</title><link rel="stylesheet" href="/miniapp/static/style.css"><link rel="stylesheet" href="/miniapp/static/design.css"><script src="/miniapp/static/theme.js"></script></head><body class="login-page"><div class="login-shell"><header class="login-header"><div class="brand">ПолиРентал</div><div class="theme-switch" role="radiogroup" aria-label="Тема оформления"><label><input type="radio" name="theme" value="light"><span>Светлая</span></label><label><input type="radio" name="theme" value="dark"><span>Тёмная</span></label><label><input type="radio" name="theme" value="auto"><span>Авто</span></label></div></header><main class="login-card"><div class="login-icon" aria-hidden="true">П</div><p class="eyebrow">АРЕНДА ОБОРУДОВАНИЯ</p><h1>Всё для вашей съёмки</h1><p class="login-description">Войдите через Telegram, чтобы выбрать технику, оформить бронь и следить за заявками.</p><div class="login-widget"><script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{escape(username, quote=True)}" data-size="large" data-auth-url="{callback}" data-request-access="write"></script></div><p class="login-hint">Для входа понадобится аккаунт Telegram</p></main></div></body></html>'''
+    page = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход — ПолиРентал</title><link rel="stylesheet" href="/miniapp/static/style.css?v={escape(__version__, quote=True)}"><link rel="stylesheet" href="/miniapp/static/design.css?v={escape(__version__, quote=True)}"><script src="/miniapp/static/theme.js?v={escape(__version__, quote=True)}"></script></head><body class="login-page"><div class="login-shell"><header class="login-header"><div class="brand"><span>ПолиРентал</span><span class="app-version">v{escape(__version__)}</span></div></header><main class="login-card"><div class="login-icon" aria-hidden="true">П</div><p class="eyebrow">АРЕНДА ОБОРУДОВАНИЯ</p><h1>Всё для вашей съёмки</h1><p class="login-description">Войдите через Telegram, чтобы выбрать технику, оформить бронь и следить за заявками.</p><div class="login-widget"><script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="{escape(username, quote=True)}" data-size="large" data-auth-url="{callback}" data-request-access="write"></script></div><p class="login-hint">Для входа понадобится аккаунт Telegram</p></main></div></body></html>'''
     response = HTMLResponse(page, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
     _cookie(response, STATE_COOKIE, signer.dumps({"state": nonce}), 600)
     return response
