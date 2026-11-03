@@ -88,7 +88,7 @@
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, onboardingLoading: false, onboardingPending: false, profileFilter: "all", profileSort: "date", profilePage: 0, profileNumber: "", adminRequestFilter: "all", adminStatus: "all", adminSort: "date", adminPage: 0, adminTargetId: null, adminQueue: "all", supportPage: 0, supportFilterId: null, cartVersion: null };
   const clientCatalog = {page:0, pageSize:20, total:0, paged:null, pageItems:[], timer:null, category:"", categories:[]};
-  const catalogView = { category: "", query: "", status: "all", page: 0, sequence: 0, timer: null, expanded: new Set() };
+  const catalogView = { layout: "list", category: "", query: "", status: "all", page: 0, sequence: 0, timer: null, expanded: new Set() };
   let selectedRequestId = null;
   let selectedCustomerOrderId = null;
   let pendingDeletion = null;
@@ -98,6 +98,7 @@
   let profileIdentitySequence = 0;
   let availabilitySequence = 0;
   let nearestProposal = null;
+  let nearestApplying = false;
   let leaseRefreshTimer = null;
   let adminOrdersSnapshot = null, customerOrdersSnapshot = null, workflowRefreshBusy = false;
   let addressSuggestTimer = null;
@@ -699,7 +700,7 @@
     $("items-status").textContent=message;$("items-status").hidden=false;$("retry-items").hidden=false;
   }
   async function refreshAvailability(invalidated = false) {
-    if (!authorized || state.view !== "flow" || state.step !== 1 || state.busy || cartLocked || document.hidden) return;
+    if (!authorized || state.view !== "flow" || state.step !== 1 || state.busy || cartLocked || nearestApplying || document.hidden) return;
     const sequence = ++availabilitySequence, start = $("start").value, end = $("end").value;
     if(invalidated===true)markAvailabilityStale();
     try {
@@ -806,7 +807,7 @@
         const searchDates = document.createElement("button"); searchDates.type = "button"; searchDates.className = "button ghost compact";
         searchDates.textContent = selected ? "Нужно больше — найти сроки" : "Добавить для поиска сроков";
         searchDates.setAttribute("aria-label", `${searchDates.textContent}: ${catalogTitle(item)}`);
-        searchDates.addEventListener("click", () => { changeQuantity(quantity + 1); $("nearest-period").scrollIntoView({block:"nearest"}); });
+        searchDates.addEventListener("click", () => { changeQuantity(quantity + 1); $("nearest-period").scrollIntoView({block:"nearest", behavior: reducedMotion?.matches ? "auto" : "smooth"}); $("nearest-search").click(); });
         card.querySelector(".item-main").append(searchDates);
       }
       if (!availabilityFresh) card.querySelector(".available-badge").textContent = "Нужна свежая проверка";
@@ -822,7 +823,7 @@
     $("client-catalog-page").textContent = `${clientCatalog.page + 1} / ${pages}`;
     updateCartCounters();
     const shortage = [...state.quantities].some(([id, quantity]) => quantity > (state.items.find(item => item.id === id)?.available_quantity || 0));
-    $("nearest-period").hidden = !authorized || preview || !shortage;
+    $("nearest-period").hidden = !authorized || preview || state.quantities.size === 0;
     if (nearestProposal && nearestProposal.key !== nearestSelectionKey()) { nearestProposal = null; $("nearest-status").textContent = ""; $("nearest-apply").hidden = true; }
   }
   function nearestSelectionKey() { return JSON.stringify([$("start").value, $("end").value, [...state.quantities].sort((a,b) => a[0] - b[0])]); }
@@ -2132,7 +2133,17 @@
       const searchText = [article.title, article.name, article.kind, article.brand, article.key_spec, article.description, article.sku, ...article.equipment.flatMap((asset) => [asset.serial, asset.inventory_code, asset.asset_code, asset.location])].join(" ").toLocaleLowerCase("ru-RU");
       return (!catalogView.category || categoryMatches(article.category)) && (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
     });
-    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary);
+    const layoutControls = document.createElement("div"); layoutControls.className = "catalog-layout admin-catalog-layout"; layoutControls.hidden = Boolean(categoryIndex);
+    layoutControls.setAttribute("role", "group"); layoutControls.setAttribute("aria-label", "Вид каталога управления");
+    const articleGrid = document.createElement("div"); articleGrid.className = "admin-catalog-items";
+    for (const [layout, title, icon] of [["list", "Список", "list"], ["grid", "Плитка", "grid"]]) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "button ghost catalog-layout-icon";
+      button.setAttribute("aria-label", title); button.title = title; button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`;
+      button.addEventListener("click", () => { catalogView.layout = layout; articleGrid.classList.toggle("tiles", layout === "grid"); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
+      button.setAttribute("aria-pressed", String(catalogView.layout === layout)); layoutControls.append(button);
+    }
+    articleGrid.classList.toggle("tiles", catalogView.layout === "grid"); content.append(layoutControls);
+    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary, articleGrid);
     for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
@@ -2225,7 +2236,7 @@
         (assetIndex < 3 ? equipmentList : extraAssets.lastElementChild).append(row);
       }
       if (extraAssets) equipmentList.append(extraAssets);
-      content.append(card);
+      articleGrid.append(card);
     }
     content.append(toolbar, operations);
     if (result.page != null) {
@@ -2404,6 +2415,17 @@
     return values.map((value) => `<option value="${value}" ${value === selected ? "selected" : ""}>${labels[value] || value}</option>`).join("");
   }
 
+  document.addEventListener("click", event => {
+    const backdrop = event.target;
+    if (!window.matchMedia("(min-width: 768px)").matches || !backdrop?.classList?.contains("dialog-backdrop") || backdrop.classList.contains("workflow-dialog")) return;
+    const closeId = {"support-dialog":"support-close", "onboarding-dialog":"onboarding-skip", "rework-dialog":"rework-cancel", "identity-review-dialog":"identity-review-cancel"}[backdrop.id];
+    if (!closeId || backdrop.hidden) return;
+    const sensitive = [...backdrop.querySelectorAll('textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])')].some(input => input.type === "file" ? input.files?.length : input.value.trim());
+    if (sensitive && !window.confirm("Отменить? Изменения не сохранятся.")) return;
+    $(closeId).click();
+  });
+  $("document-viewer").addEventListener("click", event => { if (event.target === $("document-viewer") && window.matchMedia("(min-width: 768px)").matches) closeDocumentViewer(); });
+
   function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null) {
     return new Promise((resolve) => {
       const previous = document.activeElement;
@@ -2411,8 +2433,9 @@
       dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-label", title);
       dialog.innerHTML = `<form class="dialog-card"><h2>${escapeHtml(title)}</h2>${content}<div class="action-row"><button type="button" class="button ghost workflow-cancel">Отмена</button><button type="submit" class="button primary">${escapeHtml(submitLabel)}</button></div></form>`;
       let pending=false;
-      const finish = (value) => { if(pending)return; if (value === null && staffFormDirty(dialog.querySelector("form")) && !window.confirm("Отменить несохранённые изменения?")) return; const previewUrl = dialog.querySelector(".catalog-upload-preview")?.dataset.url; if (previewUrl) URL.revokeObjectURL(previewUrl); dialog.remove(); if (previous?.isConnected) previous.focus({preventScroll:true}); resolve(value); };
+      const finish = (value, backdrop = false) => { if(pending)return; const form = dialog.querySelector("form"); const sensitive = form.querySelector('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea'); if (value === null && staffFormDirty(form) && (!backdrop || sensitive) && !window.confirm("Отменить? Изменения не сохранятся.")) return; const previewUrl = dialog.querySelector(".catalog-upload-preview")?.dataset.url; if (previewUrl) URL.revokeObjectURL(previewUrl); dialog.remove(); if (previous?.isConnected) previous.focus({preventScroll:true}); resolve(value); };
       dialog.querySelector(".workflow-cancel").addEventListener("click", () => finish(null));
+      dialog.addEventListener("click", event => { if (event.target === dialog && window.matchMedia("(min-width: 768px)").matches) finish(null, true); });
       dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") finish(null); if (event.key === "Tab") trapDialogFocus(event, dialog); });
       dialog.querySelector("form").addEventListener("submit", async (event) => {
         event.preventDefault();if(pending)return;
@@ -2454,7 +2477,7 @@
       }
       steps.push([isDone, "Сотрудник завершил возврат"]);
     }
-    for (const [done, label] of steps) { const li = document.createElement("li"); const box = document.createElement("input"); box.type = "checkbox"; box.checked = done; box.disabled = true; box.setAttribute("aria-label", label); const text = document.createElement("span"); text.textContent = label; const badge = document.createElement("span"); badge.className = `handover-badge ${done ? "done" : "waiting"}`; badge.textContent = done ? "Готово" : "Ожидается"; li.append(box, text, badge); list.append(li); }
+    for (const [done, label] of steps) { const li = document.createElement("li"); if (status !== "ready") { const box = document.createElement("input"); box.type = "checkbox"; box.checked = done; box.disabled = true; box.setAttribute("aria-label", label); li.append(box); } const text = document.createElement("span"); text.textContent = label; const badge = document.createElement("span"); badge.className = `handover-badge ${done ? "done" : "waiting"}`; badge.textContent = done ? "Готово" : "Ожидается"; li.append(text, badge); list.append(li); }
     section.append(list); parent.append(section);
   }
 
@@ -2531,6 +2554,7 @@
     if (!response.headers.get("Content-Type")?.includes("application/pdf")) {
       const preview = await api(`${path}?preview=true`);
       await workflowDialog("Сохранная расписка DOCX", '<div class="receipt-docx-preview"></div><button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
+        dialog.classList.add("receipt-preview-dialog");
         dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
         dialog.querySelector('[type="submit"]').hidden = true;
         const host = dialog.querySelector(".receipt-docx-preview");
@@ -2551,6 +2575,7 @@
     let renderer = null;
     try {
       await workflowDialog("Предпросмотр расписки", '<div class="receipt-pdf-preview"><p class="receipt-preview-status" role="status">Загрузка страниц…</p><div class="receipt-preview-skeleton loading-skeleton" aria-hidden="true"><span></span><span></span><span></span></div><div class="receipt-pages"></div><button type="button" class="button primary receipt-download">Скачать PDF</button></div>', "Закрыть", dialog => {
+        dialog.classList.add("receipt-preview-dialog");
         dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
         dialog.querySelector('[type="submit"]').hidden = true;
         const host = dialog.querySelector(".receipt-pdf-preview");
@@ -2985,7 +3010,7 @@
   }
   $("catalog-list").addEventListener("click", () => setCatalogLayout("list"));
   $("catalog-grid").addEventListener("click", () => setCatalogLayout("grid"));
-  try { setCatalogLayout(localStorage.getItem("polyrental-catalog-layout") === "grid" ? "grid" : "list"); } catch (_) { setCatalogLayout("list"); }
+  try { catalogView.layout = localStorage.getItem("polyrental-admin-catalog-layout") === "grid" ? "grid" : "list"; setCatalogLayout(localStorage.getItem("polyrental-catalog-layout") === "grid" ? "grid" : "list"); } catch (_) { setCatalogLayout("list"); }
   $("nearest-search").addEventListener("click", async () => {
     const button = $("nearest-search"), key = nearestSelectionKey(); nearestProposal = null; $("nearest-apply").hidden = true;
     $("nearest-status").textContent = "Ищем сроки для всей подборки…"; button.disabled = true;
@@ -3001,14 +3026,15 @@
   });
   $("nearest-apply").addEventListener("click", async () => {
     if (!nearestProposal || nearestProposal.key !== nearestSelectionKey()) return;
-    const proposal = nearestProposal; nearestProposal = null; $("nearest-apply").hidden = true;
+    const proposal = nearestProposal; nearestProposal = null; $("nearest-apply").hidden = true; nearestApplying = true;
     $("start").value = moscowInput(proposal.start); $("end").value = moscowInput(proposal.end);
     syncDateFields("start"); syncDateFields("end"); rangeCalendar.setRange($("start-date").value, $("end-date").value); periodChanged();
     if (await loadItems()) {
       const shortage = [...state.quantities].some(([id, quantity]) => quantity > (state.items.find(item => item.id === id)?.available_quantity || 0));
       if (shortage) { $("items-status").textContent = "Доступность изменилась. Найдите другие сроки или измените подборку."; $("items-status").hidden = false; }
       else { $("items-status").textContent = "Новые сроки выбраны, доступность проверена."; $("items-status").hidden = false; }
-    }
+    } else { $("items-status").textContent = "Не удалось проверить новые сроки. Повторите проверку."; $("items-status").hidden = false; }
+    nearestApplying = false;
   });
   $("retry-items").addEventListener("click", loadItems);
   $("change-dates").addEventListener("click", () => { state.step = 0; render(); });
