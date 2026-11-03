@@ -65,7 +65,7 @@ async function capture(page,name) {
   try {
     for(const [width,dark] of [[440,false],[440,true],[320,false]]) {
       const suffix=`${width}-${dark?'dark':'light'}`;
-      const {page,errors}=await fixture(browser,{width,dark});
+      const {page,errors}=await fixture(browser,{width,dark,status:"issued"});
       await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
       await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
       await capture(page,`dates-${suffix}`);await page.locator('#main-button').tap();

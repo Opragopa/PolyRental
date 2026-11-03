@@ -46,7 +46,7 @@ def test_chat_return_finding_records_feature_once(monkeypatch):
     monkeypatch.setattr(cw,'show_staff_booking',AsyncMock())
     booking_id=ready_booking(monkeypatch);transition(booking_id,'ready',100)
     from app.handover import customer_attest
-    customer_attest(booking_id,42,'received');transition(booking_id,'issued',100);returning(booking_id)
+    transition(booking_id,'issued',100);customer_attest(booking_id,42,'received');returning(booking_id)
     asset_id=get_booking(booking_id).assets[0].equipment_id
     state=MemoryState({'workflow_nonce':'n','workflow_operation':'finding','workflow_booking':booking_id,'workflow_asset':asset_id,'workflow_kind':'existing','workflow_comment':'Прежняя царапина'})
     actor=query();asyncio.run(cw.staff_workflow_save(actor,state,'n'))

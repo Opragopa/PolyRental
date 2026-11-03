@@ -42,11 +42,11 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     assert.match(await page.locator('#review-content').innerText(), /3 шт\. в заявке/);
     await page.locator('#review-content .review-minus').click();
     assert.match(await page.locator('#review-content').innerText(), /2 шт\. в заявке/);
-    await page.locator('#back-button').click();
+    await page.locator('#top-back-button').click();
     await page.clock.runFor(400);
     await page.waitForFunction(() => !document.querySelector('#mode-banner').textContent.includes('Не удалось синхронизировать'));
     assert.equal(cart.lines[0].quantity,2);
-    await page.locator('#back-button').click();
+    await page.locator('#top-back-button').click();
     await page.getByRole('button',{name:'Изменить даты'}).click();
     await page.locator('[data-date="2026-11-03"]').click();
     await page.locator('[data-date="2026-11-04"]').click();

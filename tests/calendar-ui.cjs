@@ -75,7 +75,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         assert.ok(bounds.button.bottom<=height && bounds.button.top>=0);
         assert.ok(bounds.renderMs<100,JSON.stringify(bounds));
         await page.locator("#main-button").click();
-        await page.locator('#back-button').click();
+        await page.locator('#top-back-button').click();
         assert.equal(await page.locator("#start-time").inputValue(),"10:00");
         assert.equal(await page.locator("#start-date").inputValue(),"2026-10-30");
         assert.equal(requests.filter(url=>url.startsWith("/api/")).length,0);

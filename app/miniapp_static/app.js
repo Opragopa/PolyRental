@@ -1209,6 +1209,23 @@
     finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
   }
 
+  function updateRentalProgress(summary) {
+    const start = Date.parse(summary.dataset.rentalStart), end = Date.parse(summary.dataset.rentalEnd), now = Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    let progress = summary.querySelector(".rental-progress"), overdue = summary.querySelector(".rental-overdue");
+    if (now > end && summary.dataset.rentalClosed !== "true") {
+      progress?.remove();
+      if (!overdue) { overdue = document.createElement("div"); overdue.className = "rental-overdue"; overdue.textContent = "Просрочено"; summary.append(overdue); }
+      return;
+    }
+    overdue?.remove();
+    if (!progress) { progress = document.createElement("progress"); progress.className = "rental-progress"; progress.max = 1; progress.setAttribute("aria-label", "Прошедшая часть срока аренды"); summary.append(progress); }
+    const value = Math.max(0, Math.min(1, (now - start) / (end - start)));
+    progress.value = value;
+    progress.style.setProperty("--progress-color", value < .25 ? "#24a65a" : value < .5 ? "#e3bc24" : value < .75 ? "#ed8b24" : "#d83d3d");
+  }
+  setInterval(() => document.querySelectorAll(".request-summary[data-rental-start]").forEach(updateRentalProgress), 5000);
+
   function actionButton(label, action, bookingId, className = "secondary", refresh = true) {
     const button = document.createElement("button"); button.type = "button"; button.className = `button compact ${className}`; button.textContent = label;
     button.setAttribute("aria-label",label);
@@ -1416,17 +1433,9 @@
         const period = document.createElement("div"); period.className = "rental-period";
         period.innerHTML = `<span>${escapeHtml(dateText(order.starts_at))}</span><span>${escapeHtml(dateText(order.ends_at))}</span>`;
         summary.append(period);
-        const startTime = Date.parse(order.starts_at), endTime = Date.parse(order.ends_at), currentTime = Date.now();
-        if (Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime) {
-          if (currentTime > endTime && !["returned", "cancelled", "expired"].includes(order.status)) {
-            const overdue = document.createElement("div"); overdue.className = "rental-overdue"; overdue.textContent = "Просрочено"; summary.append(overdue);
-          } else {
-            const value = Math.max(0, Math.min(1, (currentTime - startTime) / (endTime - startTime)));
-            const progress = document.createElement("progress"); progress.className = "rental-progress"; progress.max = 1; progress.value = value;
-            progress.style.setProperty("--progress-color", value < .25 ? "#24a65a" : value < .5 ? "#e3bc24" : value < .75 ? "#ed8b24" : "#d83d3d");
-            progress.setAttribute("aria-label", "Прошедшая часть срока аренды"); summary.append(progress);
-          }
-        }
+        summary.dataset.rentalStart = order.starts_at; summary.dataset.rentalEnd = order.ends_at;
+        summary.dataset.rentalClosed = String(["returned", "cancelled", "expired"].includes(order.status));
+        updateRentalProgress(summary);
         let serviceSection = null;
         if (state.profile?.system_admin) {
           serviceSection = reviewSection("Служебный блок", "request-service");

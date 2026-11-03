@@ -83,6 +83,8 @@ def test_dependencies_assignment_checks_and_return_repair():
         record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 100)
     verified_identity(booking_id)
     assert transition(booking_id, "ready", 100) == "ready"
+    with Session.begin() as session:
+        session.get(Booking, booking_id).identity_status = "required"
     with pytest.raises(Conflict):
         transition(booking_id, "issued", 100)
     with Session.begin() as session:

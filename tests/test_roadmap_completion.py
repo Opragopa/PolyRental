@@ -24,9 +24,9 @@ def test_working_calendar_validates_planned_and_actual_operations(monkeypatch):
     from app.schedule import validate_planned_slot, validate_operation_window
     import app.schedule as schedule
     monkeypatch.setenv("ENFORCE_HANDOVER_SCHEDULE","true")
-    for stamp in ("2026-11-02T09:00","2026-11-02T17:30","2026-07-01T08:30","2026-07-01T17:00"):
+    for stamp in ("2026-11-02T09:00","2026-11-02T20:00","2026-07-01T08:30","2026-07-01T20:00"):
         validate_planned_slot(datetime.fromisoformat(stamp).replace(tzinfo=MOSCOW))
-    for stamp in ("2026-11-01T10:00","2026-11-04T10:00","2026-11-02T08:59","2026-11-02T17:31","2026-07-01T17:01"):
+    for stamp in ("2026-11-01T10:00","2026-11-04T10:00","2026-11-02T08:59","2026-11-02T20:01","2026-07-01T20:01"):
         moment=datetime.fromisoformat(stamp).replace(tzinfo=MOSCOW)
         with pytest.raises(ValueError): validate_planned_slot(moment)
         monkeypatch.setattr(schedule,"current_time",lambda:moment)

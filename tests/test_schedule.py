@@ -10,8 +10,8 @@ def test_2026_official_holiday_and_transfer():
 
 
 def test_summer_hours():
-    assert working_hours(date(2026, 7, 3)) == (time(8, 30), time(17, 0))
-    assert working_hours(date(2026, 10, 26)) == (time(9, 0), time(17, 30))
+    assert working_hours(date(2026, 7, 3)) == (time(8, 30), time(20, 0))
+    assert working_hours(date(2026, 10, 26)) == (time(9, 0), time(20, 0))
 
 
 def test_institution_calendar_overrides(monkeypatch):

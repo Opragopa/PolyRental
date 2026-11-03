@@ -114,7 +114,7 @@ if(require.main===module)(async()=>{
       assert.deepEqual(errors,[]);await page.close();passed++;
     }
     for (const width of [320,390]) {
-      const {page,errors,writes}=await fixture(browser,{width});
+      const {page,errors,writes}=await fixture(browser,{width,order:base("issued")});
       await page.getByRole('button',{name:'Получил',exact:true}).click();
       const dialog=page.locator('.workflow-dialog');
       await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();
@@ -158,23 +158,17 @@ if(require.main===module)(async()=>{
       const order=base(); order.partial_issue=false; order.handover.exceptions=[]; order.assignee_id=200;
       const client=await fixture(browser,{order});
       const operator=await fixture(browser,{admin:true,role:"manager",order,deferInspectionRefresh:true});
-      assert.match(await operator.page.locator('.handover-progress').innerText(), /Клиент подтвердил получение — ожидается/);
-      assert.equal(await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).count(),0);
-      await operator.page.getByRole('button',{name:'Передать заявку',exact:true}).click();
-      await client.page.getByRole('button',{name:'Получил',exact:true}).click();
-      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
-      await client.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
-      await operator.page.clock.runFor(5100);
-      assert.ok(await operator.page.locator('.workflow-dialog').isVisible(), 'background refresh must not interrupt a dialog');
-      await operator.page.locator('.workflow-dialog').getByRole('button',{name:'Отмена',exact:true}).click();
-      await operator.page.clock.runFor(5100);
-      await operator.page.getByText('✓ Клиент подтвердил получение — готово').waitFor();
-      assert.equal(await operator.page.getByRole('button',{name:'Подписал: выдача',exact:true}).count(),0);
       assert.ok(await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).isEnabled());
+      assert.equal(await client.page.getByRole('button',{name:'Получил',exact:true}).count(),0);
       await operator.page.getByRole('button',{name:'Выдать оборудование',exact:true}).click();
       assert.ok(operator.writes.some(row=>row.body.action==='issued'));
       assert.ok(!operator.writes.some(row=>row.path.endsWith('/paper-signature')));
       await client.page.clock.runFor(5100);
+      await client.page.getByRole('button',{name:'Получил',exact:true}).click();
+      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      await client.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
+      assert.ok(client.writes.some(row=>row.body.action==='received'));
+      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
       await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
       await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).click();
       await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();

@@ -285,23 +285,23 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.deepEqual(errors, []); passed.push("ready identity rework and signer boundary"); await page.close();
     }
     {
-      const { page, errors } = await fixture(browser, { orders: [order(7, { assignee_id: 200, sla: { stage: "take", deadline: "2026-10-26T12:00:00Z", breached: true, progress: 1 } })] });
+      const { page, errors } = await fixture(browser, { orders: [order(7, { assignee_id: 200, starts_at: "2026-10-25T10:00:00Z", ends_at: "2026-10-26T09:00:00Z" })] });
       const selected = card(page, 7);
       assert.match(await selected.locator(".request-assignee").innerText(), /Ответственный: вы/);
-      assert.match(await selected.locator(".request-sla").innerText(), /Просрочено.*МСК/);
       await openCard(page, 7);
       assert.match(await selected.locator(".request-summary").innerText(), /Ответственный/);
-      assert.doesNotMatch(await selected.locator(".request-summary").innerText(), /Владелец/);
-      assert.deepEqual(errors, []); passed.push("assignee and overdue deadline in request list"); await page.close();
+      assert.equal(await selected.locator(".rental-overdue").innerText(), "Просрочено");
+      assert.equal(await selected.locator(".rental-progress").count(), 0);
+      assert.deepEqual(errors, []); passed.push("assignee and overdue rental period"); await page.close();
     }
     {
-      const tracked = order(7, { sla: { stage: "take", deadline: "2026-10-26T12:00:00Z", breached: false, soon: false, progress: 0.9 } });
+      const tracked = order(7, { starts_at: "2026-10-26T09:00:00Z", ends_at: "2026-10-26T10:00:04Z" });
       const { page, errors } = await fixture(browser, { orders: [tracked] });
-      assert.doesNotMatch(await card(page, 7).locator(".request-sla").innerText(), /Просрочено/);
-      tracked.sla.breached = true;
+      await openCard(page, 7);
+      assert.equal(await card(page, 7).locator(".rental-progress").count(), 1);
       await page.clock.runFor(5100);
-      await waitUntil(async () => (await card(page, 7).locator(".request-sla").innerText()).includes("Просрочено"), "SLA status did not refresh");
-      assert.deepEqual(errors, []); passed.push("SLA breach refreshes request list"); await page.close();
+      await waitUntil(async () => (await card(page, 7).locator(".rental-overdue").count()) === 1, "Rental overdue state did not refresh");
+      assert.deepEqual(errors, []); passed.push("rental overdue refreshes request list"); await page.close();
     }
     for (const partialFailure of [false, true]) {
       const assets = [{ id: 11, name: "QA camera", serial: "QA-11" }, { id: 12, name: "QA camera", serial: null, asset_code: "QA-12" }];

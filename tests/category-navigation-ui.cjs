@@ -28,7 +28,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('#client-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#catalog-page-title').getByText('Кинокамеры').waitFor();
  await page.getByRole('button',{name:'Увеличить количество: Sony FX3'}).click(); assert.equal(await page.locator('#selected-count').innerText(),'1');
  await page.evaluate(()=>window.__telegramBack()); await page.locator('#catalog-page-title').getByText('Камеры').waitFor();
- await page.locator('#back-button').click(); await page.locator('#catalog-page-title').getByText('Каталог оборудования').waitFor(); assert.equal(await page.locator('#selected-count').innerText(),'1');
+ await page.locator('#top-back-button').click(); await page.locator('#catalog-page-title').getByText('Каталог оборудования').waitFor(); assert.equal(await page.locator('#selected-count').innerText(),'1');
  await page.locator('#tab-admin').click(); await page.locator('[data-mode="catalog"]').click(); await page.locator('.admin-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Камеры').waitFor();
  await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); await page.evaluate(()=>window.__telegramBack()); await page.locator('#admin-catalog-heading').getByText('Камеры').waitFor();
  assert.deepEqual(errors,[]);console.log('Category screens, focus, Telegram back and retained selection: passed');

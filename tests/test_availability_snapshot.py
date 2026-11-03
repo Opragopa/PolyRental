@@ -93,7 +93,7 @@ def test_nearest_period_respects_working_hours(monkeypatch):
         session.add(booking); session.flush()
         session.add(BookingLine(booking_id=booking.id, article_id=camera, quantity=1, hourly_rate=0))
     result = nearest_available_period(start, end, [{'article_id':camera, 'quantity':1}])
-    expected = (start + timedelta(days=1)).astimezone(__import__('datetime').timezone.utc)
+    expected = start.replace(hour=17, minute=30).astimezone(__import__('datetime').timezone.utc)
     assert result['start'] == expected.isoformat()
 
 

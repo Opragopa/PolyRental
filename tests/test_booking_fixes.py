@@ -310,8 +310,8 @@ def test_fresh_migration_chain(monkeypatch):
         result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], env=env, capture_output=True, text=True, timeout=60)
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
-            assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 13
-            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261103_37"
+            assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 14
+            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261103_38"
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

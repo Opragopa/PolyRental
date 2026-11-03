@@ -33,8 +33,6 @@ def paper(booking_id, actor_id=100, point="issue"):
         if signer is None:
             session.add(TrustedSigner(telegram_id=actor_id, full_name="Тестовый Сотрудник", active=True))
         customer_id = session.get(Booking, booking_id).customer_id
-    if point == "issue":
-        customer_attest(booking_id, customer_id, "received", True)
     attest_paper_signature(booking_id, actor_id, point, True, True)
 
 

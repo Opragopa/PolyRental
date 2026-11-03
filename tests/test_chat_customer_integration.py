@@ -22,6 +22,7 @@ def test_partial_receipt_requires_fresh_read_and_records_ack(monkeypatch):
     monkeypatch.setattr(cw,'private',lambda _:True)
     booking_id=ready_booking(monkeypatch,partial=True)
     transition(booking_id,'ready',100)
+    transition(booking_id,'issued',100)
     state=MemoryState(); message=SimpleNamespace(answer=AsyncMock())
     query=SimpleNamespace(data=f'cw:askattest:{booking_id}:received',from_user=SimpleNamespace(id=42),answer=AsyncMock(),message=message)
     asyncio.run(cw.customer_action(query,state))

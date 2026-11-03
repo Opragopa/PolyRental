@@ -125,8 +125,10 @@ async def show_customer_booking(message, booking_id, user_id):
         rows.append([button("Изменить заявку", f"cw:edit:{booking.id}")])
     if booking.status == "needs_changes":
         rows.append([button("Посмотреть предложенные изменения", f"cw:changes:{booking.id}")])
-    if booking.status in {"ready", "issued", "return_inspection"}:
-        rows.append([button("Подтвердить получение" if booking.status == "ready" else "Сдаю оборудование", f"cw:askattest:{booking.id}:{'received' if booking.status == 'ready' else 'returning'}")])
+    if booking.status == "issued":
+        rows.append([button("Подтвердить получение", f"cw:askattest:{booking.id}:received")])
+    if booking.status in {"issued", "return_inspection"}:
+        rows.append([button("Сдаю оборудование", f"cw:askattest:{booking.id}:returning")])
     secure = app_button("Открыть заявку и документы", booking.id)
     if secure: rows.append([secure])
     rows.append([button("К списку заявок", "cw:page:0")])
@@ -1007,7 +1009,7 @@ async def begin_customer_receipt(query,state,booking_id):
     from .handover import handover_summary_signature
     booking=await owned_booking(booking_id,query.from_user.id)
     data=await asyncio.to_thread(handover_state,booking_id)
-    if booking.status!='ready' or data.get('recipient_id')!=query.from_user.id or not data.get('snapshot'):
+    if booking.status!='issued' or data.get('recipient_id')!=query.from_user.id or not data.get('snapshot'):
         raise Conflict("Перечень выдачи пока недоступен")
     nonce=secrets.token_hex(4); pages=receipt_pages(data)
     await state.clear();await state.update_data(receipt_booking=booking_id,receipt_nonce=nonce,receipt_pages=pages,receipt_seen=0,receipt_signature=handover_summary_signature(data),receipt_partial=bool(data.get('exceptions')))

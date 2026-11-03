@@ -55,10 +55,10 @@ def test_full_cycle_docx_is_atomic_immutable_and_survives_identity_removal(monke
     assert "Приложение к сохранной расписке" in text and "Царапина на корпусе" in text
     assert handover_state(booking_id)["snapshot"][0]["features"][0]["description"] == "Царапина на корпусе"
     assert customer_receipt_pdf(booking_id,42)[0] == original
-    with pytest.raises(Conflict): transition(booking_id,"issued",100)
+    with pytest.raises(Conflict): customer_attest(booking_id,42,"received")
     with pytest.raises(ValueError): customer_attest(booking_id,43,"received")
-    customer_attest(booking_id,42,"received")
     transition(booking_id,"issued",200, actor_name="Оператор Выдачи")
+    customer_attest(booking_id,42,"received")
     assert handover_state(booking_id)["issued_by_name"] == "Оператор Выдачи"
     save_feature(asset_id,"Изменённая карточка",100,feature_id)
     assert customer_receipt_pdf(booking_id,42)[0]==original
@@ -87,13 +87,14 @@ def test_partial_issue_has_appendix_acknowledgement_and_actual_return_count(monk
     booking = get_booking(booking_id)
     assert len(booking.assets) == 1
     transition(booking_id,"ready",100)
-    with pytest.raises(Conflict): customer_attest(booking_id,42,"received",False)
     body,_ = customer_receipt_pdf(booking_id,42)
     document = Document(BytesIO(body))
     assert any("Приложение" in p.text for p in document.paragraphs)
     assert availability(booking.starts_at,booking.ends_at)[0]["available_quantity"] == 1
     paper(booking_id)
     transition(booking_id,"issued",100)
+    with pytest.raises(Conflict): customer_attest(booking_id,42,"received",False)
+    customer_attest(booking_id,42,"received",True)
     returning(booking_id)
     transition(booking_id,"return_inspection",100)
     record_inspection(booking_id,booking.assets[0].equipment_id,"check_in","pass",{},"",100)
@@ -202,7 +203,6 @@ def test_other_trusted_staff_can_sign_without_taking_the_assignee(monkeypatch):
     booking_id=ready_booking(monkeypatch);transition(booking_id,"ready",100)
     from app.handover import set_trusted_signer
     set_trusted_signer(100,200,"Другой Доверенный",True)
-    customer_attest(booking_id,42,"received",True)
     attest_paper_signature(booking_id,200,"issue",True,True)
     assert get_booking(booking_id).assignee_id==100
     transition(booking_id,"issued",100)
