@@ -7,7 +7,18 @@
   function disclosureIsOpen(details) {
     return disclosureAnimations.get(details)?.opening ?? details.open;
   }
-  function setDisclosureOpen(details, opening) {
+  function focusDisclosure(control) {
+    control?.focus({preventScroll: true});
+  }
+  function revealDisclosure(element, control) {
+    if (!element.isConnected || (control && document.activeElement !== control)) return;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    const tall = element.getBoundingClientRect().height > viewportHeight - 32;
+    element.scrollIntoView({block: tall ? "start" : "nearest", inline: "nearest", behavior: reducedMotion?.matches ? "auto" : "smooth"});
+  }
+  function setDisclosureOpen(details, opening, focus = false) {
+    const summary = [...details.children].find(child => child.tagName === "SUMMARY");
+    if (opening && focus) focusDisclosure(summary);
     const previous = disclosureAnimations.get(details);
     const startHeight = details.getBoundingClientRect().height;
     previous?.animation.cancel();
@@ -15,12 +26,12 @@
       disclosureAnimations.delete(details);
       details.style.overflow = previous?.overflow ?? details.style.overflow;
       details.open = opening;
+      if (opening && focus) requestAnimationFrame(() => revealDisclosure(details, summary));
       return;
     }
     const overflow = previous?.overflow ?? details.style.overflow;
     details.style.overflow = "hidden";
     if (opening) details.open = true;
-    const summary = [...details.children].find(child => child.tagName === "SUMMARY");
     if (!summary) { details.open = opening; details.style.overflow = overflow; disclosureAnimations.delete(details); return; }
     let endHeight;
     if (opening) {
@@ -39,6 +50,7 @@
       if (!opening) details.open = false;
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
+      if (opening && focus) revealDisclosure(details, summary);
     };
   }
   document.addEventListener("click", event => {
@@ -48,7 +60,8 @@
     if (!details || details.tagName !== "DETAILS" || details.firstElementChild !== summary) return;
     if (event.target.closest("button, a, input, select, textarea, label")) return;
     event.preventDefault();
-    setDisclosureOpen(details, !disclosureIsOpen(details));
+    const opening = !disclosureIsOpen(details);
+    setDisclosureOpen(details, opening, opening);
   });
 
   const tg = window.Telegram?.WebApp;
@@ -999,7 +1012,7 @@
         toggle.addEventListener("click", event => {
           event.preventDefault(); const opening = !disclosureIsOpen(accordion);
           if (opening) for (const other of $("orders-content").querySelectorAll(".customer-order-accordion")) if (other !== accordion) setDisclosureOpen(other, false);
-          setDisclosureOpen(accordion, opening); selectedCustomerOrderId = opening ? order.id : null;
+          setDisclosureOpen(accordion, opening, opening); selectedCustomerOrderId = opening ? order.id : null;
           if (opening) showStageNotice(order);
         });
       }
@@ -1425,6 +1438,7 @@
               if (event.target.closest("button")) return;
               const expanded = row.classList.toggle("is-expanded");
               row.setAttribute("aria-expanded", String(expanded));
+              if (expanded) { focusDisclosure(row); setTimeout(() => { if (row.classList.contains("is-expanded")) revealDisclosure(row, row); }, reducedMotion?.matches ? 0 : 280); }
             };
             row.addEventListener("click", toggleRow);
             row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });
@@ -1557,8 +1571,8 @@
         const historyBody = document.createElement("div"); historyBody.className = "request-history-body"; history.append(historyBody);
         if (serviceSection) body.append(serviceSection);
         body.append(history);
-        const setOpen = (open) => {
-          setDisclosureOpen(accordion, open);
+        const setOpen = (open, focus = false) => {
+          setDisclosureOpen(accordion, open, focus);
           if (open) { selectedRequestId = order.id; loadRequestHistory(order, card); }
           else { clearRequestReview(card); history.dataset.sequence = String(Number(history.dataset.sequence || 0) + 1); if (selectedRequestId === order.id) selectedRequestId = null; }
         };
@@ -1568,7 +1582,7 @@
             if (other === card) continue;
             setDisclosureOpen(other.querySelector(".request-accordion"), false); clearRequestReview(other);
           }
-          setOpen(opening); window.scrollBy(0, toggle.getBoundingClientRect().top - top);
+          setOpen(opening, opening); window.scrollBy(0, toggle.getBoundingClientRect().top - top);
         });
         accordion.addEventListener("toggle", () => {
           if (!accordion.open) { clearRequestReview(card); if (selectedRequestId === order.id) selectedRequestId = null; }
@@ -1679,6 +1693,7 @@
         if (event.target.closest("button, .inspection-editor, input, textarea, select, label")) return;
         const expanded = row.classList.toggle("is-expanded");
         row.setAttribute("aria-expanded", String(expanded));
+        if (expanded) { focusDisclosure(row); setTimeout(() => { if (row.classList.contains("is-expanded")) revealDisclosure(row, row); }, reducedMotion?.matches ? 0 : 280); }
       };
       row.addEventListener("click", toggleRow);
       row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });

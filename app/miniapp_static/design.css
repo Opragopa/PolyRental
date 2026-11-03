@@ -1586,3 +1586,6 @@ button, summary { -webkit-tap-highlight-color: transparent; }
   .request-equipment-row, .inspection-row, .customer-order-toggle::after { transition: none; }
 }
 #admin-settings, #admin-settings[open] { padding: 0; border: 0; background: transparent; }
+
+/* Leave room around the focused disclosure when it is brought into view. */
+details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { scroll-margin-block: 16px; }
