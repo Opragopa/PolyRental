@@ -68,3 +68,18 @@ def test_csv_import_rejects_invalid_file_without_writes(monkeypatch):
         assert "Строка 2" in invalid.json()["detail"]
         catalog = client.get("/api/miniapp/admin/catalog", headers=admin).json()
         assert not any(item["sku"] == "CSV-X" for item in catalog["articles"])
+
+
+def test_downloaded_template_is_a_valid_import_header():
+    from app.catalog_import import parse_catalog_csv
+    with TestClient(app) as client:
+        response = client.get('/miniapp/static/equipment-import-template.csv')
+    assert response.status_code == 200
+    header = response.content.decode('utf-8-sig').strip().split(';')
+    row = [''] * len(header)
+    row[header.index('sku')] = 'CSV-EXAMPLE'
+    row[header.index('name')] = 'Камера'
+    content = response.content.rstrip() + b'\n' + ';'.join(row).encode('utf-8') + b'\n'
+    models, assets = parse_catalog_csv(content)
+    assert models['CSV-EXAMPLE']['name'] == 'Камера'
+    assert len(assets) == 1

@@ -1915,7 +1915,7 @@
   }
 
   async function downloadCatalogTemplate() {
-    const path = "./equipment-import-template.csv";
+    const path = "/miniapp/static/equipment-import-template.csv";
     const filename = "equipment-import-template.csv";
     const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
     const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
