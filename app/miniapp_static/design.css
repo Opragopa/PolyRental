@@ -1562,3 +1562,11 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 .item-name, .item-type, .item-notes, .item-main p, .available-badge, .item-placeholder small { max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
 .items-grid.items-grid-tiles .item-main .item-top > div { min-width: 0; }
 @media (max-width: 350px) { .client-categories { grid-template-columns: 1fr; } }
+
+/* Expanding the remaining catalog equipment keeps it in the document flow. */
+.catalog-extra-assets > summary { width: fit-content; cursor: pointer; list-style: none; }
+.catalog-extra-assets > summary::-webkit-details-marker { display: none; }
+.catalog-extra-assets-list { display: grid; gap: 8px; padding-top: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .equipment-card-drawer, .equipment-card-drawer-inner { transition: none; }
+}

@@ -2084,9 +2084,22 @@
       card.append(cardActions);
       const equipmentList = card.querySelector(".equipment-list");
       const matchingAssets = catalogView.status === "all" ? article.equipment : article.equipment.filter((asset) => asset.condition === catalogView.status);
-      const expanded = catalogView.expanded.has(article.id); const shownAssets = expanded ? matchingAssets : matchingAssets.slice(0, 3);
+      const expanded = catalogView.expanded.has(article.id);
+      let extraAssets = null;
+      if (matchingAssets.length > 3) {
+        extraAssets = document.createElement("details"); extraAssets.className = "catalog-extra-assets";
+        extraAssets.open = expanded;
+        const summary = document.createElement("summary"); summary.className = "button ghost compact catalog-more";
+        summary.textContent = expanded ? "Скрыть экземпляры" : `Показать ещё ${matchingAssets.length - 3}`;
+        const list = document.createElement("div"); list.className = "catalog-extra-assets-list";
+        extraAssets.append(summary, list);
+        extraAssets.addEventListener("toggle", () => {
+          if (extraAssets.open) catalogView.expanded.add(article.id); else catalogView.expanded.delete(article.id);
+          summary.textContent = extraAssets.open ? "Скрыть экземпляры" : `Показать ещё ${matchingAssets.length - 3}`;
+        });
+      }
       if (!matchingAssets.length) equipmentList.textContent = "Нет экземпляров с выбранным состоянием.";
-      for (const asset of shownAssets) {
+      for (const [assetIndex, asset] of matchingAssets.entries()) {
         const row = document.createElement("div"); row.className = `equipment-row condition-${asset.condition}`;
         const identifiers = [asset.serial ? `S/N ${asset.serial}` : "", asset.inventory_code ? `Инв. ${asset.inventory_code}` : "", `Код ${asset.asset_code}`].filter(Boolean).join(" · ");
         row.innerHTML = `<span><span class="condition-pill">${escapeHtml(conditionLabel(asset.condition))}</span><strong>${escapeHtml(identifiers)}</strong><small>${escapeHtml(asset.location || "Без ячейки")}</small></span>`;
@@ -2122,14 +2135,10 @@
         const extra = document.createElement("div"); extra.className = "action-row";
         for (const button of [...row.querySelectorAll(":scope > button")]) extra.append(button);
         extra.append(remove); moreActions.append(extra);
-        row.append(edit, moreActions); equipmentList.append(row);
+        row.append(edit, moreActions);
+        (assetIndex < 3 ? equipmentList : extraAssets.lastElementChild).append(row);
       }
-      if (matchingAssets.length > 3) {
-        const more = document.createElement("button"); more.type = "button"; more.className = "button ghost compact catalog-more";
-        more.textContent = expanded ? "Скрыть экземпляры" : `Показать ещё ${matchingAssets.length - 3}`;
-        more.addEventListener("click", () => { if (expanded) catalogView.expanded.delete(article.id); else catalogView.expanded.add(article.id); renderAdminCatalog(result); });
-        equipmentList.append(more);
-      }
+      if (extraAssets) equipmentList.append(extraAssets);
       content.append(card);
     }
     content.append(toolbar, operations);
