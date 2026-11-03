@@ -24,6 +24,8 @@ def test_telegram_site_login(monkeypatch):
     client = TestClient(app)
     assert client.get('/protected').status_code == 401
     login = client.get('/site/login')
+    assert 'data-bot="polyrental_test_bot"' in login.text
+    assert '/miniapp/static/site-login.js?v=' in login.text
     state = re.search(r'state=([A-Za-z0-9_-]+)', login.text).group(1)
     payload = {'id': '42', 'first_name': 'Ирина', 'auth_date': str(int(time.time()))}
     check = '\n'.join(f'{k}={v}' for k, v in sorted(payload.items()))
