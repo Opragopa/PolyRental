@@ -59,6 +59,11 @@
     camera: ["Камера", "camera"], optics: ["Оптика", "lens"], light: ["Свет", "light"],
     battery: ["Питание", "battery"], accessory: ["Аксессуар", "accessory"], generic: ["Оборудование", "equipment"],
   };
+  const categoryIcons = {camera:"camera", optics:"optics", light:"light", battery:"battery", accessory:"accessory", sound:"sound", support:"support", cables:"cables", media:"media", computer:"computer", monitors:"monitors", furniture:"furniture", generic:"generic"};
+  function categoryIcon(category) {
+    const fallback = {camera:"camera", lens:"optics", light:"light", battery:"battery", accessory:"accessory", equipment:"generic"};
+    return categoryIcons[category.code] || fallback[category.icon] || "generic";
+  }
   function setCategories(categories) {
     clientCatalog.categories = categories;
     for (const category of categories) categoryMeta[category.code] = [category.name, category.icon || categoryMeta[category.code]?.[1] || "equipment"];
@@ -682,7 +687,7 @@
     const children = clientCatalog.categories.filter(c => (c.parent_code || "") === clientCatalog.category);
     if (!queryText) for (const category of children) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
-      button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${escapeHtml(categoryMeta[category.code]?.[1] || "equipment")}"></use></svg><span>${escapeHtml(category.name)}</span><span aria-hidden="true">›</span>`;
+      button.innerHTML = `<span class="category-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg></span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
       button.addEventListener("click", () => { clientCatalog.category = category.code; clientCatalog.page = 0; void loadItems(); }); categoryHost.append(button);
     }
     const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;

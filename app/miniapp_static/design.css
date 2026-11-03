@@ -1557,3 +1557,16 @@ button, summary { -webkit-tap-highlight-color: transparent; }
   #booking-flow { max-width:850px; margin-inline:auto; }
   .action-bar { width:min(930px, 100%); }
 }
+
+/* Catalog cards must accommodate long names on narrow screens. */
+.client-categories { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; }
+.client-categories > * { min-width: 0; }
+.category-card { min-width: 0; width: 100%; gap: 10px; padding: 12px; line-height: 1.3; }
+.category-card-icon { display: grid; flex: 0 0 42px; width: 42px; height: 42px; place-items: center; border-radius: 12px; color: var(--accent); background: var(--soft); }
+.category-card .category-card-icon .icon { width: 27px; height: 27px; }
+.category-card-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.category-card .category-card-arrow { flex: none; margin-left: auto; color: var(--muted); font-size: 22px; }
+.item-card, .item-main, .item-main .item-top, .item-main .item-top > div, .items-grid-tiles .item-main { min-width: 0; }
+.item-name, .item-type, .item-notes, .item-main p, .available-badge, .item-placeholder small { max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.items-grid.items-grid-tiles .item-main .item-top > div { min-width: 0; }
+@media (max-width: 350px) { .client-categories { grid-template-columns: 1fr; } }
