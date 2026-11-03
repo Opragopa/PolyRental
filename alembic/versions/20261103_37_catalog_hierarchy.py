@@ -9,9 +9,12 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("catalog_categories", sa.Column("parent_code", sa.String(40), sa.ForeignKey("catalog_categories.code"), nullable=True))
-    op.add_column("catalog_categories", sa.Column("icon", sa.String(30), nullable=False, server_default="equipment"))
     bind = op.get_bind()
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("catalog_categories")}
+    if "parent_code" not in columns:
+        op.add_column("catalog_categories", sa.Column("parent_code", sa.String(40), sa.ForeignKey("catalog_categories.code"), nullable=True))
+    if "icon" not in columns:
+        op.add_column("catalog_categories", sa.Column("icon", sa.String(30), nullable=False, server_default="equipment"))
     for code, name, icon, parent in [("camera", "Камеры", "camera", None), ("optics", "Оптика", "lens", None), ("light", "Свет", "light", None), ("battery", "Питание", "battery", None), ("accessory", "Аксессуары", "accessory", None), ("generic", "Другое оборудование", "equipment", None), ("sound", "Звук", "accessory", None), ("support", "Штативы и опоры", "accessory", None), ("cables", "Кабели и адаптеры", "accessory", "accessory"), ("media", "Носители и картридеры", "equipment", None), ("computer", "Компьютерное оборудование", "equipment", None), ("monitors", "Мониторы", "equipment", None), ("furniture", "Мебель и оформление", "equipment", None)]:
         bind.execute(sa.text("INSERT INTO catalog_categories (code, name, normalized_name, icon, parent_code) VALUES (:code, :name, :normalized, :icon, :parent) ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, normalized_name=EXCLUDED.normalized_name, icon=EXCLUDED.icon, parent_code=EXCLUDED.parent_code"), dict(code=code, name=name, normalized=name.casefold(), icon=icon, parent=parent))
     rows = bind.execute(sa.text("SELECT id, name, description, kind, category FROM articles"))

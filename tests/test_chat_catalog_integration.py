@@ -106,9 +106,9 @@ def test_chat_category_creation_requires_confirm(monkeypatch):
     from app.catalog_categories import list_categories
     monkeypatch.setattr(catalog,'private',lambda _:True)
     user=SimpleNamespace(id=100);state=MemoryState()
-    message=SimpleNamespace(text='Звук',from_user=user,answer=AsyncMock())
+    message=SimpleNamespace(text='Тестовая категория звука',from_user=user,answer=AsyncMock())
     asyncio.run(catalog.category_input(message,state))
-    assert all(row['name']!='Звук' for row in list_categories())
+    assert all(row['name']!='Тестовая категория звука' for row in list_categories())
     query=SimpleNamespace(data='cc:save:'+state.data['category_nonce'],from_user=user,answer=AsyncMock(),message=SimpleNamespace(answer=AsyncMock()))
     asyncio.run(catalog.category_save(query,state))
-    assert any(row['name']=='Звук' for row in list_categories())
+    assert any(row['name']=='Тестовая категория звука' for row in list_categories())

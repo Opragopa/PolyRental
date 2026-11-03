@@ -181,7 +181,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       await waitUntil(async () => reviews.length === 2 && await page.locator("#identity-review-dialog").isHidden(), "Correction request was not saved");
       assert.deepEqual(reviews[1].payload, { approved: false, comment: "QA replace synthetic photo", fields: ["student_front"] });
       await openCard(page, 7);
-      assert.equal(await card(page, 8).locator(".request-accordion").getAttribute("open"), null);
+      await waitUntil(async () => await card(page, 8).locator(".request-accordion").getAttribute("open") === null, "Previous request did not close after its animation");
       assert.equal(await page.locator(".identity-check-review").count(), 0, "Closing a request removes sensitive review data");
       assert.deepEqual(errors, []);
       passed.push(`review ${width}px ${dark ? "dark" : "light"}`);

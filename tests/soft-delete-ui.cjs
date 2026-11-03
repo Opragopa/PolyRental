@@ -36,6 +36,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await first.locator('.request-toggle').click();
     await first.locator('.request-history-body').getByText('Записей пока нет.').waitFor({state:'attached'});
     assert.equal(await first.locator('details.request-history').evaluate(node=>node.open),false);
+    await first.locator('.request-accordion').evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
     await first.getByRole('button',{name:'Удалить позицию Камера'}).evaluate(element => element.scrollIntoView({block:'center'}));
     await page.waitForTimeout(300);
     await page.evaluate(() => document.addEventListener('click', () => { window.__scrollAtClick = window.scrollY; }, {capture:true,once:true}));

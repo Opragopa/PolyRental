@@ -53,7 +53,7 @@ def test_inventory_csv_allows_empty_and_duplicate_serials(monkeypatch):
         catalog = client.get("/api/miniapp/admin/catalog", headers=admin).json()
         article = next(item for item in catalog["articles"] if item["name"] == "Sony MDR")
         assert article["description"] == "Наушники"
-        assert article["category"] == "accessory"
+        assert article["category"] == "sound"
         assert {item["serial"] for item in article["equipment"]} == {""}
         assert {item["inventory_code"] for item in article["equipment"]} == {"OS-001", "OS-002"}
 

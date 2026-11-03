@@ -69,6 +69,7 @@ async function capture(page,name) {
       await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
       await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
       await capture(page,`dates-${suffix}`);await page.locator('#main-button').tap();
+      await page.locator('.category-card').getByText('Камера', {exact:true}).tap();
       await page.locator('.item-card').first().waitFor();await capture(page,`catalog-${suffix}`);
       await page.locator('.item-card .plus').first().tap();await page.locator('#main-button').tap();
       await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@synthetic_customer');
