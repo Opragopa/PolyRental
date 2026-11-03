@@ -1,8 +1,8 @@
 (() => {
   const host = document.getElementById("login-widget");
   const fallback = document.getElementById("login-fallback");
-  const retry = document.getElementById("login-retry");
-  if (!host || !fallback || !retry) return;
+  const button = document.getElementById("login-retry");
+  if (!host || !fallback || !button) return;
   let attempt = 0;
   let timer;
   function loadWidget() {
@@ -10,12 +10,15 @@
     clearTimeout(timer);
     host.replaceChildren();
     fallback.hidden = true;
-    retry.disabled = true;
+    button.hidden = false;
+    button.textContent = "Войти через Telegram";
+    button.setAttribute("aria-busy", "true");
     const fail = () => {
       if (current !== attempt) return;
-      clearTimeout(timer);
       fallback.hidden = false;
-      retry.disabled = false;
+      button.textContent = "Повторить загрузку";
+      button.removeAttribute("aria-busy");
+      host.replaceChildren();
     };
     const script = document.createElement("script");
     script.async = true;
@@ -24,21 +27,22 @@
     script.dataset.size = "large";
     script.dataset.authUrl = host.dataset.callback;
     script.dataset.requestAccess = "write";
-    script.onerror = fail;
     script.onload = () => {
       if (current !== attempt) return;
       const frame = host.querySelector("iframe");
-      if (!frame) return fail();
-      frame.addEventListener("error", fail, {once: true});
+      if (!frame) return;
+      frame.hidden = true;
       frame.addEventListener("load", () => {
         if (current !== attempt) return;
         clearTimeout(timer);
-        retry.disabled = false;
+        frame.hidden = false;
+        button.hidden = true;
+        button.removeAttribute("aria-busy");
       }, {once: true});
     };
     timer = setTimeout(fail, 10000);
     host.append(script);
   }
-  retry.addEventListener("click", loadWidget);
+  button.addEventListener("click", () => { if (!fallback.hidden) loadWidget(); });
   loadWidget();
 })();
