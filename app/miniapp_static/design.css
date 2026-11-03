@@ -1570,3 +1570,19 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .equipment-card-drawer, .equipment-card-drawer-inner { transition: none; }
 }
+/* Consistent, readable controls in the staff workspace. */
+#admin-request-filter-field, #admin-status-field, #admin-sort-field { min-width: 0; gap: 7px; margin: 0 0 14px; }
+#admin-request-filter-field > span, #admin-status-field > span, #admin-sort-field > span { height: auto; color: var(--text); font-size: 14px; font-weight: 700; line-height: 1.35; }
+#admin-request-filter, #admin-status, #admin-sort, .catalog-controls select, .catalog-controls input { width: 100%; min-width: 0; min-height: 50px; height: auto; padding: 12px 38px 12px 14px; border: 1px solid var(--line); border-radius: 12px; background-color: var(--surface); color: var(--text); font-size: 16px; line-height: 1.35; }
+#admin-settings > summary { position: static; display: flex; width: fit-content; align-items: center; min-height: 44px; }
+#admin-settings { margin: 0 0 16px; }
+#admin-settings[open] { margin: 0 0 16px; }
+.admin-categories { margin: 16px 0; }
+.admin-categories .button { justify-self: start; }
+.article-card, .article-main, .article-card-head, .article-card-head .order-head > div { min-width: 0; }
+.article-main h3, .article-meta, .article-type, .equipment-row strong, .equipment-row small { overflow-wrap: anywhere; }
+.article-card-head .order-head { flex-wrap: wrap; gap: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .request-equipment-row, .inspection-row, .customer-order-toggle::after { transition: none; }
+}
+#admin-settings, #admin-settings[open] { padding: 0; border: 0; background: transparent; }

@@ -1542,10 +1542,15 @@ def _catalog_conditions(query="", condition="all"):
     return conditions
 
 
-def list_articles_page(page, page_size=20, query="", condition="all", options_only=False):
+def list_articles_page(page, page_size=20, query="", condition="all", options_only=False, category=""):
     if page < 0 or not 1 <= page_size <= 100 or len(query) > 200:
         raise ValueError("Неверные параметры каталога")
     conditions = _catalog_conditions(query, condition)
+    if category:
+        from .db import CatalogCategory
+        descendants = select(CatalogCategory.code).where(CatalogCategory.parent_code == category).cte(recursive=True)
+        descendants = descendants.union_all(select(CatalogCategory.code).join(descendants, CatalogCategory.parent_code == descendants.c.code))
+        conditions.append(Article.category.in_(select(descendants.c.code).union(select(CatalogCategory.code).where(CatalogCategory.code == category))))
     with Session() as session:
         total = session.scalar(select(func.count()).select_from(Article).where(*conditions))
         statement = select(Article).where(*conditions).order_by(Article.name, Article.id).offset(page * page_size).limit(page_size)

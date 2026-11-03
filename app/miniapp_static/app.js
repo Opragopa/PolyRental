@@ -75,7 +75,7 @@
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, onboardingLoading: false, onboardingPending: false, profileFilter: "all", profileSort: "date", profilePage: 0, profileNumber: "", adminRequestFilter: "all", adminStatus: "all", adminSort: "date", adminPage: 0, adminTargetId: null, adminQueue: "all", supportPage: 0, supportFilterId: null, cartVersion: null };
   const clientCatalog = {page:0, pageSize:20, total:0, paged:null, pageItems:[], timer:null, category:"", categories:[]};
-  const catalogView = { query: "", status: "all", page: 0, sequence: 0, timer: null, expanded: new Set() };
+  const catalogView = { category: "", query: "", status: "all", page: 0, sequence: 0, timer: null, expanded: new Set() };
   let selectedRequestId = null;
   let selectedCustomerOrderId = null;
   let pendingDeletion = null;
@@ -1947,15 +1947,15 @@
   }
 
   function catalogPagePath() {
-    return `/api/miniapp/admin/catalog?${new URLSearchParams({page:String(catalogView.page), page_size:"20", q:catalogView.query, condition:catalogView.status})}`;
+    return `/api/miniapp/admin/catalog?${new URLSearchParams({page:String(catalogView.page), page_size:"20", q:catalogView.query, condition:catalogView.status, category:catalogView.category})}`;
   }
   async function reloadCatalogPage(preserveSearch = false) {
-    const sequence = ++catalogView.sequence, query = catalogView.query, condition = catalogView.status, page = catalogView.page;
+    const sequence = ++catalogView.sequence, query = catalogView.query, condition = catalogView.status, page = catalogView.page, category = catalogView.category;
     const current = $("admin-content").querySelector(".catalog-controls input");
     const selection = preserveSearch && current ? [current.selectionStart, current.selectionEnd, current.selectionDirection] : null;
     try {
       const result = await api(catalogPagePath());
-      if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog" || $("admin-panel").classList.contains("catalog-editing") || query !== catalogView.query || condition !== catalogView.status || page !== catalogView.page) return;
+      if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog" || $("admin-panel").classList.contains("catalog-editing") || query !== catalogView.query || condition !== catalogView.status || category !== catalogView.category || page !== catalogView.page) return;
       if (page > 0 && page * (result.page_size || 20) >= result.total) { catalogView.page = Math.max(0, Math.ceil(result.total / (result.page_size || 20)) - 1); return reloadCatalogPage(preserveSearch); }
       renderAdminCatalog(result);
       if (selection) { const search = $("admin-content").querySelector(".catalog-controls input"); search?.focus({preventScroll:true}); if (selection[0] != null && selection[1] != null) search?.setSelectionRange(selection[0], selection[1], selection[2] || "none"); }
@@ -2041,13 +2041,29 @@
       operations.append(dependencies);
     }
 
+    const categoryHost = document.createElement("div"); categoryHost.className = "client-categories admin-categories";
+    const currentCategory = clientCatalog.categories.find(c => c.code === catalogView.category);
+    const selectCategory = code => { catalogView.category = code; catalogView.page = 0; clearTimeout(catalogView.timer); if (result.page != null) void reloadCatalogPage(); else renderAdminCatalog(result); };
+    if (currentCategory) {
+      const back = document.createElement("button"); back.type = "button"; back.className = "button ghost"; back.textContent = "← " + (currentCategory.parent_code ? "Назад" : "Все категории");
+      back.addEventListener("click", () => selectCategory(currentCategory.parent_code || "")); categoryHost.append(back);
+      const heading = document.createElement("h3"); heading.textContent = currentCategory.name; categoryHost.append(heading);
+    }
+    if (!catalogView.query.trim()) for (const category of clientCatalog.categories.filter(c => (c.parent_code || "") === catalogView.category)) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
+      button.innerHTML = `<span class="category-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg></span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
+      button.addEventListener("click", () => selectCategory(category.code)); categoryHost.append(button);
+    }
+    content.append(categoryHost);
+    const categoryIndex = !catalogView.category && !catalogView.query.trim() && clientCatalog.categories.length;
+    const categoryMatches = code => { let current = clientCatalog.categories.find(c => c.code === code); const visited = new Set(); while (current && !visited.has(current.code)) { if (current.code === catalogView.category) return true; visited.add(current.code); current = clientCatalog.categories.find(c => c.code === current.parent_code); } return false; };
     const query = catalogView.query.trim().toLocaleLowerCase("ru-RU");
     const visibleArticles = result.page != null ? result.articles : result.articles.filter((article) => {
       const searchText = [article.title, article.name, article.kind, article.brand, article.key_spec, article.description, article.sku, ...article.equipment.flatMap((asset) => [asset.serial, asset.inventory_code, asset.asset_code, asset.location])].join(" ").toLocaleLowerCase("ru-RU");
-      return (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
+      return (!catalogView.category || categoryMatches(article.category)) && (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
     });
-    const summary = document.createElement("p"); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary);
-    for (const article of visibleArticles) {
+    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary);
+    for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
       card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><div class="order-head"><div><p class="article-type">${escapeHtml(article.description || categoryLabel(article.category))}</p><h3>${escapeHtml(catalogTitle(article))}</h3></div><span class="status-pill">${article.active ? "В каталоге" : "Скрыт"}</span></div><p class="article-meta">${escapeHtml(article.sku)} · ${article.equipment.length} шт. · доступно ${availableCount}</p></div></div><details class="article-details"><summary>Параметры модели и комплектация</summary><p><strong>Полное название:</strong> ${escapeHtml(article.name)}</p><p>Профиль проверки: ${escapeHtml(({generic:"Общая проверка",camera:"Камера",optics:"Оптика",light:"Свет",battery:"Аккумулятор"})[article.inspection_profile] || "Общая проверка")}</p><p><strong>Комплектация для расписки:</strong> ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div>`;
@@ -2144,7 +2160,7 @@
     content.append(toolbar, operations);
     if (result.page != null) {
       const pages = Math.max(1, Math.ceil(result.total / (result.page_size || 20)));
-      if (pages > 1) {
+      if (pages > 1 && !categoryIndex) {
         const controls = document.createElement("div"); controls.className = "action-row catalog-pagination";
         const previous = plainButton("Назад", () => { catalogView.page--; void reloadCatalogPage(); }, "secondary"); previous.disabled = catalogView.page === 0;
         const current = document.createElement("span"); current.textContent = `${catalogView.page + 1} / ${pages}`;

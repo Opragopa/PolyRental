@@ -1226,14 +1226,14 @@ async def admin_hidden_test_bookings(user=Depends(require_system_admin)):
 @router.get("/api/miniapp/admin/catalog")
 async def admin_catalog(page: int | None = Query(default=None, ge=0, le=100000), page_size: int = Query(default=20, ge=1, le=100),
                         q: str = Query(default="", max_length=200), condition: str = Query(default="all", pattern="^(all|available|maintenance|retired)$"),
-                        user=Depends(require_admin)):
+                        category: str = Query(default="", max_length=40), user=Depends(require_admin)):
     from .inventory import inventory_details_batch
     from .catalog_images import image_data
     if page is None:
         articles = await asyncio.to_thread(list_articles)
         total = len(articles)
     else:
-        articles, total = await asyncio.to_thread(list_articles_page, page, page_size, q, condition)
+        articles, total = await asyncio.to_thread(list_articles_page, page, page_size, q, condition, False, category)
     with Session() as session:
         previews = image_data(session, [article.id for article in articles])
         details = inventory_details_batch([asset.id for article in articles for asset in article.equipment], session)
