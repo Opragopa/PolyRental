@@ -1,6 +1,56 @@
 (async () => {
   "use strict";
 
+  // Animate the element's height so the surrounding document follows the reveal.
+  const disclosureAnimations = new WeakMap();
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  function disclosureIsOpen(details) {
+    return disclosureAnimations.get(details)?.opening ?? details.open;
+  }
+  function setDisclosureOpen(details, opening) {
+    const previous = disclosureAnimations.get(details);
+    const startHeight = details.getBoundingClientRect().height;
+    previous?.animation.cancel();
+    if (reducedMotion?.matches || typeof details.animate !== "function") {
+      disclosureAnimations.delete(details);
+      details.style.overflow = previous?.overflow ?? details.style.overflow;
+      details.open = opening;
+      return;
+    }
+    const overflow = previous?.overflow ?? details.style.overflow;
+    details.style.overflow = "hidden";
+    if (opening) details.open = true;
+    const summary = [...details.children].find(child => child.tagName === "SUMMARY");
+    if (!summary) { details.open = opening; details.style.overflow = overflow; disclosureAnimations.delete(details); return; }
+    let endHeight;
+    if (opening) {
+      endHeight = details.getBoundingClientRect().height;
+    } else {
+      const style = getComputedStyle(details);
+      endHeight = summary.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    }
+    const animation = details.animate([{height: `${startHeight}px`}, {height: `${endHeight}px`}], {
+      duration: 280, easing: "cubic-bezier(.2, 0, 0, 1)"
+    });
+    const state = {animation, opening, overflow};
+    disclosureAnimations.set(details, state);
+    animation.onfinish = () => {
+      if (disclosureAnimations.get(details) !== state) return;
+      if (!opening) details.open = false;
+      details.style.overflow = overflow;
+      disclosureAnimations.delete(details);
+    };
+  }
+  document.addEventListener("click", event => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const summary = event.target.closest?.("summary");
+    const details = summary?.parentElement;
+    if (!details || details.tagName !== "DETAILS" || details.firstElementChild !== summary) return;
+    if (event.target.closest("button, a, input, select, textarea, label")) return;
+    event.preventDefault();
+    setDisclosureOpen(details, !disclosureIsOpen(details));
+  });
+
   const tg = window.Telegram?.WebApp;
   window.polyRentalApplyTheme?.();
   tg?.onEvent?.("themeChanged", () => window.polyRentalApplyTheme?.());
@@ -947,9 +997,9 @@
         }
         accordion.append(toggle, card); outer.append(accordion); $("orders-content").append(outer);
         toggle.addEventListener("click", event => {
-          event.preventDefault(); const opening = !accordion.open;
-          if (opening) for (const other of $("orders-content").querySelectorAll(".customer-order-accordion")) if (other !== accordion) other.open = false;
-          accordion.open = opening; selectedCustomerOrderId = opening ? order.id : null;
+          event.preventDefault(); const opening = !disclosureIsOpen(accordion);
+          if (opening) for (const other of $("orders-content").querySelectorAll(".customer-order-accordion")) if (other !== accordion) setDisclosureOpen(other, false);
+          setDisclosureOpen(accordion, opening); selectedCustomerOrderId = opening ? order.id : null;
           if (opening) showStageNotice(order);
         });
       }
@@ -1508,15 +1558,15 @@
         if (serviceSection) body.append(serviceSection);
         body.append(history);
         const setOpen = (open) => {
-          accordion.open = open;
+          setDisclosureOpen(accordion, open);
           if (open) { selectedRequestId = order.id; loadRequestHistory(order, card); }
           else { clearRequestReview(card); history.dataset.sequence = String(Number(history.dataset.sequence || 0) + 1); if (selectedRequestId === order.id) selectedRequestId = null; }
         };
         toggle.addEventListener("click", (event) => {
-          event.preventDefault(); content.style.minHeight = ""; const top = toggle.getBoundingClientRect().top; const opening = !accordion.open;
+          event.preventDefault(); content.style.minHeight = ""; const top = toggle.getBoundingClientRect().top; const opening = !disclosureIsOpen(accordion);
           if (opening) for (const other of content.querySelectorAll(".request-card")) {
             if (other === card) continue;
-            other.querySelector(".request-accordion").open = false; clearRequestReview(other);
+            setDisclosureOpen(other.querySelector(".request-accordion"), false); clearRequestReview(other);
           }
           setOpen(opening); window.scrollBy(0, toggle.getBoundingClientRect().top - top);
         });
