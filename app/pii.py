@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import and_, delete, exists, or_, select
 
-from .db import (Booking, CustomerIdentity, IdentityDocument, PIIAudit, PrivacyConsent,
+from .db import (Booking, CustomerIdentity, IdentityDocument, IdentityProfileDraft, PIIAudit, PrivacyConsent,
                  RepairTicket, Session)
 from .rental import Conflict, now
 from .roles import configured_ids
@@ -291,8 +291,38 @@ def profile_identity_fields(customer_id):
             .order_by(CustomerIdentity.updated_at.desc(), CustomerIdentity.id.desc()).limit(1))
         if identity is None:
             return {"fields": {}}
-        payload, _ = _decrypt_payload(identity)
+        payload, dek = _decrypt_payload(identity)
+        draft = session.get(IdentityProfileDraft, identity.id)
+        if draft:
+            payload = json.loads(AESGCM(dek).decrypt(draft.payload_nonce, draft.encrypted_payload, b"polyrental-identity-v1"))
         session.add(PIIAudit(booking_id=identity.booking_id, actor_id=customer_id, action="profile_identity_revealed"))
+        return {"fields": payload}
+
+
+def update_profile_identity(customer_id, values):
+    # Only modify a separate encrypted draft tied to a retained identity.
+    active = {"pending", "confirmed", "preparing", "ready", "issued", "return_inspection"}
+    eligible = or_(and_(Booking.status.in_(active), CustomerIdentity.delete_after.is_(None)),
+                   and_(Booking.status == "returned", CustomerIdentity.delete_after > now()),
+                   and_(Booking.status == "returned", exists(select(RepairTicket.id).where(
+                       RepairTicket.booking_id == Booking.id, RepairTicket.status != "closed"))))
+    with Session.begin() as session:
+        identity = session.scalar(select(CustomerIdentity).join(Booking, Booking.id == CustomerIdentity.booking_id)
+            .where(CustomerIdentity.customer_id == customer_id, Booking.customer_id == customer_id,
+                   CustomerIdentity.status.in_({"submitted", "needs_changes", "verified"}), eligible)
+            .order_by(CustomerIdentity.updated_at.desc(), CustomerIdentity.id.desc()).with_for_update(of=CustomerIdentity).limit(1))
+        if identity is None:
+            raise ValueError("Сохранённая анкета не найдена")
+        old, dek = _decrypt_payload(identity)
+        payload = validate_identity_payload(values, legacy_institution=old.get("student_institution"))
+        encrypted, nonce = _encrypt_payload(payload, dek)
+        draft = session.get(IdentityProfileDraft, identity.id)
+        if draft is None:
+            draft = IdentityProfileDraft(identity_id=identity.id, encrypted_payload=encrypted, payload_nonce=nonce)
+            session.add(draft)
+        else:
+            draft.encrypted_payload, draft.payload_nonce = encrypted, nonce
+        session.add(PIIAudit(booking_id=identity.booking_id, actor_id=customer_id, action="profile_identity_updated"))
         return {"fields": payload}
 
 
@@ -302,7 +332,10 @@ def reusable_identity_fields(booking_id, customer_id):
         identity = _latest_reusable_identity(session, booking_id, customer_id)
         if identity is None:
             return {"reusable": False, "fields": {}, "documents": []}
-        payload, _ = _decrypt_payload(identity)
+        payload, dek = _decrypt_payload(identity)
+        draft = session.get(IdentityProfileDraft, identity.id)
+        if draft:
+            payload = json.loads(AESGCM(dek).decrypt(draft.payload_nonce, draft.encrypted_payload, b"polyrental-identity-v1"))
         session.add(PIIAudit(booking_id=booking_id, actor_id=customer_id,
                              action="identity_prefilled"))
         return {"reusable": True, "fields": payload,

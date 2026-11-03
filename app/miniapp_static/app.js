@@ -108,6 +108,7 @@
   let schedulePolicy = null;
   let availabilityFresh = true;
   const identityPhotoDrafts = new Map();
+  let profileIdentityData = null;
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
     { id: 1, sku: "CAM-FX3", category: "camera", name: "Камера Sony FX3", description: "Компактная кинокамера для съёмок в движении", available_quantity: 3 },
@@ -571,9 +572,9 @@
 
   function render() {
     if (state.view !== "orders") {
-      profileIdentitySequence++;
+      profileIdentitySequence++; profileIdentityData = null;
       $("profile-identity-fields").replaceChildren(); $("profile-identity-fields").hidden = true;
-      $("profile-identity-toggle").setAttribute("aria-expanded", "false"); $("profile-identity-toggle").textContent = "Показать данные";
+      $("profile-identity-toggle").setAttribute("aria-expanded", "false"); $("profile-identity-toggle").textContent = "Показать данные"; $("profile-identity-edit").hidden = true;
     }
     if (state.view !== "admin") document.querySelectorAll(".request-card").forEach(clearRequestReview);
     document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 0);
@@ -797,7 +798,7 @@
       card.className = `item-card${selected ? " selected" : ""}${unavailable ? " unavailable" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<div class="item-notes"></div></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong aria-live="polite">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>+</button></div></div>`;
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<div class="item-notes"></div></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><button type="button" class="button secondary add-to-cart plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>${quantity ? `В корзине: ${quantity} · добавить` : "Добавить в корзину"}</button></div></div>`;
       const changeQuantity = (next) => { if (next > 0 && !state.quantities.has(item.id) && state.quantities.size >= 30) { showError("В подборке может быть не больше 30 позиций."); return; } if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id); state.requestId = null; renderItems(); saveDraft(); };
       card.querySelector(".minus").addEventListener("click", () => changeQuantity(quantity - 1));
       card.querySelector(".plus").addEventListener("click", () => changeQuantity(quantity + 1));
@@ -1423,13 +1424,13 @@
         const toggle = document.createElement("summary"); toggle.className = "request-toggle";
         toggle.innerHTML = `<span class="order-head"><strong>№ ${escapeHtml(order.human_number || String(order.id))}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="request-client">${escapeHtml(order.customer_name)}</span><span class="request-period">${escapeHtml(`${shortRequestDateTime(order.starts_at)} — ${shortRequestDateTime(order.ends_at)} МСК`)}</span>`;
         const owner = document.createElement("span"); owner.className = "request-assignee";
-        owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ID ${order.assignee_id}`) : "Ответственный не назначен";
+        owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ${order.assignee_name || "Сотрудник"}`) : "Ответственный не назначен";
         toggle.append(owner);
         const body = document.createElement("div"); body.className = "request-body";
         const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
         const summary = reviewSection("Сроки и техника", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
-        summary.append(labelledValues([["Ответственный", order.assignee_id ? `ID ${order.assignee_id}` : "Не назначен"]]));
+        summary.append(labelledValues([["Ответственный", order.assignee_id ? (order.assignee_name || "Сотрудник") : "Не назначен"]]));
         const period = document.createElement("div"); period.className = "rental-period";
         period.innerHTML = `<span>${escapeHtml(dateText(order.starts_at))}</span><span>${escapeHtml(dateText(order.ends_at))}</span>`;
         summary.append(period);
@@ -1456,7 +1457,7 @@
           const thumb = document.createElement("div"); thumb.className = "request-equipment-thumb";
           thumb.innerHTML = catalogMedia(mediaItem, "request-item");
           const info = document.createElement("div"); info.className = "request-equipment-info";
-          const label = document.createElement("span"); label.className = "request-equipment-title"; label.textContent = `${line.title || line.name} × ${line.quantity}`; info.append(label);
+          const label = document.createElement("span"); label.className = "request-equipment-title"; label.textContent = `${line.title || line.name}`; const qty = document.createElement("span"); qty.className = "request-equipment-quantity"; qty.textContent = String(line.quantity); qty.setAttribute("aria-label", `Количество: ${line.quantity}`); info.append(label, qty);
           const lineAssets = (order.assets || []).filter((asset) => !(pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id) && (asset.line_id === line.id || (!asset.line_id && asset.article_id === line.article_id)));
           const assetSummary = lineAssets.map((asset) => `${asset.location ? `${asset.location} · ` : ""}№ ${asset.asset_code || asset.serial}`).join(", ");
           const fullName = line.title && line.title !== line.name ? line.name : "";
@@ -2453,7 +2454,7 @@
       }
       steps.push([isDone, "Сотрудник завершил возврат"]);
     }
-    for (const [done, label] of steps) { const li = document.createElement("li"); li.textContent = `${done ? "✓" : "○"} ${label} — ${done ? "готово" : "ожидается"}`; list.append(li); }
+    for (const [done, label] of steps) { const li = document.createElement("li"); const box = document.createElement("input"); box.type = "checkbox"; box.checked = done; box.disabled = true; box.setAttribute("aria-label", label); const text = document.createElement("span"); text.textContent = label; const badge = document.createElement("span"); badge.className = `handover-badge ${done ? "done" : "waiting"}`; badge.textContent = done ? "Готово" : "Ожидается"; li.append(box, text, badge); list.append(li); }
     section.append(list); parent.append(section);
   }
 
@@ -2528,9 +2529,15 @@
       throw new Error(detail);
     }
     if (!response.headers.get("Content-Type")?.includes("application/pdf")) {
-      await workflowDialog("Сохранная расписка DOCX", receiptSummary(order) + '<button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
+      const preview = await api(`${path}?preview=true`);
+      await workflowDialog("Сохранная расписка DOCX", '<div class="receipt-docx-preview"></div><button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
         dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
         dialog.querySelector('[type="submit"]').hidden = true;
+        const host = dialog.querySelector(".receipt-docx-preview");
+        for (const block of preview.blocks || []) {
+          if (block.type === "paragraph") { const p = document.createElement("p"); p.textContent = block.text || " "; host.append(p); }
+          if (block.type === "table") { const table = document.createElement("table"); for (const row of block.rows || []) { const tr = table.insertRow(); for (const value of row) tr.insertCell().textContent = value; } host.append(table); }
+        }
         const button = dialog.querySelector(".receipt-download");
         button.addEventListener("click", async () => {
           button.disabled = true;
@@ -3144,18 +3151,25 @@
   $("profile-avatar-image").addEventListener("error", () => { $("profile-avatar-image").hidden = true; $("profile-avatar-fallback").hidden = false; });
   $("profile-identity-toggle").addEventListener("click", async () => {
     const button = $("profile-identity-toggle"), fields = $("profile-identity-fields");
-    if (button.getAttribute("aria-expanded") === "true") { profileIdentitySequence++; fields.replaceChildren(); fields.hidden = true; button.setAttribute("aria-expanded", "false"); button.textContent = "Показать данные"; return; }
+    if (button.getAttribute("aria-expanded") === "true") { profileIdentitySequence++; profileIdentityData = null; fields.replaceChildren(); fields.hidden = true; button.setAttribute("aria-expanded", "false"); button.textContent = "Показать данные"; $("profile-identity-edit").hidden = true; return; }
     const sequence = ++profileIdentitySequence; button.disabled = true;
     try {
       const result = await api("/api/miniapp/profile/identity");
       if (sequence !== profileIdentitySequence || state.view !== "orders") return;
-      fields.replaceChildren();
+      fields.replaceChildren(); profileIdentityData = result.fields || {};
       const labels = {full_name:"ФИО", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
       for (const [key, label] of Object.entries(labels)) { if (!result.fields?.[key]) continue; const row = document.createElement("p"); const title = document.createElement("strong"); title.textContent = `${label}: `; row.append(title, document.createTextNode(String(result.fields[key]))); fields.append(row); }
       if (!fields.childElementCount) fields.textContent = "Сохранённой анкеты пока нет.";
-      fields.hidden = false; button.setAttribute("aria-expanded", "true"); button.textContent = "Скрыть данные";
+      fields.hidden = false; button.setAttribute("aria-expanded", "true"); button.textContent = "Скрыть данные"; $("profile-identity-edit").hidden = !Object.keys(result.fields || {}).length;
     } catch (error) { if (sequence === profileIdentitySequence && state.view === "orders") showError(error.message); }
     finally { button.disabled = false; }
+  });
+  $("profile-identity-edit").addEventListener("click", async () => {
+    if (!profileIdentityData) return;
+    const labels = {full_name:"ФИО", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
+    const form = Object.entries(labels).map(([name, label]) => `<label class="field"><span>${escapeHtml(label)}</span><input name="${name}" type="${["birth_date", "passport_issued_at"].includes(name) ? "date" : "text"}" maxlength="500" value="${escapeHtml(profileIdentityData[name] || "")}" ${name.startsWith("student_") ? "" : "required"}></label>`).join("");
+    const result = await workflowDialog("Редактировать личные данные", `<p>Изменения будут использованы при заполнении следующих заявок.</p>${form}`, "Сохранить", null, async data => api("/api/miniapp/profile/identity", {method:"PUT", body:JSON.stringify(Object.fromEntries(Object.keys(labels).map(key => [key, data.get(key) || ""])))}));
+    if (result && state.view === "orders") { $("profile-identity-toggle").click(); $("profile-identity-toggle").click(); }
   });
   $("profile-sort").addEventListener("change", (event) => { state.profileSort = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-filter").addEventListener("change", (event) => { state.profileTargetId = null; state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });

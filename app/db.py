@@ -22,6 +22,7 @@ class StaffRole(Base):
 
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
 
 
 class TrustedSigner(Base):
@@ -451,6 +452,13 @@ class CustomerIdentity(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()"))
     delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     documents: Mapped[list["IdentityDocument"]] = relationship(cascade="all, delete-orphan")
+
+
+class IdentityProfileDraft(Base):
+    __tablename__ = "identity_profile_drafts"
+    identity_id: Mapped[int] = mapped_column(ForeignKey("customer_identities.id", ondelete="CASCADE"), primary_key=True)
+    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary)
+    payload_nonce: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class IdentityDocument(Base):

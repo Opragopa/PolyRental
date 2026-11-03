@@ -37,6 +37,7 @@ async function fixture(browser,{admin=false,role='operator',status='ready',width
     if(p.endsWith('/history')) return route.fulfill({json:{items:[]}});
     if(p==='/api/miniapp/admin/catalog') return route.fulfill({json:{articles:items.map(i=>({...i,inspection_profile:'camera',active:true,composition:'Корпус\nКабель\nКрышка',equipment:Array.from({length:3},(_,index)=>({id:i.id*20+index,asset_code:`${i.sku}-${index+1}`,condition:'available',location:'А-01',serial:`SERIAL-${index+1}`}))})),dependencies:[]}});
     if(p==='/api/miniapp/admin/assignees') return route.fulfill({json:{items:[{id:100,name:'Оператор Анна'},{id:200,name:'Менеджер Мария'}]}});
+    if(p.endsWith('/receipt') && url.searchParams.has('preview')) return route.fulfill({json:{blocks:[{type:'paragraph',text:'Сохранная расписка'},{type:'table',rows:[['Камера','1']]}]}});
     if(p==='/api/miniapp/support/faq') return route.fulfill({json:{items:[{question:'Как получить оборудование?',answer:'Дождитесь статуса готовности и приходите в выбранное время.'}]}});
     if(['POST','PUT','DELETE'].includes(method)) {writes.push({path:p,body:route.request().postDataJSON()});return route.fulfill({json:order});}
     if(p.startsWith('/api/')) return route.fulfill({json:{items:[],total:0}});
@@ -76,8 +77,8 @@ async function capture(page,name) {
       await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();await capture(page,`review-${suffix}`);
       await page.locator('#tab-orders').tap();await page.locator('.customer-order-toggle').tap();await capture(page,`profile-${suffix}`);
       await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).tap();
-      await page.locator('.receipt-section').first().waitFor();
-      assert.equal(await page.locator('.receipt-section').count(),3);
+      await page.locator('.receipt-docx-preview').waitFor();
+      assert.match(await page.locator('.receipt-docx-preview').innerText(),/Сохранная расписка/);
       assert.ok(await page.getByRole('button',{name:'Скачать DOCX',exact:true}).isVisible());
       await capture(page,`docx-summary-${suffix}`);
       await page.getByRole('button',{name:'Назад к заявке',exact:true}).tap();

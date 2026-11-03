@@ -20,7 +20,7 @@ import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
                      HTTPException, Query, Request, UploadFile)
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from aiogram.enums import ParseMode
 from icalendar import Calendar, Event
@@ -49,7 +49,7 @@ from .db import BookingDocument, Inspection, ReceiptArchive, Session, SupportMes
 from .receipt_archive import ReceiptExpired, customer_receipt_pdf
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
-                  reusable_identity_fields, profile_identity_fields,
+                  reusable_identity_fields, profile_identity_fields, update_profile_identity,
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
@@ -459,9 +459,12 @@ async def current_role(user=Depends(require_customer)):
     subrole = staff_subrole(user["id"])
     if subrole:
         role["staff_role"] = subrole
-        from .db import TrustedSigner
-        with Session() as session:
+        from .db import StaffRole, TrustedSigner
+        with Session.begin() as session:
             signer=session.get(TrustedSigner,user["id"])
+            staff=session.get(StaffRole,user["id"])
+            display = (f"@{user['username']}" if user.get("username") else " ".join(filter(None, [user.get("first_name", ""), user.get("last_name", "")])))[:200]
+            if staff and display and staff.display_name != display: staff.display_name = display
             role["trusted_signer"]=bool(signer and signer.active)
     elif role["pii_admin"]:
         role["pii_only"] = True
@@ -654,6 +657,15 @@ class ReminderPreference(BaseModel):
     enabled: bool = Field(strict=True)
 
 
+
+@router.put("/api/miniapp/profile/identity")
+async def client_update_profile_identity(payload: dict[str, str], user=Depends(require_customer)):
+    _limit_pii(user["id"], "customer_identity")
+    try:
+        return await asyncio.to_thread(update_profile_identity, user["id"], payload)
+    except (ValueError, Conflict) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
 @router.put("/api/miniapp/profile/reminders")
 async def update_reminder_preference(payload: ReminderPreference, user=Depends(require_customer)):
     await asyncio.to_thread(set_reminders_enabled, user["id"], payload.enabled)
@@ -704,10 +716,13 @@ async def client_history(category: str = Query(default="active", pattern="^(acti
 
 
 @router.get("/api/miniapp/bookings/{booking_id}/receipt")
-async def customer_download_receipt(booking_id: int, user=Depends(require_customer)):
+async def customer_download_receipt(booking_id: int, preview: bool = False, user=Depends(require_customer)):
     _limit_pii(user["id"], "customer_receipt")
     try:
         body, filename = await asyncio.to_thread(customer_receipt_pdf, booking_id, user["id"])
+        if preview and filename.endswith(".docx"):
+            from .docx_preview import receipt_docx_preview
+            return JSONResponse(await asyncio.to_thread(receipt_docx_preview, body), headers={"Cache-Control": "no-store"})
         return Response(body, media_type="application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Cache-Control": "no-store",
                         "Content-Disposition": f'attachment; filename="{filename}"'})
     except ReceiptExpired as exc:
@@ -913,6 +928,11 @@ def admin_booking_view(booking):
     from .handover import handover_state
     result["handover"] = handover_state(booking.id)
     result["assignee_id"] = booking.assignee_id
+    from .db import StaffRole, TrustedSigner
+    with Session() as session:
+        staff = session.get(StaffRole, booking.assignee_id) if booking.assignee_id else None
+        signer = session.get(TrustedSigner, booking.assignee_id) if booking.assignee_id else None
+        result["assignee_name"] = (staff.display_name if staff else "") or (signer.full_name if signer else "")
     result["sla"] = request_sla(booking)
     ordered_assets = sorted(booking.assets, key=lambda row: (
         row.equipment.storage_location or "", row.equipment.article.name if row.equipment.article else row.equipment.name,
@@ -1642,12 +1662,15 @@ async def admin_identity_document(booking_id: int, kind: str, user=Depends(requi
 
 
 @router.get("/api/miniapp/admin/bookings/{booking_id}/documents/{kind}")
-async def admin_generated_document(booking_id: int, kind: str, user=Depends(require_pii_admin)):
+async def admin_generated_document(booking_id: int, kind: str, preview: bool = False, user=Depends(require_pii_admin)):
     _limit_pii(user["id"], "admin_pii")
     if kind not in {"issue", "return","contract","legacy_receipt", "receipt"}:
         raise HTTPException(404, "Документ не найден")
     try:
         body, filename = await asyncio.to_thread(operator_document, booking_id, kind, user["id"])
+        if preview and kind == "receipt" and filename.endswith(".docx"):
+            from .docx_preview import receipt_docx_preview
+            return JSONResponse(await asyncio.to_thread(receipt_docx_preview, body), headers={"Cache-Control": "no-store"})
         return Response(body, media_type="application/pdf" if filename.endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Cache-Control": "no-store",
                                  "Content-Disposition": f'attachment; filename="{filename}"'})
@@ -1788,7 +1811,7 @@ async def admin_assignees(user=Depends(require_admin)):
     from .db import StaffRole, TrustedSigner
     with Session() as session:
         return {"items": [{"id": row.telegram_id, "role": row.role,
-                 "name": signer.full_name if (signer := session.get(TrustedSigner, row.telegram_id)) else str(row.telegram_id)}
+                 "name": row.display_name or (signer.full_name if (signer := session.get(TrustedSigner, row.telegram_id)) else "Сотрудник")}
                 for row in session.scalars(select(StaffRole).where(StaffRole.telegram_id.in_(configured_ids("ADMIN_IDS"))))]}
 
 

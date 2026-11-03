@@ -156,6 +156,12 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
         assert client.post(f"/api/miniapp/admin/bookings/{booking_id}/identity/review", headers=pii_admin,
                            json={"approved": True, "comment": ""}).status_code == 200
         assert reveal_identity(booking_id, 200)["passport_number"] == "123456"
+        edited = dict(revealed.json()["fields"], residential_address="Новый тестовый адрес")
+        changed = client.put("/api/miniapp/profile/identity", headers=customer, json=edited)
+        assert changed.status_code == 200
+        assert client.get("/api/miniapp/profile/identity", headers=customer).json()["fields"]["residential_address"] == "Новый тестовый адрес"
+        assert reveal_identity(booking_id, 200)["residential_address"] != "Новый тестовый адрес"
+        assert client.put("/api/miniapp/profile/identity", headers={"X-Telegram-Init-Data": signed_init_data(43)}, json=edited).status_code == 422
         assign_booking_assets(booking_id, 100)
         receipt = render_document(booking_id, "receipt", True, 200)
         assert receipt[:2] == b"PK"

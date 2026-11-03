@@ -60,7 +60,7 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
       if (url.pathname.endsWith('/attest')) { if (body.action==='returning') { order.handover.returning_at='2026-10-29T10:00:00Z'; order.status='return_inspection'; } else order.handover.received_at='2026-10-29T10:00:00Z'; }
       if (url.pathname.endsWith('/paper-signature')) order.handover[`${body.point}_signature`]={actor_id:100,full_name:'QA Admin'};
       if (url.pathname.endsWith('/transition')) order.status=body.action;
-      if (url.pathname.endsWith('/assignee')) order.assignee_id=body.assignee_id;
+      if (url.pathname.endsWith('/assignee')) { order.assignee_id=body.assignee_id; order.assignee_name='QA Staff'; }
       if (url.pathname.endsWith('/changes')) order.status='needs_changes';
       if (url.pathname.endsWith('/respond')) order.status='pending';
       return route.fulfill({json:order});
@@ -135,7 +135,7 @@ if(require.main===module)(async()=>{
       await dialog.getByRole('button', {name:'Подтвердить', exact:true}).click();
       await page.waitForFunction(() => !document.querySelector('.workflow-dialog'));
       assert.deepEqual(writes[0].body, {assignee_id:200});
-      await page.getByText('Ответственный: ID 200', {exact:true}).waitFor();
+      await page.getByText('Ответственный: QA Staff', {exact:true}).waitFor();
       assert.deepEqual(errors, []); await page.close(); passed++;
     }
     {

@@ -122,7 +122,7 @@
             <div class="profile-avatar"><img id="profile-avatar-image" alt="" hidden><span id="profile-avatar-fallback" aria-hidden="true">П</span></div>
             <div class="profile-summary"><h2 id="profile-name">Профиль Telegram</h2><p id="profile-contact" class="supporting"></p><p id="profile-since" class="supporting"></p></div>
           </div>
-          <div class="profile-private"><strong>Личные данные</strong><p class="supporting">Данные анкеты скрыты и доступны только вам</p><button type="button" id="profile-identity-toggle" class="button ghost" aria-expanded="false">Показать данные</button><div id="profile-identity-fields" hidden></div></div>
+          <div class="profile-private"><strong>Личные данные</strong><p class="supporting">Данные анкеты скрыты и доступны только вам</p><div class="profile-identity-actions"><button type="button" id="profile-identity-toggle" class="button ghost" aria-expanded="false">Показать данные</button><button type="button" id="profile-identity-edit" class="button secondary" hidden>Редактировать</button></div><div id="profile-identity-fields" hidden></div></div>
         </div>
         <section class="profile-history" aria-labelledby="profile-history-title">
           <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2 id="profile-history-title">Мои заявки</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-list"></use></svg></span></div>
@@ -239,10 +239,6 @@
     </main>
 
     <div id="delete-snackbar" class="delete-snackbar" role="status" aria-live="polite" hidden><span id="delete-message"></span><button id="delete-undo" class="button secondary" type="button">Отменить</button><button id="delete-retry" class="button secondary" type="button" hidden>Повторить</button></div>
-    <button id="floating-cart-button" type="button" class="floating-cart-button" aria-label="Открыть корзину" title="Корзина" hidden>
-      <svg class="icon" aria-hidden="true"><use href="#icon-cart"></use></svg>
-      <span id="floating-cart-count" class="floating-cart-count">0</span>
-    </button>
     <footer id="action-bar" class="action-bar"><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
   </div>
 </body>
