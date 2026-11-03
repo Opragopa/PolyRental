@@ -138,7 +138,7 @@ def install_booking_events(factory):
                     NotificationDelivery.booking_id == booking_id, NotificationDelivery.delivery_kind == "card").distinct()))
                 card_recipients = recipients | (previous_cards & (staff | {booking.customer_id}))
                 number = escape(booking.human_number or str(booking_id))
-                author = "Система" if not actor else "Клиент" if actor == booking.customer_id else f"Сотрудник {actor}"
+                author = "Система" if not actor else escape(booking.customer_name or str(actor)) if actor == booking.customer_id else f"Сотрудник {actor}"
                 description = "; ".join(dict.fromkeys(action_label(action) for action in actions))
                 message = f'<b>Заявка {number}</b>\n{escape(description)}\nАвтор: {author}\n<a href="{escape(booking_link(booking_id), quote=True)}">Открыть заявку</a>'
                 for recipient in card_recipients:

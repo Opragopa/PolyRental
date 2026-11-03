@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from .db import Article, CatalogCategory, Session
 
 DEFAULT_CATEGORIES = {"generic": "Оборудование", "camera": "Камера", "optics": "Оптика",
-                      "light": "Свет", "battery": "Питание", "accessory": "Аксессуар"}
+                      "light": "Свет", "battery": "Питание", "accessory": "Аксессуар", "kits": "Готовые комплекты"}
 
 
 def normalize_name(name):

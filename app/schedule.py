@@ -31,8 +31,8 @@ def is_working_day(day):
 
 
 def working_hours(day):
-    """Weekdays: 09:00–17:30; June through August: 08:30–17:00."""
-    return (time(8, 30), time(17, 0)) if 6 <= day.month <= 8 else (time(9, 0), time(17, 30))
+    """Weekdays close at 20:00; summer opening remains 08:30."""
+    return (time(8, 30), time(20, 0)) if 6 <= day.month <= 8 else (time(9, 0), time(20, 0))
 
 
 def current_time():
@@ -75,4 +75,4 @@ def schedule_policy():
             "closed_dates": sorted(day.isoformat() for day in NON_WORKING_2026 | _dates_from_env("NON_WORKING_DATES")),
             "working_dates": sorted(day.isoformat() for day in _dates_from_env("WORKING_DATES")),
             "annual_holidays": sorted(f"{month:02d}-{day:02d}" for month, day in FEDERAL_HOLIDAYS),
-            "normal": {"start":"09:00","end":"17:30"}, "summer":{"start":"08:30","end":"17:00"}}
+            "normal": {"start":"09:00","end":"20:00"}, "summer":{"start":"08:30","end":"20:00"}}

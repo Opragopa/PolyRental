@@ -172,8 +172,8 @@ def customer_attest(booking_id, customer_id, action, acknowledged=False, expecte
         if action == "received":
             if expected_summary_signature is not None and handover_summary_signature(data) != expected_summary_signature:
                 raise Conflict("Состав выдачи изменился. Ознакомьтесь с перечнем заново")
-            if booking.status != "ready" or not data.get("snapshot"):
-                raise Conflict("Получение доступно для готовой заявки")
+            if booking.status != "issued" or not data.get("snapshot"):
+                raise Conflict("Получение доступно после выдачи оборудования")
             if data.get("exceptions") and not acknowledged:
                 raise Conflict("Подтвердите ознакомление с перечнем частичной выдачи")
             if data.get("received_at") and data.get("exceptions_acknowledged") == acknowledged:
@@ -233,10 +233,9 @@ def attest_paper_signature(booking_id, actor_id, point, identity_matches, paper_
 def validate_issue(session, booking, actor_id=None, actor_name=""):
     row = session.get(BookingHandover, booking.id)
     data = row.data if row else {}
-    if (booking.identity_status != "verified" or not data.get("received_at") or
-            data.get("recipient_id") != booking.customer_id or
-            (data.get("exceptions") and not data.get("exceptions_acknowledged"))):
-        raise Conflict("Нужны расписка и подтверждение получения клиентом")
+    if (booking.identity_status != "verified" or
+            data.get("recipient_id") != booking.customer_id):
+        raise Conflict("Нужны проверенная анкета и расписка")
     document = session.get(BookingDocument, (booking.id, data.get("receipt_kind", "receipt_pdf")))
     if document is None:
         raise Conflict("Сохранённая расписка отсутствует")

@@ -600,8 +600,7 @@
     $("step-done").hidden = state.view !== "flow" || !done;
     const showAction = state.view === "flow" && !done && $("onboarding-dialog").hidden && $("support-dialog").hidden;
     $("action-bar").hidden = !showAction;
-    $("back-button").hidden = state.step === 0;
-    const labels = ["Далее к каталогу", "К подборке", "Проверить заявку", "Отправить заявку"];
+    const labels = ["Далее к каталогу", `В корзину · ${[...state.quantities.values()].reduce((sum, value) => sum + value, 0)}`, "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
     $("main-button").disabled = state.busy || cartLocked || (state.step === 0 && Boolean(dateValidationMessage())) || (!authorized && !keyboardMode && !preview);
     // A previously displayed native control can survive a Mini App reopen.
@@ -888,7 +887,8 @@
   function back() {
     clearError();
     if (catalogBack()) return;
-    if (state.view === "orders") { state.view = "flow"; render(); return; }
+    if (state.view === "identity") { try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {} void showOrders(); return; }
+    if (state.view !== "flow") { state.view = "flow"; render(); return; }
     if (state.step > 0 && state.step < 4) { state.step--; render(); }
   }
 
@@ -1102,7 +1102,9 @@
   }
 
   async function openIdentity(bookingId) {
-    clearError(); state.identityBookingId = bookingId; state.view = "identity"; render();
+    clearError(); state.identityBookingId = bookingId; state.view = "identity";
+    try { localStorage.setItem("polyrental-identity-booking", String(bookingId)); } catch (_) {}
+    render();
     state.consent = null; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
     $("identity-form").reset();
     document.querySelectorAll('#identity-form .needs-fix').forEach((field) => field.classList.remove("needs-fix"));
@@ -1199,8 +1201,10 @@
       if (missingPhoto) { const photoError = new Error(`Добавьте фото: ${missingPhoto === "passport_main" ? "паспорт — страница с фото" : missingPhoto === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = missingPhoto; throw photoError; }
       await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
       await clearIdentityPhotoDrafts(state.identityBookingId);
-      form.reset(); $("identity-form").hidden = true; $("identity-status").hidden = false;
-      $("identity-status").textContent = "Анкета заполнена, ждите ответа оператора";
+      try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {}
+      form.reset();
+      if (document.startViewTransition && !reducedMotion?.matches) document.startViewTransition(() => { void showOrders(); });
+      else void showOrders();
     } catch (error) { showIdentityError(error); }
     finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
   }
@@ -1404,24 +1408,24 @@
         const owner = document.createElement("span"); owner.className = "request-assignee";
         owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ID ${order.assignee_id}`) : "Ответственный не назначен";
         toggle.append(owner);
-        if (order.sla?.deadline && order.sla?.stage !== "closed") {
-          const sla = document.createElement("span"); sla.className = "request-sla";
-          if (order.sla.breached) {
-            sla.classList.add("request-sla-overdue");
-            sla.innerHTML = `<strong class="request-sla-alert">Просрочено</strong><span>Срок обработки: ${escapeHtml(dateText(order.sla.deadline))} МСК</span>`;
-          } else {
-            sla.textContent = `Срок обработки: ${dateText(order.sla.deadline)} МСК`;
-          }
-          toggle.append(sla);
-        }
         const body = document.createElement("div"); body.className = "request-body";
         const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
-        const summary = reviewSection(hasInspectionCards ? "Сроки и дедлайн" : "Сроки и техника", "request-summary");
+        const summary = reviewSection("Сроки и техника", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
-        summary.append(labelledValues([["Ответственный", order.assignee_id ? `ID ${order.assignee_id}` : "Не назначен"], ["Период аренды · МСК", `${dateText(order.starts_at)} — ${dateText(order.ends_at)}`]]));
-        if (order.sla?.deadline) {
-          const deadline = document.createElement("p"); deadline.textContent = `${order.sla.breached ? "Просрочено · " : ""}Дедлайн: ${dateText(order.sla.deadline)} МСК`; summary.append(deadline);
-          const progress = document.createElement("progress"); progress.max = 1; progress.value = order.sla.progress; progress.setAttribute("aria-label", "Прошедшая часть срока обработки"); summary.append(progress);
+        summary.append(labelledValues([["Ответственный", order.assignee_id ? `ID ${order.assignee_id}` : "Не назначен"]]));
+        const period = document.createElement("div"); period.className = "rental-period";
+        period.innerHTML = `<span>${escapeHtml(dateText(order.starts_at))}</span><span>${escapeHtml(dateText(order.ends_at))}</span>`;
+        summary.append(period);
+        const startTime = Date.parse(order.starts_at), endTime = Date.parse(order.ends_at), currentTime = Date.now();
+        if (Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime) {
+          if (currentTime > endTime && !["returned", "cancelled", "expired"].includes(order.status)) {
+            const overdue = document.createElement("div"); overdue.className = "rental-overdue"; overdue.textContent = "Просрочено"; summary.append(overdue);
+          } else {
+            const value = Math.max(0, Math.min(1, (currentTime - startTime) / (endTime - startTime)));
+            const progress = document.createElement("progress"); progress.className = "rental-progress"; progress.max = 1; progress.value = value;
+            progress.style.setProperty("--progress-color", value < .25 ? "#24a65a" : value < .5 ? "#e3bc24" : value < .75 ? "#ed8b24" : "#d83d3d");
+            progress.setAttribute("aria-label", "Прошедшая часть срока аренды"); summary.append(progress);
+          }
         }
         let serviceSection = null;
         if (state.profile?.system_admin) {
@@ -1488,7 +1492,7 @@
         const actions = document.createElement("div"); actions.className = "action-row";
         const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status");
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
-        nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Дождитесь отметки клиента «Получил», затем оформите выдачу.", issued: "Ждём отметку клиента «Сдаю оборудование».", return_inspection: "Проверьте возвращённое оборудование и завершите заявку.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
+        nextStep.textContent = ({pending: "Следующий шаг: подтвердить заявку.", needs_changes: "Ждём ответа клиента.", confirmed: "Следующий шаг: проверить анкету и начать подготовку.", preparing: "Следующий шаг: проверить экземпляры и подтвердить готовность.", ready: "Оформите выдачу оборудования клиенту.", issued: "Ждём подтверждение получения и возврата оборудования клиентом.", return_inspection: "Проверьте возвращённое оборудование и завершите заявку.", returned: "Заявка завершена"})[order.status] || "Обработка заявки завершена.";
         if (order.status === "confirmed" && order.identity_status !== "verified") {
           nextStep.textContent = order.identity_status === "submitted"
             ? (state.role?.pii_admin ? "Следующий шаг: проверьте анкету клиента." : "Ждём проверку анкеты сотрудником с доступом к персональным данным.")
@@ -2430,7 +2434,7 @@
     const list = document.createElement("ul");
     const isDone = status === "returned";
     let steps;
-    if (status === "ready") steps = [[Boolean(handover.received_at), "Клиент подтвердил получение"], [false, "Сотрудник подтверждает выдачу"]];
+    if (status === "ready") steps = [[false, "Сотрудник подтверждает выдачу"], [Boolean(handover.received_at), "Клиент подтверждает получение"]];
     else {
       steps = [[Boolean(handover.returning_at) || isDone, "Клиент отметил сдачу оборудования"]];
       if (admin) {
@@ -2627,7 +2631,7 @@
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
     if (order.receipt_available || order.receipt_preview_available) card.append(plainButton("Предпросмотр расписки",()=>previewReceipt(order)));
     if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.docx`)));
-    if (order.status === "ready" && !order.handover?.received_at) card.append(plainButton("Получил", async () => {
+    if (order.status === "issued" && !order.handover?.received_at) card.append(plainButton("Получил", async () => {
       const data = await workflowDialog("Получение оборудования", receiptSummary(order) + (order.partial_issue ? '<label class="check-row"><input name="acknowledged" type="checkbox" required><span>С перечнем ознакомлен</span></label>' : ""), "Подтверждаю",null,async data=>api(`/api/miniapp/bookings/${order.id}/attest`,{method:"POST",body:JSON.stringify({action:"received",acknowledged:data.get("acknowledged")==="on"})}));
       if (data) await showOrders();
     },"primary"));
@@ -2661,7 +2665,7 @@
     },order.id,"secondary lock-exempt"));
     if (order.handover?.issued_by) { const note = document.createElement("p"); note.textContent = `Выдал: ${order.handover.issued_by_name || `сотрудник ID ${order.handover.issued_by}`}`; actions.append(note); }
     if (order.handover?.returned_by) { const note = document.createElement("p"); note.textContent = `Принял: ${order.handover.returned_by_name || `сотрудник ID ${order.handover.returned_by}`}`; actions.append(note); }
-    if (order.status === "ready" && order.handover?.received_at) actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next handover-action"));
+    if (order.status === "ready") actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next handover-action"));
     if (order.status === "return_inspection") for (const asset of order.assets) actions.append(actionButton(`Особенности при возврате: ${asset.name}`, async () => {
       const original = order.handover?.snapshot?.find((item) => item.id === asset.id);
       const data = await workflowDialog("Сравнение особенностей", `<p>При выдаче: ${escapeHtml(original?.features?.map((item) => item.description).join("; ") || (order.handover?.legacy_snapshot_unknown ? "снимок отсутствовал" : "особенностей нет"))}</p><label class="field"><span>Результат</span><select name="kind"><option value="existing">Старая черта, выявлено при возврате</option><option value="damage">Новое повреждение</option><option value="lost">Утеря</option></select></label><label class="field"><span>Описание</span><textarea name="description" maxlength="2000" required></textarea></label>`,"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/return-finding`,{method:"POST",body:JSON.stringify({equipment_id:asset.id,kind:data.get("kind"),description:data.get("description")})}));
@@ -2992,7 +2996,7 @@
   });
   $("retry-items").addEventListener("click", loadItems);
   $("change-dates").addEventListener("click", () => { state.step = 0; render(); });
-  $("back-button").addEventListener("click", back);
+  $("top-back-button").addEventListener("click", back);
   let supportContext = { screen: "profile", bookingId: null }, supportReturnFocus = null;
   async function openSupport(screen, bookingId = null) {
     supportContext = {screen, bookingId}; supportReturnFocus = document.activeElement;
@@ -3282,6 +3286,8 @@
         if (pending) { cartPending = pending; showCartSyncProblem("Не удалось проверить серверную подборку. Подключитесь к сети для выбора действия."); }
       }
       void claimStageNotices();
+      let identityDraft = null; try { identityDraft = localStorage.getItem("polyrental-identity-booking"); } catch (_) {}
+      if (identityDraft && /^\d+$/.test(identityDraft)) return openIdentity(Number(identityDraft));
       const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
       const linkedBooking = /^booking_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("booking");
       if (linkedBooking && /^\d+$/.test(linkedBooking)) {

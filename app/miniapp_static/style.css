@@ -956,3 +956,9 @@ html { scroll-padding-bottom: calc(150px + max(env(safe-area-inset-bottom), var(
 .category-card .icon { width: 30px; height: 30px; flex: none; }
 .category-card span:last-child { margin-left: auto; font-size: 22px; }
 .category-card:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+.rental-period { display:flex; justify-content:space-between; gap:1rem; font-size:13px; }
+.rental-progress { width:100%; accent-color:var(--progress-color); }
+.rental-progress::-webkit-progress-value { background:var(--progress-color); }
+.rental-progress::-moz-progress-bar { background:var(--progress-color); }
+.rental-overdue { background:#d83d3d; color:white; border-radius:8px; padding:8px 12px; text-align:center; font-weight:700; }
