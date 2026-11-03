@@ -1589,3 +1589,9 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 
 /* Leave room around the focused disclosure when it is brought into view. */
 details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { scroll-margin-block: 16px; }
+/* Keep catalog navigation legible and keyboard focus visible on each screen. */
+#catalog-page-title, .catalog-screen-heading { scroll-margin-top: 16px; overflow-wrap: anywhere; }
+#catalog-page-title:focus-visible, .catalog-screen-heading:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; border-radius: 4px; }
+.catalog-screen-heading { margin: 18px 0 8px; font-size: 20px; line-height: 1.3; }
+.client-categories > .button { min-height: 44px; justify-self: start; }
+.category-card { min-height: 64px; }

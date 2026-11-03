@@ -9,6 +9,7 @@ const {fixture,base}=require('./completion-ui.cjs');
  await page.route('**/api/miniapp/admin/catalog?*',route=>{const q=new URL(route.request().url()).searchParams;last=Object.fromEntries(q);const matches=articles.filter(a=>(!q.get('q')||`${a.name} ${a.sku}`.toLowerCase().includes(q.get('q').toLowerCase()))&&(q.get('condition')==='all'||a.equipment.some(e=>e.condition===q.get('condition'))));const pageNum=Number(q.get('page'));return route.fulfill({json:{articles:matches.slice(pageNum*20,pageNum*20+20),categories:[{code:'camera',name:'Камера'}],dependencies:[],total:matches.length,page:pageNum,page_size:20}})});
  await page.route('**/api/miniapp/admin/catalog/options?*',route=>{const q=new URL(route.request().url()).searchParams;const matches=articles.filter(a=>`${a.name} ${a.sku}`.toLowerCase().includes((q.get('q')||'').toLowerCase()));const n=Number(q.get('page'));return route.fulfill({json:{items:matches.slice(n*20,n*20+20),total:matches.length,page:n,page_size:20}})});
  await page.locator('[data-mode="catalog"]').click();
+ await page.locator('.admin-categories').getByRole('button',{name:'Камера'}).click();
  await page.getByText('Показано моделей: 20 из 45').waitFor();
  await page.locator('.catalog-pagination').getByRole('button',{name:'Далее'}).click();
  await page.getByText('Камера 21',{exact:true}).first().waitFor();assert.equal(last.page,'1');
