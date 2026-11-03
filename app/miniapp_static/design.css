@@ -1545,3 +1545,15 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 
 /* Preserve an accessible touch target for changing the booking period. */
 .catalog-period #change-dates { min-height:44px; }
+
+/* Keep date labels readable on narrow phones and booking forms usable on desktop. */
+.dates-view .date-grid .field > span {
+  overflow:visible;
+  text-overflow:clip;
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+@media (min-width: 1100px) {
+  #booking-flow { max-width:850px; margin-inline:auto; }
+  .action-bar { width:min(930px, 100%); }
+}
