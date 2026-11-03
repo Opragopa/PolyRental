@@ -580,6 +580,9 @@
     if (state.view !== "admin") document.querySelectorAll(".request-card").forEach(clearRequestReview);
     document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 0);
     const done = state.step === 4;
+    const backButton = $("top-back-button");
+    backButton.disabled = state.view === "flow" && state.step === 0;
+    backButton.title = backButton.disabled ? "Вы на первом экране" : "Назад";
     $("booking-flow").hidden = state.view !== "flow";
     $("booking-flow").inert = cartLocked; $("cart-sync-notice").hidden = !cartLocked;
     $("booking-blocked").hidden = state.view !== "blocked";
@@ -799,7 +802,7 @@
       card.className = `item-card${selected ? " selected" : ""}${unavailable ? " unavailable" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<div class="item-notes"></div></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><button type="button" class="button secondary add-to-cart plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>${quantity ? `В корзине: ${quantity} · добавить` : "Добавить в корзину"}</button></div></div>`;
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${unavailable ? "Нет в наличии на выбранные даты" : `Доступно: ${item.available_quantity} шт.`}</span>${unavailable && item.next_available_start ? `<p>Ближайшее доступное окно: с ${escapeHtml(dateText(item.next_available_start))} МСК</p>` : ""}${quantity > item.available_quantity ? `<p role="status">Осталось ${item.available_quantity} шт. Уменьшите количество.</p>` : ""}<div class="item-notes"></div></div></div><div class="quantity-control"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><button type="button" class="button secondary add-to-cart plus" aria-label="Добавить в корзину: ${escapeHtml(catalogTitle(item))}; выбрано ${quantity}" ${quantity >= Math.min(30, item.available_quantity) || !availabilityFresh ? "disabled" : ""}>${quantity ? `В корзине: ${quantity} · добавить` : "Добавить в корзину"}</button></div></div>`;
       const changeQuantity = (next) => { if (next > 0 && !state.quantities.has(item.id) && state.quantities.size >= 30) { showError("В подборке может быть не больше 30 позиций."); return; } if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id); state.requestId = null; renderItems(); saveDraft(); };
       card.querySelector(".minus").addEventListener("click", () => changeQuantity(quantity - 1));
       card.querySelector(".plus").addEventListener("click", () => changeQuantity(quantity + 1));
@@ -888,9 +891,11 @@
   }
   function back() {
     clearError();
+    if (state.view === "admin" && !guardStaffNavigation()) return;
     if (catalogBack()) return;
     if (state.view === "identity") { try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {} void showOrders(); return; }
     if (state.view !== "flow") { state.view = "flow"; render(); return; }
+    if (state.step === 4) { void showOrders(); return; }
     if (state.step > 0 && state.step < 4) { state.step--; render(); }
   }
 
@@ -2264,10 +2269,10 @@
     const result = {};
     for (const element of form.elements) if (safeCatalogDraftFields.has(element.name)) {
       if (element.tagName === "SELECT") {
-        const allowed = element.name === "category" ? /^(generic|camera|optics|light|battery|accessory|custom_[a-f0-9]{32})$/i
+        const allowed = element.name === "category" ? null
           : element.name === "inspection_profile" ? /^(generic|camera|optics|light|battery)$/
           : element.name === "condition" ? /^(available|maintenance|retired)$/ : /^\d*$/;
-        if (allowed.test(element.value)) result[element.name] = element.value;
+        if (element.name === "category" ? [...element.options].some(option => option.value === element.value) : allowed.test(element.value)) result[element.name] = element.value;
       } else if (element.type === "checkbox") result[element.name] = element.checked;
       else if (element.type === "number" && /^\d{0,2}$/.test(element.value)) result[element.name] = element.value;
     }

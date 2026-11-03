@@ -33,7 +33,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
   return {page,errors,release,requestReceived,getServer:()=>server,getWrites:()=>writes,setOnline:()=>{offline=false}};
  }
  {
-  const f=await setup('conflict'), {page}=f;const plus=page.getByRole('button',{name:'Увеличить количество: Камера 1'});
+  const f=await setup('conflict'), {page}=f;const plus=page.getByRole('button',{name:'Добавить в корзину: Камера 1'});
   await plus.click();await page.clock.runFor(350);await f.requestReceived;await plus.click();assert.equal(await page.locator('#selected-count').innerText(),'2');
   f.release();await page.locator('#cart-sync-notice').waitFor();assert.equal(await page.locator('#selected-count').innerText(),'1');
   assert.match(await page.locator('#cart-sync-summary').innerText(),/на сервере: 1 шт\.; в ваших несохранённых изменениях: 2 шт/i);
@@ -42,12 +42,12 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
   assert.deepEqual(f.getServer().lines,[{article_id:1,quantity:2}]);assert.equal(f.getServer().version,3);assert.deepEqual(f.errors,[]);await page.close();
  }
  {
-  const f=await setup('lost-ack'), {page}=f;await page.getByRole('button',{name:'Увеличить количество: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();
+  const f=await setup('lost-ack'), {page}=f;await page.getByRole('button',{name:'Добавить в корзину: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();
   await page.waitForFunction(()=>!Object.keys(localStorage).some(k=>k.endsWith(':unsynced')));
   assert.equal(await page.locator('#cart-sync-notice').isHidden(),true);assert.equal(await page.locator('#selected-count').innerText(),'1');assert.equal(f.getServer().lines[0].quantity,1);assert.deepEqual(f.errors,[]);await page.close();
  }
  {
-  const f=await setup('offline'), {page}=f;await page.getByRole('button',{name:'Увеличить количество: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();await page.locator('#cart-sync-notice').waitFor();
+  const f=await setup('offline'), {page}=f;await page.getByRole('button',{name:'Добавить в корзину: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();await page.locator('#cart-sync-notice').waitFor();
   assert.equal(await page.locator('#selected-count').innerText(),'0');await page.getByRole('button',{name:'Использовать серверную подборку'}).click();assert.equal(await page.locator('#cart-sync-notice').isVisible(),true);
   f.setOnline();await page.getByRole('button',{name:'Использовать серверную подборку'}).click();await page.locator('#cart-sync-notice').waitFor({state:'hidden'});assert.equal(await page.locator('#selected-count').innerText(),'0');assert.deepEqual(f.errors,[]);await page.close();
  }

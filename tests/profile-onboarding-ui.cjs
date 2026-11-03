@@ -16,13 +16,14 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       let seen = false, completed = 0, switches = 0, reminders = true, historySearch = '', identityRequests = 0;
+      let identity = {full_name:'Тестовый Клиент', birth_date:'2000-01-01', passport_series:'0000', passport_number:'123456', passport_issued_at:'2020-01-01', passport_issuer:'Тестовый отдел', passport_division_code:'123-456', registration_address:'Тестовая улица', residential_address:'Тестовый адрес', student_id_number:'', student_institution:''};
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.hostname === 'telegram.org') return route.fulfill({contentType:'text/javascript', body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
         if (url.pathname.startsWith('/miniapp/static/')) { const file = path.join(assets, path.basename(url.pathname)); return route.fulfill({body: fs.readFileSync(file), contentType: file.endsWith('.css') ? 'text/css' : 'text/javascript'}); }
         if (url.pathname === '/api/miniapp/me') return route.fulfill({json:{id:admin ? 100 : 42, admin, pii_admin:false}});
         if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA', member_since:'2026-01-01T00:00:00Z', onboarding_seen:seen, reminders_enabled:reminders, start_screen:admin ? 'management' : 'booking'}});
-        if (url.pathname === '/api/miniapp/profile/identity') { identityRequests++; return route.fulfill({json:{fields:{passport_number:'123456'}}}); }
+        if (url.pathname === '/api/miniapp/profile/identity') { if (route.request().method() === 'PUT') identity = route.request().postDataJSON(); else identityRequests++; return route.fulfill({json:{fields:identity}}); }
         if (url.pathname === '/api/miniapp/profile/reminders') { reminders = route.request().postDataJSON().enabled; return route.fulfill({json:{enabled:reminders}}); }
         if (url.pathname === '/api/miniapp/onboarding/show') { const first = !seen; seen = true; return route.fulfill({json:{first_show:first}}); }
         if (url.pathname === '/api/miniapp/onboarding/complete') { completed++; return route.fulfill({json:{status:'ok'}}); }
@@ -71,6 +72,13 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       assert.equal(identityRequests, 1);
       await page.locator('#profile-identity-fields').getByText('Номер паспорта:', {exact:false}).waitFor();
       assert.match(await page.locator('#profile-identity-fields').innerText(), /123456/);
+      await page.getByRole('button',{name:'Редактировать',exact:true}).click();
+      const edit = page.locator('.workflow-dialog');
+      await edit.locator('[name="residential_address"]').fill('Новый тестовый адрес');
+      await edit.getByRole('button',{name:'Сохранить',exact:true}).click();
+      await edit.waitFor({state:'detached'});
+      await page.locator('#profile-identity-fields').getByText('Новый тестовый адрес').waitFor();
+      assert.equal(identity.residential_address, 'Новый тестовый адрес');
       await page.getByRole('button',{name:'Скрыть данные'}).click();
       assert.equal(await page.locator('#profile-identity-fields').innerText(), '');
       await page.locator('#profile-number').fill('ТС260001');

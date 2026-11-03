@@ -1630,3 +1630,8 @@ details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { s
   .receipt-preview-dialog .dialog-card {max-height:90vh; overflow:auto}
 }
 @media(max-width:767px) { .receipt-preview-dialog .receipt-download {width:100%} }
+/* Keep full rental dates readable on narrow mobile screens. */
+.request-period, .customer-order-period { white-space:normal; overflow-wrap:anywhere; }
+@media (max-width: 380px) {
+  .request-toggle .order-head, .customer-order-toggle .order-head { flex-wrap:wrap; }
+}

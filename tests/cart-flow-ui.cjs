@@ -31,7 +31,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.goto('http://polyrental.test/miniapp');
     await page.waitForFunction(() => !document.documentElement.classList.contains('role-pending'));
     await page.locator('#main-button').click();
-    await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
+    await page.getByRole('button',{name:'Добавить в корзину: Камера Sony'}).click();
     await page.locator('#main-button').click();
     await page.locator('#cart-items').getByRole('button',{name:'Увеличить количество'}).click();
     assert.match(await page.locator('#cart-total').innerText(), /2 шт/);

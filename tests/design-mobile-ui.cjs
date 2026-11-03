@@ -75,7 +75,9 @@ async function capture(page,name) {
       await page.locator('.item-card .plus').first().tap();await page.locator('#main-button').tap();
       await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@synthetic_customer');
       await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();await capture(page,`review-${suffix}`);
-      await page.locator('#tab-orders').tap();await page.locator('.customer-order-toggle').tap();await capture(page,`profile-${suffix}`);
+      await page.locator('#tab-orders').tap();await page.locator('.customer-order-toggle').tap();
+      assert.ok(await page.locator('.customer-order-period').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'rental period must not be clipped');
+      await capture(page,`profile-${suffix}`);
       await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).tap();
       await page.locator('.receipt-docx-preview').waitFor();
       assert.match(await page.locator('.receipt-docx-preview').innerText(),/Сохранная расписка/);

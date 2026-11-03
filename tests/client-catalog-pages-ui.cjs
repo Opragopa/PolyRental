@@ -19,9 +19,9 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{items:[]}});
  return route.fulfill({body:html,contentType:'text/html'});});
  await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});await page.goto('http://polyrental.test/miniapp');await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
- await page.locator('#main-button').click();await page.getByRole('button',{name:'Увеличить количество: Камера 01'}).click();
- await page.locator('#client-catalog-next').click();await page.getByRole('button',{name:'Увеличить количество: Камера 21'}).click();
- await page.locator('#client-catalog-search').fill('Камера 45');await page.clock.runFor(350);await page.getByRole('button',{name:'Увеличить количество: Камера 45'}).click();
+ await page.locator('#main-button').click();await page.getByRole('button',{name:'Добавить в корзину: Камера 01'}).click();
+ await page.locator('#client-catalog-next').click();await page.getByRole('button',{name:'Добавить в корзину: Камера 21'}).click();
+ await page.locator('#client-catalog-search').fill('Камера 45');await page.clock.runFor(350);await page.getByRole('button',{name:'Добавить в корзину: Камера 45'}).click();
  assert.equal(await page.locator('#selected-count').innerText(),'3');assert.deepEqual(lastSelected.sort((a,b)=>a-b),[1,21]);
  await page.locator('#main-button').click();await page.locator('#cart-items').getByText('Камера 01',{exact:true}).waitFor();await page.locator('#cart-items').getByText('Камера 21',{exact:true}).waitFor();await page.locator('#cart-items').getByText('Камера 45',{exact:true}).waitFor();
  await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');unavailable=true;

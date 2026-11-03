@@ -169,11 +169,10 @@ if(require.main===module)(async()=>{
       await client.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
       assert.ok(client.writes.some(row=>row.body.action==='received'));
       await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
-      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
       await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).click();
       await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
       await operator.page.clock.runFor(5100);
-      await operator.page.getByText('Клиент отметил сдачу оборудования — готово',{exact:false}).waitFor();
+      await operator.page.locator('.handover-progress li').filter({hasText:'Клиент отметил сдачу оборудования'}).getByText('Готово', {exact:true}).waitFor();
       assert.ok(await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).isDisabled());
       assert.ok(await operator.page.getByRole('button',{name:'Все исправны',exact:true}).isEnabled());
       order.inspections=[{equipment_id:21,stage:'check_in',result:'pass'}];
