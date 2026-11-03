@@ -532,6 +532,8 @@ class CatalogCategory(Base):
     code: Mapped[str] = mapped_column(String(40), primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     normalized_name: Mapped[str] = mapped_column(String(100), unique=True)
+    parent_code: Mapped[str | None] = mapped_column(ForeignKey("catalog_categories.code"), nullable=True)
+    icon: Mapped[str] = mapped_column(String(30), default="equipment", server_default="equipment")
 
 
 class BookingEvent(Base):

@@ -24,7 +24,7 @@
   }
   const sections = ["step-dates", "step-items", "step-contact", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, onboardingLoading: false, onboardingPending: false, profileFilter: "all", profileSort: "date", profilePage: 0, profileNumber: "", adminRequestFilter: "all", adminStatus: "all", adminSort: "date", adminPage: 0, adminTargetId: null, adminQueue: "all", supportPage: 0, supportFilterId: null, cartVersion: null };
-  const clientCatalog = {page:0, pageSize:20, total:0, paged:null, pageItems:[], timer:null};
+  const clientCatalog = {page:0, pageSize:20, total:0, paged:null, pageItems:[], timer:null, category:"", categories:[]};
   const catalogView = { query: "", status: "all", page: 0, sequence: 0, timer: null, expanded: new Set() };
   let selectedRequestId = null;
   let selectedCustomerOrderId = null;
@@ -60,17 +60,18 @@
     battery: ["Питание", "battery"], accessory: ["Аксессуар", "accessory"], generic: ["Оборудование", "equipment"],
   };
   function setCategories(categories) {
-    for (const category of categories) categoryMeta[category.code] = [category.name, categoryMeta[category.code]?.[1] || "equipment"];
+    clientCatalog.categories = categories;
+    for (const category of categories) categoryMeta[category.code] = [category.name, category.icon || categoryMeta[category.code]?.[1] || "equipment"];
   }
   function categoryOptions(selected) {
     return Object.entries(categoryMeta).map(([code, meta]) => `<option value="${escapeHtml(code)}" ${code === selected ? "selected" : ""}>${escapeHtml(meta[0])}</option>`).join("");
   }
   async function createCategoryDialog() {
     let created = null;
-    const data = await workflowDialog("Создать категорию", '<label class="field"><span>Название категории</span><input name="name" maxlength="100" required></label>', "Создать", null,
-      async values => { created = await api("/api/miniapp/admin/catalog/categories", {method:"POST", body:JSON.stringify({name:values.get("name")})}); });
+    const data = await workflowDialog("Создать категорию", `<label class="field"><span>Название категории</span><input name="name" maxlength="100" required></label><label class="field"><span>Родительская категория</span><select name="parent_code"><option value="">Нет</option>${categoryOptions("")}</select></label><label class="field"><span>Пиктограмма</span><select name="icon"><option value="equipment">Оборудование</option><option value="camera">Камера</option><option value="lens">Оптика</option><option value="light">Свет</option><option value="battery">Питание</option><option value="accessory">Аксессуары</option></select></label>`, "Создать", null,
+      async values => { created = await api("/api/miniapp/admin/catalog/categories", {method:"POST", body:JSON.stringify({name:values.get("name"), parent_code:values.get("parent_code") || null, icon:values.get("icon")})}); });
     if (!data) return null;
-    setCategories([created]);
+    setCategories([...clientCatalog.categories, created]);
     return created;
   }
   function categoryLabel(category) { return categoryMeta[category]?.[0] || categoryMeta.generic[0]; }
@@ -562,6 +563,7 @@
 
   function availabilityPath(start, end) {
     const params = new URLSearchParams({start:toIso(start), end:toIso(end), page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:$("client-catalog-search").value.trim()});
+    if (clientCatalog.category) params.set("category", clientCatalog.category);
     for (const [id] of state.quantities) params.append("selected", String(id));
     return `/api/miniapp/availability?${params}`;
   }
@@ -584,7 +586,7 @@
   async function loadItems() {
     const sequence = ++availabilitySequence;
     const periodStart = $("start").value, periodEnd = $("end").value;
-    const requestedPage = clientCatalog.page, requestedQuery = $("client-catalog-search").value.trim();
+    const requestedPage = clientCatalog.page, requestedQuery = $("client-catalog-search").value.trim(), requestedCategory = clientCatalog.category;
     const previousItems = state.items;
     showLoading($("items-grid"), "", 3);
     $("items-status").hidden = false; $("items-status").textContent = "Проверяем доступность оборудования…";
@@ -595,7 +597,7 @@
       : `<span class="period-label-caption">Период аренды · МСК</span><strong class="period-label-value">Выберите даты</strong>`;
     try {
       const data = preview ? { items: exampleItems, unavailable_count: 0, unavailable: [] } : await api(availabilityPath(periodStart, periodEnd));
-      if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
+      if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedCategory !== clientCatalog.category || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
       if (Number.isInteger(data.page) && data.page > 0 && data.page * data.page_size >= data.total) { clientCatalog.page = Math.max(0, Math.ceil(data.total / data.page_size) - 1); return loadItems(); }
       state.items = reconcileAvailability(data, previousItems);
       availabilityFresh=true;
@@ -669,8 +671,25 @@
   void followAvailabilityEvents();
   function renderItems() {
     $("items-grid").replaceChildren();
+    const categoryHost = $("client-categories"); categoryHost.replaceChildren();
+    const queryText = $("client-catalog-search").value.trim();
+    const parent = clientCatalog.categories.find(c => c.code === clientCatalog.category);
+    if (parent) {
+      const back = document.createElement("button"); back.type = "button"; back.className = "button ghost"; back.textContent = "← " + (parent.parent_code ? "Назад" : "Все категории");
+      back.addEventListener("click", () => { clientCatalog.category = parent.parent_code || ""; clientCatalog.page = 0; void loadItems(); }); categoryHost.append(back);
+      const heading = document.createElement("h3"); heading.textContent = parent.name; categoryHost.append(heading);
+    }
+    const children = clientCatalog.categories.filter(c => (c.parent_code || "") === clientCatalog.category);
+    if (!queryText) for (const category of children) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
+      button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${escapeHtml(categoryMeta[category.code]?.[1] || "equipment")}"></use></svg><span>${escapeHtml(category.name)}</span><span aria-hidden="true">›</span>`;
+      button.addEventListener("click", () => { clientCatalog.category = category.code; clientCatalog.page = 0; void loadItems(); }); categoryHost.append(button);
+    }
+    const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;
+    $("items-grid").hidden = Boolean(showCategoryIndex);
+    if (showCategoryIndex) $("items-status").hidden = true;
     const query = $("client-catalog-search").value.trim().toLocaleLowerCase("ru-RU");
-    for (const item of (clientCatalog.paged ? clientCatalog.pageItems : state.items)) {
+    for (const item of (showCategoryIndex ? [] : (clientCatalog.paged ? clientCatalog.pageItems : state.items))) {
       if (!clientCatalog.paged && query && ![item.title, item.name, item.description, item.brand, item.kind, item.key_spec, item.sku].join(" ").toLocaleLowerCase("ru-RU").includes(query)) continue;
       const quantity = state.quantities.get(item.id) || 0;
       const selected = quantity > 0;
@@ -698,7 +717,7 @@
       $("items-grid").append(card);
     }
     const pages = Math.max(1, Math.ceil(clientCatalog.total / clientCatalog.pageSize));
-    $("client-catalog-pagination").hidden = !clientCatalog.paged || pages <= 1;
+    $("client-catalog-pagination").hidden = showCategoryIndex || !clientCatalog.paged || pages <= 1;
     $("client-catalog-prev").disabled = clientCatalog.page <= 0; $("client-catalog-next").disabled = clientCatalog.page + 1 >= pages;
     $("client-catalog-page").textContent = `${clientCatalog.page + 1} / ${pages}`;
     updateCartCounters();
@@ -3097,7 +3116,7 @@
     document.querySelector('.topbar').append(logout);
   }
   const profile = tg?.initDataUnsafe?.user || siteProfile;
-  if (!preview) void api("/api/miniapp/catalog/categories").then(result => { setCategories(result.items || []); render(); }).catch(() => {});
+  if (!preview) void api("/api/miniapp/catalog/categories").then(result => { setCategories(result.items || []); render(); if (state.view === "flow" && state.step === 1) renderItems(); }).catch(() => {});
   if (authorized && profile && !$("customer-name").value) {
     $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
   }

@@ -599,3 +599,9 @@ html { scroll-padding-bottom: calc(150px + max(env(safe-area-inset-bottom), var(
 .request-catalog-card > span { color: var(--muted); font-size: 13px; }
 .request-catalog-controls { display: flex; align-items: center; gap: 14px; justify-content: flex-end; }
 .request-catalog-controls .button { min-width: 44px; }
+.client-categories { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 12px 0; }
+.client-categories h3 { grid-column: 1 / -1; margin: 4px 0; }
+.category-card { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 14px; border: 1px solid var(--border, #d8dce3); border-radius: 14px; background: var(--surface, #fff); color: inherit; text-align: left; font: inherit; font-weight: 600; cursor: pointer; }
+.category-card .icon { width: 30px; height: 30px; flex: none; }
+.category-card span:last-child { margin-left: auto; font-size: 22px; }
+.category-card:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

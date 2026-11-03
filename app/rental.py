@@ -470,13 +470,18 @@ def availability(start, end):
         return _availability_rows(session, articles, start, end)
 
 
-def availability_page(start, end, page=0, page_size=20, query="", selected_ids=()):
+def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(), category=""):
     """Return the catalogue page and separately refresh all selected articles."""
     validate_interval(start, end)
     if page < 0 or not 1 <= page_size <= 100 or len(query) > 200 or len(selected_ids) > 30 or any(item <= 0 for item in selected_ids):
         raise ValueError("Неверные параметры каталога")
     selected_ids = list(dict.fromkeys(selected_ids))
     conditions = [Article.is_active.is_(True)]
+    if category:
+        from .db import CatalogCategory
+        descendants = select(CatalogCategory.code).where(CatalogCategory.parent_code == category).cte(recursive=True)
+        descendants = descendants.union_all(select(CatalogCategory.code).join(descendants, CatalogCategory.parent_code == descendants.c.code))
+        conditions.append(Article.category.in_(select(descendants.c.code).union(select(CatalogCategory.code).where(CatalogCategory.code == category))))
     if query.strip():
         term = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         searchable = func.concat_ws(" ", Article.name, Article.kind, Article.brand, Article.key_spec, Article.description, Article.sku)

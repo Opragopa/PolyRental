@@ -152,13 +152,15 @@ async def catalog_categories():
 
 
 class CategoryRequest(BaseModel):
+    parent_code: str | None = None
+    icon: str = "equipment"
     name: str = Field(min_length=1, max_length=100)
 
 
 @router.post("/api/miniapp/admin/catalog/categories")
 async def admin_create_category(payload: CategoryRequest, user=Depends(require_admin)):
     try:
-        return await asyncio.to_thread(create_category, payload.name, user["id"])
+        return await asyncio.to_thread(create_category, payload.name, user["id"], payload.parent_code, payload.icon)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -373,7 +375,8 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
                                  page: int | None = Query(default=None, ge=0, le=100000),
                                  page_size: int = Query(default=20, ge=1, le=100),
                                  q: str = Query(default="", max_length=200),
-                                 selected: list[int] = Query(default=[])):
+                                 selected: list[int] = Query(default=[]),
+                                 category: str = Query(default="", max_length=40)):
     try:
         validate_interval(start, end, enforce_booking_notice=True)
         from .public_cache import cached_public_value
@@ -385,9 +388,9 @@ async def equipment_availability(start: datetime = Query(), end: datetime = Quer
             if len(selected) > 30 or any(item <= 0 for item in selected):
                 raise ValueError("Выберите не более 30 позиций")
             selected_ids = sorted(set(selected))
-            params = {"start":start.isoformat(), "end":end.isoformat(), "page":page, "page_size":page_size, "q":q, "selected":selected_ids}
+            params = {"start":start.isoformat(), "end":end.isoformat(), "page":page, "page_size":page_size, "q":q, "selected":selected_ids, "category":category}
             items, selected_items, total = await asyncio.to_thread(cached_public_value, "availability-page", params,
-                lambda: availability_page(start, end, page, page_size, q, selected_ids), 5)
+                lambda: availability_page(start, end, page, page_size, q, selected_ids, category), 5)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     available = [item for item in items if item["available"]]

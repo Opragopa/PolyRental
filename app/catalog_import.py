@@ -29,6 +29,12 @@ CONDITIONS = {"available", "maintenance", "retired"}
 
 def _inventory_category(kind):
     normalized = " ".join(kind.casefold().split())
+    if any(word in normalized for word in ("микрофон", "наушник", "рекордер", "аудио")):
+        return "sound"
+    if any(word in normalized for word in ("штатив", "монопод", "стойка")):
+        return "support"
+    if any(word in normalized for word in ("кабель", "адаптер", "переходник")):
+        return "cables"
     if "камера" in normalized:
         return "camera"
     if "объектив" in normalized or "линза" in normalized:
