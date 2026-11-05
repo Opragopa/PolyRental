@@ -1764,3 +1764,173 @@ details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { s
 
 .dates-view .date-grid .keyboard-time { width:100%; max-width:220px; font-variant-numeric:tabular-nums; }
 .booking-time-hint { color:var(--muted); font-size:12px; line-height:1.4; }
+
+/* A single fluid unit keeps compact screens proportional to the regular UI.
+   Borders stay physical pixels; text inputs keep 16px to avoid iOS auto-zoom. */
+:root {
+  --ui-unit: clamp(3px, 1vw, 4px);
+  --space-1: var(--ui-unit);
+  --space-2: calc(var(--ui-unit) * 2);
+  --space-3: calc(var(--ui-unit) * 3);
+  --space-4: calc(var(--ui-unit) * 4);
+  --space-6: calc(var(--ui-unit) * 6);
+  --view-gap: var(--space-4);
+  --card-radius: var(--space-3);
+  --control-size: calc(var(--ui-unit) * 12);
+  --nav-height: calc(var(--ui-unit) * 14);
+  --footer-height: calc(var(--control-size) + var(--space-4));
+  --safe-bottom: max(env(safe-area-inset-bottom), var(--tg-content-safe-area-inset-bottom, 0px));
+  --motion-fast: 140ms;
+  --motion-normal: 240ms;
+  --motion-ease: cubic-bezier(.22, 1, .36, 1);
+}
+.shell, .dates-view .shell {
+  min-height: 100dvh;
+  padding-top: max(var(--space-4), env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px));
+  padding-right: max(var(--space-4), env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px));
+  padding-left: max(var(--space-4), env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px));
+  padding-bottom: calc(var(--nav-height) + var(--footer-height) + var(--safe-bottom) + var(--space-6));
+}
+main, section, form, .field, .panel-head > *, .action-row > *, .order-head > *,
+.review-row > *, .item-bottom > *, .profile-identity-actions > * { min-width: 0; }
+h1, h2, h3, h4, p, .item-name, .article-main, .brand, .notice, .supporting { overflow-wrap: anywhere; }
+h1, h2, h3 { text-wrap: balance; }
+.topbar, .dates-view .topbar { margin-bottom: var(--space-4); }
+.panel-head, .dates-view #step-dates .panel-head { gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
+.panel-head h2, .dates-view #step-dates h2, .editor-card h3 { font-size: clamp(19px, 6vw, 24px); }
+.panel, .contact-card, .review-group, .identity-section, #consent-step,
+.admin-card, .order-card, .request-next-overview, .catalog-controls, .receipt-section,
+.profile-card, .profile-theme { padding: var(--space-4); border-radius: var(--card-radius); }
+.items-grid, .release-items, .receipt-summary, .receipt-pages, .catalog-form { gap: var(--space-4); }
+.field { gap: var(--space-2); margin-bottom: var(--space-4); }
+.field :is(input, select, textarea) { min-width: 0; max-width: 100%; min-height: var(--control-size); padding: var(--space-3); font-size: 16px; }
+.action-row, .profile-identity-actions, .theme-switch { gap: var(--space-2); flex-wrap: wrap; }
+.action-row, .action-bar, .profile-identity-actions, .profile-settings-actions { container-type: inline-size; }
+.button, .button.compact, .action-row > .button,
+.request-card .action-row > .workflow-next, .workflow-dialog .action-row > .button {
+  --button-font: clamp(12px, 3.5vw, 14px);
+  min-width: 0;
+  max-width: 100%;
+  min-height: calc(var(--control-size) * var(--button-fit, 1));
+  padding: .85em 1.1em;
+  border-radius: .85em;
+  font-size: calc(var(--button-font) * var(--button-fit, 1));
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  touch-action: manipulation;
+}
+@supports (font-size: 1cqi) {
+  :is(.action-row, .action-bar, .profile-identity-actions, .profile-settings-actions) > .button {
+    font-size: calc(clamp(12px, 4cqi, 14px) * var(--button-fit, 1));
+    min-height: 3.15em;
+  }
+}
+.button .icon { width: 1.3em; height: 1.3em; flex-shrink: 0; }
+.catalog-toolbar > .button { min-height: var(--control-size) !important; }
+.tabs, .dates-view .tabs {
+  min-height: 0;
+  gap: 0;
+  flex-wrap: nowrap;
+  padding: 0 max(var(--space-2), env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px)) var(--safe-bottom) max(var(--space-2), env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px));
+}
+.tab, .dates-view .tab {
+  min-height: calc(var(--ui-unit) * 14);
+  gap: .4em;
+  padding: .65em .25em;
+  font-size: clamp(11px, 3.3vw, 14px);
+  overflow-wrap: anywhere;
+}
+.tab-icon, .tab-avatar { width: 1.3em; height: 1.3em; flex-shrink: 0; }
+.action-bar, .dates-view .action-bar {
+  bottom: calc(var(--nav-height) + var(--safe-bottom));
+  gap: var(--space-2);
+  padding: var(--space-2) max(var(--space-4), env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px)) var(--space-2) max(var(--space-4), env(safe-area-inset-left), var(--tg-content-safe-area-inset-left, 0px));
+}
+.action-bar .button, .action-bar .primary { min-width: 0; text-align: center; }
+.floating-cart-button {
+  width: calc(var(--ui-unit) * 13.5);
+  height: calc(var(--ui-unit) * 13.5);
+  right: max(var(--space-4), env(safe-area-inset-right), var(--tg-content-safe-area-inset-right, 0px));
+  bottom: calc(var(--nav-height) + var(--footer-height) + var(--safe-bottom) + var(--space-3));
+}
+.range-calendar { container-type: inline-size; min-height: 0; padding: var(--space-3); }
+.range-calendar .calendar-head { height: auto; min-height: var(--control-size); gap: var(--space-2); }
+.range-calendar .calendar-head > * { min-width: 0; }
+.range-calendar .calendar-weekdays, .range-calendar .calendar-days { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.range-calendar .calendar-days { height: auto; grid-template-rows: none; grid-auto-rows: auto; }
+.range-calendar .calendar-day {
+  min-width: 0; min-height: 0; height: auto; aspect-ratio: 1;
+  max-height: 3.25rem; border-radius: var(--space-2);
+  font-size: clamp(11px, 4cqi, 15px);
+}
+.calendar-nav { width: var(--control-size); height: var(--control-size); flex-shrink: 0; font-size: calc(var(--ui-unit) * 6); }
+.dates-view .date-grid { gap: var(--space-2); margin-bottom: var(--space-3); }
+.dates-view .date-grid .field, .dates-view .date-grid .field + .field { padding: var(--space-3); }
+.dates-view .date-grid .field > span { white-space: normal; overflow: visible; line-height: 1.4; }
+.dates-view .date-grid input:is([type=time], .keyboard-time) { font-size: 16px; min-width: 0; max-width: 100%; }
+.client-categories { gap: var(--space-3); }
+.category-card { gap: var(--space-2); padding: var(--space-3); min-height: calc(var(--ui-unit) * 18); }
+.category-card .icon { width: 2em; height: 2em; }
+.item-card, .item-card.selected { gap: var(--space-3); padding: var(--space-3); grid-template-columns: calc(var(--ui-unit) * 20) minmax(0, 1fr); }
+.item-media, .item-card .item-photo, .item-card .item-placeholder { width: calc(var(--ui-unit) * 20); height: calc(var(--ui-unit) * 24); }
+.cart-item { grid-template-columns: calc(var(--ui-unit) * 18) minmax(0, 1fr); gap: var(--space-3); }
+.cart-media, .review-media, .article-media { width: calc(var(--ui-unit) * 18); height: calc(var(--ui-unit) * 20); }
+.article-card .article-card-head { grid-template-columns: calc(var(--ui-unit) * 18) minmax(0, 1fr) auto; gap: var(--space-2); }
+.item-card .quantity-control, #cart-items .quantity-control, #review-content .quantity-control {
+  grid-template-columns: minmax(0, 1fr) minmax(1.5em, .7fr) minmax(0, 1fr);
+  width: min(100%, calc(var(--ui-unit) * 30));
+  font-size: clamp(12px, 3.5vw, 14px);
+}
+.item-card .quantity-control .button, #cart-items .quantity-control .button, #review-content .quantity-control .button {
+  width: 100%; min-width: 0; min-height: 0; height: auto; aspect-ratio: 1;
+  padding: 0; border-radius: 0; font-size: 1.25em;
+}
+.customer-order-body { grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: var(--space-3); padding: var(--space-4); }
+.dialog-backdrop { padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-3), env(safe-area-inset-right)) max(var(--space-3), env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-left)); }
+.dialog-card, .workflow-dialog .dialog-card, #release-dialog .dialog-card {
+  max-height: calc(100dvh - var(--space-6) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  min-width: 0; gap: var(--space-3); padding: var(--space-4); overscroll-behavior: contain;
+}
+.login-shell { min-height: 100dvh; padding: var(--space-4); }
+.login-card { margin: clamp(16px, 8dvh, 100px) auto var(--space-4); padding: var(--space-6); }
+.login-card h1 { font-size: clamp(25px, 8vw, 50px); }
+.review-group { container: review-group / inline-size; }
+@container review-group (max-width: 26.25rem) {
+  .review-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); padding: var(--space-2) 0; }
+  .review-row strong { max-width: 100%; text-align: left; }
+}
+@media (max-width: 359px) {
+  .items-grid.items-grid-tiles { grid-template-columns: 1fr; }
+  .tab, .dates-view .tab { flex: 1 1 auto; flex-direction: column; gap: .15em; padding: .4em .1em; white-space: nowrap; overflow-wrap: normal; }
+  .admin-tabs { flex-wrap: wrap; gap: var(--space-1); overflow: visible; }
+  .admin-tabs > .button, .admin-tabs > .admin-mode, .admin-tabs > .admin-mode[aria-pressed="true"] { min-width: 0; font-size: 12px; padding: .6em; flex: 1 1 40%; white-space: normal; }
+  #admin-settings > summary { position: static; width: fit-content; margin-bottom: var(--space-3); }
+  .profile-identity-actions { flex-direction: column; }
+}
+@media (max-height: 480px) {
+  :root { --ui-unit: 3px; }
+  .login-card { margin-top: var(--space-4); }
+  .login-icon { margin-bottom: var(--space-3); }
+}
+/* Motion follows actions: feedback on press, surfaces on open, no hover lift
+   on touch devices. Fixed bars never animate their positioning transform. */
+@media (prefers-reduced-motion: no-preference) {
+  .button, .tab, .category-card, .item-card, .icon-action, .calendar-nav, summary {
+    transition: transform var(--motion-fast) var(--motion-ease), background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+  }
+  .button:not(:disabled):hover, .item-card:hover { transform: none; }
+  .button:not(:disabled):active, .category-card:active, .icon-action:active, .calendar-nav:active { transform: scale(.96); }
+  .tab:active { transform: scale(.97); }
+  .step-panel:not([hidden]), #orders-panel:not([hidden]), #admin-panel:not([hidden]), .login-card,
+  .dialog-backdrop:not([hidden]) .dialog-card { animation: ui-surface-enter var(--motion-normal) var(--motion-ease) both; }
+  .notice:not([hidden]), details[open] > :not(summary) { animation: ui-feedback-enter var(--motion-fast) var(--motion-ease) both; }
+  @keyframes ui-surface-enter { from { opacity: 0; transform: translateY(.5rem) scale(.99); } to { opacity: 1; transform: none; } }
+  @keyframes ui-feedback-enter { from { opacity: 0; transform: translateY(.2rem); } to { opacity: 1; transform: none; } }
+}
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .button:not(:disabled):hover, .category-card:hover { transform: translateY(-1px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

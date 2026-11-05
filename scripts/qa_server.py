@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if os.environ.get("DATABASE_URL", "").rsplit("/", 1)[-1] != "polyrental_test":
     raise RuntimeError("QA server requires polyrental_test")
 
-os.environ.update(BOT_TOKEN="123:local-qa-only", ADMIN_IDS="100", PII_ADMIN_IDS="200",
+os.environ.update(BOT_TOKEN=os.environ.get("QA_BOT_TOKEN", "123:local-qa-only"), ADMIN_IDS="100", PII_ADMIN_IDS="200",
                   PII_MASTER_KEY=base64.urlsafe_b64encode(b"q" * 32).decode(),
                   OPERATOR_NAME="QA оператор", OPERATOR_ADDRESS="Тестовая среда",
                   OPERATOR_CONTACT="qa@example.test", PRIVACY_POLICY_VERSION="qa-v1",
@@ -44,13 +44,17 @@ miniapp_server.retry_support_replies = no_notification
 
 
 @app.get("/qa/{role}", response_class=HTMLResponse)
-def qa_page(role: str):
+def qa_page(role: str, studio: bool = False):
     user_id = {"customer": 42, "admin": 100, "pii": 200}[role]
     data = {"auth_date": str(int(time.time())), "user": json.dumps({"id": user_id, "first_name": "QA"})}
     check = "\n".join(f"{key}={value}" for key, value in sorted(data.items()))
     secret = hmac.new(b"WebAppData", os.environ["BOT_TOKEN"].encode(), hashlib.sha256).digest()
     data["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     sdk = "<script>window.Telegram={WebApp:{initData:" + json.dumps(urlencode(data)) + "}};</script>"
+    if studio:
+        # Keep the real SDK and Studio's platform/theme bridge. Only replace
+        # the emulator's synthetic auth payload with our test-server signature.
+        sdk = "<script>{const params=new URLSearchParams(location.hash.slice(1));params.set('tgWebAppData'," + json.dumps(urlencode(data)) + ");history.replaceState(null,'',location.pathname+location.search+'#'+params.toString());}</script>" + '<script src="https://telegram.org/js/telegram-web-app.js?64"></script>'
     html = miniapp.miniapp_html()
     metrics = """<script>addEventListener('DOMContentLoaded',()=>{
       const measure=()=>parent.postMessage({qaMetrics:{width:document.documentElement.clientWidth,

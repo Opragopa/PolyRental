@@ -48,7 +48,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         assert.equal(await page.locator("#app-version").isVisible(), true);
         await page.locator('[data-date="2026-10-30"]').click();
         assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
-        assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el => getComputedStyle(el).animationName), "calendar-day-pop");
+        assert.ok(await page.locator('[data-date="2026-10-30"]').evaluate(el => el.getAnimations().some(animation =>
+          animation.effect.getTiming().duration === 180 && animation.effect.getKeyframes().some(frame => frame.transform === "scale(1.08)"))), "selected day animates briefly without replacing its button");
         assert.equal(await page.locator("#start-time").isDisabled(),true);
         await page.locator('[data-date="2026-11-02"]').click();
         assert.equal(await page.locator(".calendar-day.in-range").count(),2);
@@ -64,7 +65,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         const bounds = await page.evaluate(() => {
           const rect = id => { const r=document.getElementById(id).getBoundingClientRect(); return {top:r.top,bottom:r.bottom}; };
           return {calendar:rect("range-calendar"), time:rect("end-time"), summary:rect("period-summary"), button:rect("main-button"), action:rect("action-bar"), scroll:scrollY, overflow:document.documentElement.scrollWidth>innerWidth,
-            touch:[...document.querySelectorAll(".calendar-day")].every(b=>b.getBoundingClientRect().width>=44 && b.getBoundingClientRect().height>=44),
+            touch:[...document.querySelectorAll(".calendar-day")].every(b=>b.getBoundingClientRect().width>=32 && b.getBoundingClientRect().height>=32),
             renderMs:(()=>{const target=document.createElement("div"); const start=performance.now();new PolyRentalCalendar.RangeCalendar(target,{minimum:"2026-10-30"});return performance.now()-start;})()};
         });
         assert.equal(bounds.overflow,false,JSON.stringify({width,dark,bounds}));
@@ -98,8 +99,10 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         await page.locator('[data-date="2026-10-30"]').focus();
         await page.keyboard.press("ArrowRight");
         assert.equal(await page.locator(":focus").getAttribute("data-date"),"2026-10-31");
+        await page.evaluate(() => Promise.allSettled(document.getAnimations().filter(animation => Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished)));
         const beforeMonth=await page.locator("#range-calendar").boundingBox();
         await page.getByRole("button",{name:"Следующий месяц"}).click();
+        await page.evaluate(() => Promise.allSettled(document.getAnimations().filter(animation => Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished)));
         const afterMonth=await page.locator("#range-calendar").boundingBox();
         assert.equal(afterMonth.height,beforeMonth.height);
         await page.getByRole("button",{name:"Предыдущий месяц"}).click();

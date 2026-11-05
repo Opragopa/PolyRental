@@ -1,0 +1,52 @@
+/* Motion roles: press 120ms, feedback 160ms, surfaces 220ms, exit 160ms.
+   Keep fixed navigation still and animate only the content that changes. */
+:root { --motion-fast: 120ms; --motion-normal: 220ms; --motion-exit: 160ms; }
+@media (prefers-reduced-motion: no-preference) {
+  .step-panel:not([hidden]), #orders-panel:not([hidden]), #admin-panel:not([hidden]),
+  #identity-panel:not([hidden]), #step-done:not([hidden]), .login-card {
+    animation: ui-surface-enter var(--motion-normal) var(--motion-ease) backwards;
+  }
+  .theme-switch span { transition: background-color 160ms, color 160ms; }
+  .admin-tabs > .button, .admin-tabs > .admin-mode {
+    transition: transform 160ms var(--motion-ease), opacity 160ms, color 160ms;
+  }
+  .profile-identity-actions .button { transition: opacity 160ms, background-color 160ms, transform 120ms var(--motion-ease); }
+  .document-viewer:not([hidden]) .document-viewer-card,
+  .stage-toast { animation: ui-surface-enter 180ms var(--motion-ease) backwards; }
+  .delete-snackbar:not([hidden]) { animation: snackbar-enter 180ms var(--motion-ease) backwards; }
+  @keyframes snackbar-enter { from { opacity: 0; transform: translate(-50%, .5rem); } to { opacity: 1; transform: translateX(-50%); } }
+  .equipment-card-drawer { transition: grid-template-rows 220ms var(--motion-ease), opacity 160ms; }
+  .equipment-card-drawer-inner { transition: border-color 160ms; }
+  .article-collapse { transition: grid-template-rows 220ms var(--motion-ease), opacity 160ms; }
+  /* The outer details element already animates height. Avoid two reveals. */
+  details[open] > :not(summary), .request-accordion[open] > .request-body,
+  .client-item-details[open] > p { animation: none; }
+  .category-edit-tile .category-card { animation-iteration-count: 2; }
+  .range-calendar .calendar-day-pop { animation: calendar-tap 180ms var(--motion-ease); will-change: auto; }
+  .range-calendar .calendar-day-reveal::before {
+    animation-duration: 120ms; animation-fill-mode: backwards; will-change: auto;
+  }
+  @keyframes calendar-tap { 0%, 100% { transform: scale(1); } 45% { transform: scale(1.08); } }
+  /* Hidden stays the logical closed state, including during the visual exit.
+     Older WebViews keep the existing entry animation and immediate hide. */
+  @supports (transition-behavior: allow-discrete) {
+    .dialog-backdrop {
+      opacity: 1;
+      transition: opacity var(--motion-exit) ease-out, display var(--motion-exit) allow-discrete;
+    }
+    .dialog-backdrop .dialog-card {
+      opacity: 1; transform: none;
+      transition: transform var(--motion-normal) var(--motion-ease), opacity var(--motion-exit) ease-out;
+    }
+    .dialog-backdrop:not([hidden]) .dialog-card { animation: none; }
+    .dialog-backdrop[hidden] { opacity: 0; pointer-events: none; }
+    .dialog-backdrop[hidden] .dialog-card { opacity: 0; transform: translateY(.5rem) scale(.99); }
+    @starting-style {
+      .dialog-backdrop:not([hidden]) { opacity: 0; }
+      .dialog-backdrop:not([hidden]) .dialog-card { opacity: 0; transform: translateY(.5rem) scale(.99); }
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

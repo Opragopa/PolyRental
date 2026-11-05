@@ -1,9 +1,21 @@
 (async () => {
   "use strict";
 
+  function setDialogHidden(dialog, hidden) {
+    dialog.inert = hidden;
+    dialog.hidden = hidden;
+  }
+  function removeNotice(notice) {
+    if (window.PolyRentalMotion) void window.PolyRentalMotion.removeDialog(notice);
+    else notice.remove();
+  }
+
   // Animate the element's height so the surrounding document follows the reveal.
-  const disclosureAnimations = new WeakMap();
+  const disclosureAnimations = new Map();
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  reducedMotion?.addEventListener("change", () => {
+    if (reducedMotion.matches) for (const state of disclosureAnimations.values()) state.animation.finish();
+  });
   function disclosureIsOpen(details) {
     return disclosureAnimations.get(details)?.opening ?? details.open;
   }
@@ -41,7 +53,7 @@
       endHeight = summary.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
     }
     const animation = details.animate([{height: `${startHeight}px`}, {height: `${endHeight}px`}], {
-      duration: 280, easing: "cubic-bezier(.2, 0, 0, 1)"
+      duration: 220, easing: "cubic-bezier(.22, 1, .36, 1)"
     });
     const state = {animation, opening, overflow};
     disclosureAnimations.set(details, state);
@@ -51,6 +63,11 @@
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
       if (opening && focus) revealDisclosure(details, summary);
+    };
+    animation.oncancel = () => {
+      if (disclosureAnimations.get(details) !== state) return;
+      details.style.overflow = overflow;
+      disclosureAnimations.delete(details);
     };
   }
   document.addEventListener("click", event => {
@@ -766,6 +783,7 @@
   }
   const categoryTransitions = {client: 0, admin: 0};
   async function navigateClientCategory(code) {
+    const direction = code === categoryParent(clientCatalog.category) ? -1 : 1;
     const token = ++categoryTransitions.client;
     ++availabilitySequence;
     clientCatalog.category = code; clientCatalog.page = 0;
@@ -774,6 +792,7 @@
     const heading = $("catalog-page-title"); heading.focus({preventScroll:true}); heading.scrollIntoView({block:"start", behavior:"auto"});
     await loadItems();
     if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
+    window.PolyRentalMotion?.enter($("items-grid").hidden ? $("client-categories") : $("items-grid"), direction);
   }
   function catalogBack() {
     if (state.view === "flow" && state.step === 0 && clientCatalog.category) { void navigateClientCategory(categoryParent(clientCatalog.category)); return true; }
@@ -816,9 +835,19 @@
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
       card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">Доступность проверим после выбора дат</span><div class="item-notes"></div></div></div><div class="quantity-control" role="group" aria-label="Количество: ${escapeHtml(catalogTitle(item))}"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong class="quantity-value" aria-live="polite" aria-atomic="true">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= 30 ? "disabled" : ""}>+</button></div></div>`;
-      const changeQuantity = (next) => { if (next > 0 && !state.quantities.has(item.id) && state.quantities.size >= 30) { showError("В подборке может быть не больше 30 позиций."); return; } if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id); state.requestId = null; availabilityFresh = false; renderItems(); saveDraft(); };
-      card.querySelector(".minus").addEventListener("click", () => changeQuantity(quantity - 1));
-      card.querySelector(".plus").addEventListener("click", () => changeQuantity(quantity + 1));
+      const changeQuantity = (delta) => {
+        const next = Math.max(0, Math.min(30, (state.quantities.get(item.id) || 0) + delta));
+        if (next > 0 && !state.quantities.has(item.id) && state.quantities.size >= 30) { showError("В подборке может быть не больше 30 позиций."); return; }
+        if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id);
+        state.requestId = null; availabilityFresh = false;
+        card.classList.toggle("selected", next > 0);
+        card.querySelector(".quantity-value").textContent = String(next);
+        card.querySelector(".minus").disabled = next === 0;
+        card.querySelector(".plus").disabled = next >= 30;
+        updateCartCounters(); saveDraft();
+      };
+      card.querySelector(".minus").addEventListener("click", () => changeQuantity(-1));
+      card.querySelector(".plus").addEventListener("click", () => changeQuantity(1));
       const notes = card.querySelector(".item-notes");
       const details = document.createElement("details"); details.className = "client-item-details";
       const summary = document.createElement("summary"); summary.textContent = "Подробнее";
@@ -896,8 +925,28 @@
       if (availabilityFresh && quantity > (item.available_quantity ?? 0)) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = `Осталось ${item.available_quantity} шт. Уменьшите количество или удалите позицию.`; row.querySelector(".cart-item-main").append(warning); }
       const controls = document.createElement("div"); controls.className = "quantity-control";
       controls.innerHTML = `<button type="button" class="button ghost minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary plus" aria-label="Увеличить количество" ${quantity >= 30 ? "disabled" : ""}>+</button>`;
-      controls.querySelector(".minus").addEventListener("click", () => { if (quantity <= 1) state.quantities.delete(id); else state.quantities.set(id, quantity - 1); state.requestId = null; availabilityFresh = false; renderCart(); saveDraft(); });
-      controls.querySelector(".plus").addEventListener("click", () => { state.quantities.set(id, quantity + 1); state.requestId = null; availabilityFresh = false; renderCart(); saveDraft(); });
+      const changeQuantity = delta => {
+        const next = Math.max(0, Math.min(30, (state.quantities.get(id) || 0) + delta));
+        if (next) state.quantities.set(id, next); else state.quantities.delete(id);
+        state.requestId = null; availabilityFresh = false;
+        if (!next) {
+          const returnFocus = row.nextElementSibling?.querySelector(".plus") || row.previousElementSibling?.querySelector(".plus") || $("top-back-button");
+          if (row.contains(document.activeElement)) returnFocus.focus({preventScroll:true});
+          const exit = window.PolyRentalMotion ? window.PolyRentalMotion.removeRow(row) : (row.remove(), Promise.resolve());
+          void exit.then(() => { if (!state.quantities.size) renderCart(); });
+          const total = [...state.quantities.values()].reduce((sum, count) => sum + count, 0);
+          $("cart-total").textContent = total ? `Всего: ${total} шт.` : "Подборка пуста. Вернитесь в каталог, чтобы добавить оборудование.";
+          updateCartCounters(); saveDraft(); return;
+        }
+        controls.querySelector("strong").textContent = String(next);
+        controls.querySelector(".plus").disabled = next >= 30;
+        container.querySelectorAll('[role="status"]').forEach(warning => warning.remove());
+        const total = [...state.quantities.values()].reduce((sum, count) => sum + count, 0);
+        $("cart-total").textContent = `Всего: ${total} шт.`;
+        updateCartCounters(); saveDraft();
+      };
+      controls.querySelector(".minus").addEventListener("click", () => changeQuantity(-1));
+      controls.querySelector(".plus").addEventListener("click", () => changeQuantity(1));
       row.querySelector(".cart-item-main").append(controls); container.append(row);
     }
     const total = [...state.quantities.values()].reduce((sum, quantity) => sum + quantity, 0);
@@ -1993,14 +2042,14 @@
       row.append(checkbox, text); choices.append(row);
     }
     const returnFocus = document.activeElement;
-    form.reset(); $("identity-review-submit").disabled = false; dialog.hidden = false; dialog.querySelector("input")?.focus();
+    form.reset(); $("identity-review-submit").disabled = false; setDialogHidden(dialog, false); dialog.querySelector("input")?.focus();
     return new Promise((resolve, reject) => {
       let submitting = false;
       const keydown = (event) => {
         if (event.key === "Escape") { event.preventDefault(); cancel(); }
         if (event.key === "Tab") trapDialogFocus(event, dialog);
       };
-      const finish = () => { dialog.hidden = true; form.reset(); $("identity-review-cancel").disabled = false; form.removeEventListener("submit", submit); dialog.removeEventListener("keydown", keydown); $("identity-review-cancel").removeEventListener("click", cancel); if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); };
+      const finish = () => { setDialogHidden(dialog, true); form.reset(); $("identity-review-cancel").disabled = false; form.removeEventListener("submit", submit); dialog.removeEventListener("keydown", keydown); $("identity-review-cancel").removeEventListener("click", cancel); if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); };
       const cancel = () => { if (submitting) return; finish(); resolve(); };
       const submit = async (event) => {
         event.preventDefault();
@@ -2075,10 +2124,10 @@
     const dialog = $("rework-dialog"), form = $("rework-form"), cancel = $("rework-cancel");
     const comment = form.elements.comment, returnFocus = document.activeElement;
     form.reset(); $("rework-target").textContent = `Заявка вернётся на этап «${target}».`;
-    dialog.hidden = false; comment.focus();
+    setDialogHidden(dialog, false); comment.focus();
     return new Promise((resolve) => {
       const finish = (value) => {
-        dialog.hidden = true; form.reset(); form.removeEventListener("submit", submit);
+        setDialogHidden(dialog, true); form.reset(); form.removeEventListener("submit", submit);
         cancel.removeEventListener("click", cancelHandler); dialog.removeEventListener("keydown", keydown);
         if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true}); resolve(value);
       };
@@ -2094,7 +2143,7 @@
     documentViewerBookingId = bookingId;
     documentViewerItems = ["passport_main", "passport_registration", "student_front"];
     documentViewerIndex = Math.max(0, documentViewerItems.indexOf(kind));
-    const viewer = $("document-viewer"); viewer.hidden = false;
+    const viewer = $("document-viewer"); setDialogHidden(viewer, false);
     $("document-viewer-close").focus();
     await loadDocumentViewerImage(bookingId);
   }
@@ -2115,7 +2164,7 @@
   }
   function closeDocumentViewer() {
     const wasOpen = !$("document-viewer").hidden;
-    documentViewerSequence += 1; documentViewerBookingId = null; $("document-viewer").hidden = true; $("document-viewer-image").removeAttribute("src"); if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl); documentViewerUrl = "";
+    documentViewerSequence += 1; documentViewerBookingId = null; setDialogHidden($("document-viewer"), true); $("document-viewer-image").removeAttribute("src"); if (documentViewerUrl) URL.revokeObjectURL(documentViewerUrl); documentViewerUrl = "";
     if (wasOpen && documentViewerReturnFocus?.isConnected) documentViewerReturnFocus.focus({ preventScroll: true });
     documentViewerReturnFocus = null;
   }
@@ -2649,7 +2698,7 @@
       if (savingWarnings.length) {
         const notice = document.createElement('div'); notice.className='stage-toast'; notice.setAttribute('role','status');
         const copy = document.createElement('span'); copy.textContent=`Занятость сохранена. Есть пересечения: ${savingWarnings.length}.`;
-        const close = plainButton('×',()=>notice.remove(),'ghost'); close.setAttribute('aria-label','Закрыть уведомление'); notice.append(copy,close); document.body.append(notice); setTimeout(()=>notice.remove(),8000);
+        const close = plainButton('×',()=>removeNotice(notice),'ghost'); close.setAttribute('aria-label','Закрыть уведомление'); notice.append(copy,close); document.body.append(notice); setTimeout(()=>removeNotice(notice),8000);
       }
     }
   }
@@ -2661,7 +2710,20 @@
       dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-label", title);
       dialog.innerHTML = `<form class="dialog-card"><h2>${escapeHtml(title)}</h2>${content}<div class="action-row"><button type="button" class="button ghost workflow-cancel">Отмена</button><button type="submit" class="button primary">${escapeHtml(submitLabel)}</button></div></form>`;
       let pending=false;
-      const finish = (value, backdrop = false) => { if(pending)return; const form = dialog.querySelector("form"); const sensitive = form.querySelector('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea'); if (value === null && staffFormDirty(form) && (!backdrop || sensitive) && !window.confirm("Отменить? Изменения не сохранятся.")) return; const previewUrl = dialog.querySelector(".catalog-upload-preview")?.dataset.url; if (previewUrl) URL.revokeObjectURL(previewUrl); dialog.remove(); if (previous?.isConnected) previous.focus({preventScroll:true}); resolve(value); };
+      const finish = (value, backdrop = false) => {
+        if (pending) return;
+        const form = dialog.querySelector("form");
+        const sensitive = form.querySelector('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea');
+        if (value === null && staffFormDirty(form) && (!backdrop || sensitive) && !window.confirm("Отменить? Изменения не сохранятся.")) return;
+        pending = true;
+        const previewUrl = dialog.querySelector(".catalog-upload-preview")?.dataset.url;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        const exit = window.PolyRentalMotion ? window.PolyRentalMotion.removeDialog(dialog) : (dialog.remove(), Promise.resolve());
+        void exit.then(() => {
+          if (previous?.isConnected && !document.querySelector('.dialog-backdrop:not([hidden])')) previous.focus({preventScroll:true});
+          resolve(value);
+        });
+      };
       dialog.querySelector(".workflow-cancel").addEventListener("click", () => finish(null));
       dialog.addEventListener("click", event => { if (event.target === dialog && window.matchMedia("(min-width: 768px)").matches) finish(null, true); });
       dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") finish(null); if (event.key === "Tab") trapDialogFocus(event, dialog); });
@@ -2763,8 +2825,8 @@
       for (const item of result.items || []) {
         const notice = document.createElement("div"); notice.className = "stage-toast"; notice.setAttribute("role", "status");
         const copy = document.createElement("span"); copy.textContent = `Заявка №${item.booking_id}: ${item.message}`;
-        const close = plainButton("×", () => notice.remove(), "ghost"); close.setAttribute("aria-label", "Закрыть уведомление");
-        notice.append(copy, close); document.body.append(notice); setTimeout(() => notice.remove(), 8000);
+        const close = plainButton("×", () => removeNotice(notice), "ghost"); close.setAttribute("aria-label", "Закрыть уведомление");
+        notice.append(copy, close); document.body.append(notice); setTimeout(() => removeNotice(notice), 8000);
       }
     } catch (_) { /* The next poll retries without replaying server-claimed events. */ }
     finally { stageNoticesBusy = false; }
@@ -3311,7 +3373,7 @@
       const section = document.createElement("section"), title = document.createElement("h3"), text = document.createElement("p");
       title.textContent = item.title; text.textContent = item.text; section.append(title, text); $("release-items").append(section);
     }
-    $("release-dialog").hidden = false; render(); $("release-title").focus({preventScroll:true});
+    setDialogHidden($("release-dialog"), false); render(); $("release-title").focus({preventScroll:true});
     $("release-dialog").querySelector(".dialog-card").scrollTop = 0;
   }
   async function loadReleaseAnnouncement() {
@@ -3324,7 +3386,7 @@
   }
   function closeRelease() {
     if ($("release-dialog").hidden) return;
-    $("release-dialog").hidden = true;
+    setDialogHidden($("release-dialog"), true);
     const version = releaseCurrent.version;
     render();
     if (releaseReturnFocus?.isConnected) releaseReturnFocus.focus({preventScroll:true});
@@ -3346,7 +3408,7 @@
     $("support-question-label").textContent = feedback ? "Что вы хотите изменить в приложении?" : "Написать оператору";
     $("support-submit").textContent = feedback ? "Отправить предложение" : "Отправить вопрос";
     $("support-faq").hidden = feedback; $("support-faq-heading").hidden = feedback;
-    $("support-dialog").hidden = false; $("support-result").textContent = ""; $("support-result").classList.remove("success"); $("support-question").value = ""; render();
+    setDialogHidden($("support-dialog"), false); $("support-result").textContent = ""; $("support-result").classList.remove("success"); $("support-question").value = ""; render();
     if (feedback) $("support-question").focus();
     else { $("support-close").focus(); await loadSupportFaq(); }
   }
@@ -3357,7 +3419,7 @@
       for (const item of result.items) { const details = document.createElement("details"); const title = document.createElement("summary"); const answer = document.createElement("p"); title.textContent = item.question; answer.textContent = item.answer; details.append(title, answer); host.append(details); }
     } catch (_) { host.textContent = "Не удалось загрузить частые вопросы. "; host.append(plainButton("Повторить", loadSupportFaq, "secondary")); }
   }
-  function closeSupport() { $("support-dialog").hidden = true; render(); if (supportReturnFocus?.isConnected) supportReturnFocus.focus({preventScroll:true}); }
+  function closeSupport() { setDialogHidden($("support-dialog"), true); render(); if (supportReturnFocus?.isConnected) supportReturnFocus.focus({preventScroll:true}); }
   $("profile-support").addEventListener("click", () => openSupport("profile"));
   $("blocked-support").addEventListener("click", () => openSupport("booking"));
   $("support-close").addEventListener("click", closeSupport);
@@ -3434,10 +3496,10 @@
   }
   function openOnboarding() {
     onboardingReturnFocus = document.activeElement; onboardingIndex = 0; drawOnboarding();
-    $("onboarding-dialog").hidden = false; render(); $("onboarding-next").focus();
+    setDialogHidden($("onboarding-dialog"), false); render(); $("onboarding-next").focus();
   }
   async function finishOnboarding() {
-    $("onboarding-dialog").hidden = true; render();
+    setDialogHidden($("onboarding-dialog"), true); render();
     if (onboardingReturnFocus?.isConnected) onboardingReturnFocus.focus({ preventScroll: true });
     if (authorized) { try { await api("/api/miniapp/onboarding/complete", { method: "POST" }); } catch (_) { showError("Не удалось сохранить отметку о просмотре инструкции."); } }
   }

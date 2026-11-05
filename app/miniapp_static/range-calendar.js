@@ -38,12 +38,52 @@
     setRange(start, end) { this.range = { start, end }; this.render(); }
     reset() { this.range = { start: "", end: "" }; this.onChange(this.range); this.render(); }
     moveMonth(amount) {
+      const navigation = this.element.ownerDocument.activeElement?.getAttribute("aria-label");
       const date = new Date(`${this.month}T12:00:00Z`);
       date.setUTCMonth(date.getUTCMonth() + amount);
       this.month = date.toISOString().slice(0, 10); this.render(); this.onMonthChange();
+      if (navigation) [...this.element.querySelectorAll(".calendar-nav")].find(button => button.getAttribute("aria-label") === navigation)?.focus({preventScroll: true});
+    }
+    refreshDays(motion = {}) {
+      const buttons = [...this.element.querySelectorAll(".calendar-day")];
+      const range = buttons.filter(button => this.range.start && this.range.end && button.dataset.date >= this.range.start && button.dataset.date <= this.range.end);
+      const formatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
+      for (const button of buttons) {
+        const day = button.dataset.date, selected = day === this.range.start || day === this.range.end;
+        const note = this.dayNote(day), availability = this.dayState(day);
+        button.disabled = day < this.minimum || this.isDisabled(day);
+        button.classList.toggle("selected", selected);
+        button.classList.toggle("in-range", Boolean(this.range.start && this.range.end && day > this.range.start && day < this.range.end));
+        for (const state of ["all", "partial", "none"]) button.classList.toggle(`calendar-availability-${state}`, availability === state);
+        if (["all", "partial", "none"].includes(availability)) button.dataset.availability = availability;
+        else delete button.dataset.availability;
+        button.classList.toggle("calendar-day-busy", Boolean(note));
+        button.title = note;
+        button.setAttribute("aria-pressed", String(selected));
+        button.setAttribute("aria-label", formatter.format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
+        if (motion.clickedDay) {
+          button.classList.remove("calendar-day-pop", "calendar-day-reveal");
+          if (day === motion.clickedDay && !this.element.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            button.getAnimations().forEach(animation => animation.cancel());
+            button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)"});
+          }
+          if (motion.revealRange && range.includes(button)) {
+            button.style.setProperty("--range-reveal-delay", `${range.indexOf(button) * Math.min(20, 100 / Math.max(1, range.length - 1))}ms`);
+            button.classList.add("calendar-day-reveal");
+          }
+        }
+      }
     }
     render(focusDay = "", motion = {}) {
       const doc = this.element.ownerDocument;
+      const key = `${this.month}|${this.minimum}`;
+      if (this.renderKey === key && this.element.querySelector(".calendar-days")) {
+        this.refreshDays(motion);
+        if (focusDay) this.element.querySelector(`[data-date="${focusDay}"]`)?.focus({preventScroll: true});
+        return;
+      }
+      const changingMonth = Boolean(this.renderKey);
+      this.renderKey = key;
       this.element.replaceChildren();
       const header = doc.createElement("div"); header.className = "calendar-head";
       const title = doc.createElement("strong"); title.setAttribute("aria-live", "polite");
@@ -66,8 +106,9 @@
           if (day >= this.range.start && day <= this.range.end) revealDays.push(day);
         }
       }
-      const revealStep = revealDays.length > 1 ? Math.min(32, 460 / (revealDays.length - 1)) : 0;
+      const revealStep = revealDays.length > 1 ? Math.min(20, 100 / (revealDays.length - 1)) : 0;
       const revealPositions = new Map(revealDays.map((day, index) => [day, index]));
+      const dayFormatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
       for (let index = 0; index < 42; index += 1) {
         const day = addDays(first, index);
         const button = doc.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.dataset.date = day;
@@ -87,10 +128,10 @@
         button.classList.toggle("calendar-day-pop", day === motion.clickedDay);
         if (revealPositions.has(day)) {
           button.classList.add("calendar-day-reveal");
-          button.style.setProperty("--range-reveal-delay", `${Math.round(110 + revealPositions.get(day) * revealStep)}ms`);
+          button.style.setProperty("--range-reveal-delay", `${Math.round(revealPositions.get(day) * revealStep)}ms`);
         }
         button.setAttribute("aria-pressed", String(selected));
-        button.setAttribute("aria-label", new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
+        button.setAttribute("aria-label", dayFormatter.format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
         button.addEventListener("click", () => {
           this.range = selectRange(this.range, day, this.minimum);
           this.onChange(this.range);
@@ -104,9 +145,13 @@
           if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); this.onMonthChange(); }
           else grid.querySelector(`[data-date="${next}"]`).focus();
         });
+        button.addEventListener("animationend", () => button.classList.remove("calendar-day-pop", "calendar-day-reveal"));
         grid.append(button);
       }
       this.element.append(header, weekdays, grid);
+      if (changingMonth && !doc.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof grid.animate === "function") {
+        grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)"});
+      }
       if (focusDay) grid.querySelector(`[data-date="${focusDay}"]`)?.focus({ preventScroll: true });
     }
   }
