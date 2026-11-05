@@ -1,4 +1,6 @@
 # Добавьте этот файл к compose.yaml и compose.miniapp.yaml для Nginx и HTTPS.
+# Legacy container Nginx. Current production uses Windows Nginx;
+# see docs/domain-migration-opragopa.md. Not included in scripts/deploy.ps1.
 services:
   nginx:
     image: nginx:1.28-alpine

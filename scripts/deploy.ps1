@@ -26,7 +26,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Unable to update the production checkout from 
 $headCommit = (& git rev-parse HEAD).Trim()
 if ($headCommit -ne $ExpectedCommit) { throw 'Production checkout does not contain the expected commit after update' }
 
-$compose = @('compose', '-f', 'compose.yaml', '-f', 'compose.miniapp.yaml', '-f', 'compose.public.yaml')
+# HTTPS is served by Windows Nginx; update only the application services.
+$compose = @('compose', '-f', 'compose.yaml', '-f', 'compose.miniapp.yaml')
 & docker @compose up -d db
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start PostgreSQL' }
 & docker @compose up -d redis
@@ -35,7 +36,7 @@ if ($LASTEXITCODE -ne 0) { Write-Warning 'Redis unavailable; application will us
 if ($LASTEXITCODE -ne 0) { throw 'Unable to build the release images' }
 & docker @compose run --rm miniapp alembic upgrade head
 if ($LASTEXITCODE -ne 0) { throw 'Database migrations did not apply' }
-& docker @compose up -d bot miniapp nginx
+& docker @compose up -d bot miniapp
 if ($LASTEXITCODE -ne 0) { throw 'Unable to start production services' }
 
 for ($attempt = 1; $attempt -le 12; $attempt++) {
