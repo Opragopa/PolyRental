@@ -34,7 +34,9 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       await page.locator(".item-card .plus").first().tap();
       assert.equal(await page.locator("#selected-count").innerText(), "1");
       const dimensions = await page.locator(".item-card .quantity-control .button").first().evaluate(n => ({ width: n.getBoundingClientRect().width, height: n.getBoundingClientRect().height }));
-      assert.ok(dimensions.width >= 44 && dimensions.height >= 44, JSON.stringify(dimensions));
+      // WebKit can report 44 CSS px as 43.999969 after a transform.
+      const layoutEpsilon = 0.001;
+      assert.ok(dimensions.width >= 44 - layoutEpsilon && dimensions.height >= 44 - layoutEpsilon, JSON.stringify(dimensions));
       await page.locator("#main-button").tap();
       await page.locator("#customer-name").fill("Анна");
       await page.locator("#customer-contact").fill("@anna_example");
