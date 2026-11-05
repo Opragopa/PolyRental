@@ -74,6 +74,7 @@ async def deliver_notification(delivery_id: int) -> bool:
         try:
             from .bot import make_bot
             from aiogram.enums import ParseMode
+            from aiogram.types import LinkPreviewOptions
             async with make_bot(token) as bot:
                 if delivery.delivery_kind == "card":
                     # One lock across all outbox rows/processes for this card.
@@ -94,7 +95,8 @@ async def deliver_notification(delivery_id: int) -> bool:
                         if card.message_id:
                             try:
                                 await asyncio.wait_for(bot.edit_message_text(chat_id=delivery.recipient_id,
-                                    message_id=card.message_id, text=latest.card_text, parse_mode=ParseMode.HTML), timeout=10)
+                                    message_id=card.message_id, text=latest.card_text, parse_mode=ParseMode.HTML,
+                                    link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
                             except TelegramBadRequest as exc:
                                 detail = str(exc).lower()
                                 if "message is not modified" in detail:
@@ -105,11 +107,13 @@ async def deliver_notification(delivery_id: int) -> bool:
                                     raise
                         if card.message_id is None:
                             sent = await asyncio.wait_for(bot.send_message(delivery.recipient_id, latest.card_text,
-                                parse_mode=ParseMode.HTML, disable_notification=True), timeout=10)
+                                parse_mode=ParseMode.HTML, disable_notification=True,
+                                link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
                             card.message_id = sent.message_id
                         card.event_id, card.updated_at = latest.id, _now()
                 else:
-                    await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML), timeout=10)
+                    await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML,
+                        link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
         except Exception as exc:
             delivery.attempts += 1
             if isinstance(exc, TelegramForbiddenError):

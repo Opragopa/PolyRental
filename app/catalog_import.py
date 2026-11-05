@@ -7,9 +7,9 @@ from decimal import Decimal
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from .db import Article, Equipment, Session
+from .db import Article, Equipment, Session, CatalogCategory
 from .catalog_categories import category_exists
 
 
@@ -200,8 +200,16 @@ def parse_catalog_csv(data: bytes):
 def import_catalog_csv(data: bytes):
     models, assets = parse_catalog_csv(data)
     with Session.begin() as session:
+        for code in sorted({(DEFAULTS | model["fields"])["category"] for model in models.values()}):
+            if not session.get(CatalogCategory, code, with_for_update=True):
+                raise ValueError("Категория не найдена")
         existing_articles = {article.sku: article for article in session.scalars(
             select(Article).where(Article.sku.in_(models))).all()}
+        for article in sorted(existing_articles.values(), key=lambda item: item.id):
+            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article.id})
+            session.refresh(article)
+            if article.archived_at is not None:
+                raise ValueError(f"Артикул {article.sku} удалён из каталога и не может быть импортирован")
         inventory_codes = [asset["inventory_code"] for asset in assets if asset["inventory_code"]]
         duplicate_codes = {code for code in inventory_codes if inventory_codes.count(code) > 1}
         if duplicate_codes:

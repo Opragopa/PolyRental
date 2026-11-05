@@ -25,29 +25,62 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
     if(payload.version!==server.version)return route.fulfill({status:409,json:{detail:'Версия изменилась'}});
     server={...payload,version:server.version+1};return route.fulfill({json:server});
    }
+   if(url.pathname==='/api/miniapp/catalog')return route.fulfill({json:{items,selected_items:items,page:0,page_size:20,total:items.length}});
    if(url.pathname==='/api/miniapp/availability')return route.fulfill({json:{items,all_items:items,unavailable_count:0,unavailable:[]}});
    if(url.pathname.startsWith('/api/'))return route.fulfill({json:{items:[]}});
    return route.fulfill({body:html,contentType:'text/html'});
   });
-  await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});await page.goto('http://polyrental.test/miniapp');await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));await page.locator('#main-button').click();
+  await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});await page.goto('http://polyrental.test/miniapp');await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
   return {page,errors,release,requestReceived,getServer:()=>server,getWrites:()=>writes,setOnline:()=>{offline=false}};
  }
  {
-  const f=await setup('conflict'), {page}=f;const plus=page.getByRole('button',{name:'Добавить в корзину: Камера 1'});
-  await plus.click();await page.clock.runFor(350);await f.requestReceived;await plus.click();assert.equal(await page.locator('#selected-count').innerText(),'2');
-  f.release();await page.locator('#cart-sync-notice').waitFor();assert.equal(await page.locator('#selected-count').innerText(),'1');
+  const f=await setup('success'), {page}=f;
+  await page.setViewportSize({width:320,height:844});
+  for (const layout of ['list','grid']) {
+   await page.locator(`#catalog-${layout}`).click();
+   const card=page.locator('.item-card').first();
+   assert.equal(await card.locator('.quantity-control').innerText(),'−\n0\n+');
+   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 0');
+   for (const [control,expected] of [['plus',1],['plus',2],['minus',1],['minus',0]]) {
+    const actual=await card.locator(`.${control}`).evaluate(button=>{button.click();return document.querySelector('#main-button').textContent;});
+    assert.equal(actual,`В корзину · ${expected}`,'footer must change in the same click handler, before cart sync');
+    assert.equal(await card.locator('.quantity-value').innerText(),String(expected));
+    assert.equal(f.getWrites(),0,'the update must not wait for the server or debounce');
+   }
+   assert.equal(await card.locator('.minus').isDisabled(),true);
+   await card.locator('.plus').evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('.item-card .plus').click();});
+   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 30');
+   assert.equal(await card.locator('.plus').isDisabled(),true);
+   assert.equal(await card.locator('.quantity-value').innerText(),'30');
+   assert.doesNotMatch(await card.innerText(),/добавить в корзину|в корзине:/i);
+   const size=await card.locator('.quantity-control').evaluate(el=>({width:el.getBoundingClientRect().width,available:el.parentElement.getBoundingClientRect().width,buttons:[...el.querySelectorAll('button')].map(button=>({width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height}))}));
+   assert.ok(size.width<=size.available+1,JSON.stringify(size));
+   assert.ok(size.buttons.every(button=>button.width>=44 && button.height>=44),JSON.stringify(size));
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   fs.mkdirSync('artifacts/catalog-quantity-hotfix',{recursive:true});await card.screenshot({path:`artifacts/catalog-quantity-hotfix/${layout}.png`});
+   await card.locator('.minus').evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('.item-card .minus').click();});
+  }
+  await page.locator('.item-card .plus').first().click();
+  await page.locator('#main-button').click();assert.equal(await page.locator('#main-button').innerText(),'Выбрать даты','cart count updates must preserve the next step action');
+  f.release();await page.clock.runFor(350);await f.requestReceived;
+  assert.deepEqual(f.errors,[]);await page.close();
+ }
+ {
+  const f=await setup('conflict'), {page}=f;const plus=page.getByRole('button',{name:'Увеличить количество: Камера 1'});
+  await plus.click();await page.clock.runFor(350);await f.requestReceived;await plus.click();assert.equal(await page.locator('#selected-count').innerText(),'2');assert.equal(await page.locator('#main-button').innerText(),'В корзину · 2');
+  f.release();await page.locator('#cart-sync-notice').waitFor();assert.equal(await page.locator('#selected-count').innerText(),'1');assert.equal(await page.locator('#main-button').innerText(),'В корзину · 1');
   assert.match(await page.locator('#cart-sync-summary').innerText(),/на сервере: 1 шт\.; в ваших несохранённых изменениях: 2 шт/i);
   await page.reload();await page.locator('#cart-sync-notice').waitFor();
   await page.getByRole('button',{name:'Сохранить мои изменения'}).click();await page.locator('#cart-sync-notice').waitFor({state:'hidden'});
   assert.deepEqual(f.getServer().lines,[{article_id:1,quantity:2}]);assert.equal(f.getServer().version,3);assert.deepEqual(f.errors,[]);await page.close();
  }
  {
-  const f=await setup('lost-ack'), {page}=f;await page.getByRole('button',{name:'Добавить в корзину: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();
+  const f=await setup('lost-ack'), {page}=f;await page.getByRole('button',{name:'Увеличить количество: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();
   await page.waitForFunction(()=>!Object.keys(localStorage).some(k=>k.endsWith(':unsynced')));
   assert.equal(await page.locator('#cart-sync-notice').isHidden(),true);assert.equal(await page.locator('#selected-count').innerText(),'1');assert.equal(f.getServer().lines[0].quantity,1);assert.deepEqual(f.errors,[]);await page.close();
  }
  {
-  const f=await setup('offline'), {page}=f;await page.getByRole('button',{name:'Добавить в корзину: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();await page.locator('#cart-sync-notice').waitFor();
+  const f=await setup('offline'), {page}=f;await page.getByRole('button',{name:'Увеличить количество: Камера 1'}).click();await page.clock.runFor(350);await f.requestReceived;f.release();await page.locator('#cart-sync-notice').waitFor();
   assert.equal(await page.locator('#selected-count').innerText(),'0');await page.getByRole('button',{name:'Использовать серверную подборку'}).click();assert.equal(await page.locator('#cart-sync-notice').isVisible(),true);
   f.setOnline();await page.getByRole('button',{name:'Использовать серверную подборку'}).click();await page.locator('#cart-sync-notice').waitFor({state:'hidden'});assert.equal(await page.locator('#selected-count').innerText(),'0');assert.deepEqual(f.errors,[]);await page.close();
  }

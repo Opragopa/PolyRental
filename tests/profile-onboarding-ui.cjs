@@ -42,9 +42,9 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       }
       const dialog = page.locator('#onboarding-dialog');
       await dialog.waitFor({state:'visible'});
-      assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
-      await dialog.getByRole('button',{name:'Далее'}).click();
       assert.equal(await dialog.locator('h2').innerText(),'Каталог и подборка');
+      await dialog.getByRole('button',{name:'Далее'}).click();
+      assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
       await dialog.getByRole('button',{name:'Пропустить'}).click();
       await dialog.waitFor({state:'hidden'});
       await page.waitForFunction(() => document.querySelector('#onboarding-dialog').hidden);
@@ -90,7 +90,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       await page.locator('#reminders-enabled').uncheck();
       assert.equal(reminders, false);
       await page.getByRole('button',{name:'Как пользоваться'}).click();
-      assert.equal(await dialog.locator('h2').innerText(),'Выбор дат');
+      assert.equal(await dialog.locator('h2').innerText(),'Каталог и подборка');
       await dialog.getByRole('button',{name:'Пропустить'}).click();
       await page.waitForTimeout(50);
       assert.equal(completed, 2);

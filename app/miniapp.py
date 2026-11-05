@@ -10,7 +10,7 @@ import re
 import secrets
 import time
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
@@ -33,7 +33,7 @@ from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .cart import CartConflict, get_cart, put_cart
 from .availability_events import subscribe as subscribe_availability, unsubscribe as unsubscribe_availability
 from .catalog_titles import catalog_title
-from .catalog_categories import list_categories, create_category
+from .catalog_categories import list_categories, create_category, delete_category
 from .booking_events import claim_notices
 from .request_sla import request_sla
 from .support import (SupportConflict, submit_question, list_threads as list_support_threads, support_threads_page,
@@ -53,7 +53,7 @@ from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identit
                   reusable_identity_document,
                   reveal_identity, review_identity, sanitize_image, submit_identity,
                   validate_identity_payload)
-from .rental import (ClientBlocked, Conflict, assign_booking_assets, availability, availability_page, booking_history, booking_history_page,
+from .rental import (ClientBlocked, Conflict, archive_article, assign_booking_assets, availability, availability_page, booking_history, booking_history_page,
                      claim_booking_operation, create_booking, operation_lease_states, nearest_available_period,
                      close_repair, delete_booking, restore_booking, set_booking_line_deleted, set_booking_asset_deleted, create_deletion_intent, cancel_deletion_intent, schedule_legacy_deletion, deletion_undo_seconds, reassign_booking, hide_test_booking, set_booking_test_flag, set_article_test_flag, delete_dependency, delete_equipment, get_booking,
                      list_articles, list_articles_page, list_bookings, admin_booking_page, admin_queue_counts, list_customer_bookings, list_hidden_test_bookings, customer_history_page,
@@ -163,6 +163,23 @@ async def admin_create_category(payload: CategoryRequest, user=Depends(require_a
         return await asyncio.to_thread(create_category, payload.name, user["id"], payload.parent_code, payload.icon)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/api/miniapp/admin/catalog/categories/{code}")
+async def admin_delete_category(code: str, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(delete_category, code, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True}
+
+
+def require_catalog_manager(user=Depends(require_admin)):
+    if not staff_allows(user["id"], "manager"):
+        raise HTTPException(403, "Изменять оборудование может только менеджер или администратор")
+    return user
 
 
 def require_system_admin(user=Depends(require_customer)):
@@ -370,6 +387,21 @@ async def availability_events(user=Depends(require_customer)):
                              headers={"Cache-Control":"no-store", "X-Accel-Buffering":"no"})
 
 
+@router.get("/api/miniapp/catalog")
+async def customer_catalog(page: int = Query(default=0, ge=0, le=100000),
+                           page_size: int = Query(default=20, ge=1, le=100),
+                           q: str = Query(default="", max_length=200),
+                           selected: list[int] = Query(default=[]),
+                           category: str = Query(default="", max_length=40)):
+    try:
+        items, selected_items, total = await asyncio.to_thread(
+            availability_page, None, None, page, page_size, q, selected, category)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"items": items, "selected_items": selected_items,
+            "page": page, "page_size": page_size, "total": total}
+
+
 @router.get("/api/miniapp/availability")
 async def equipment_availability(start: datetime = Query(), end: datetime = Query(),
                                  page: int | None = Query(default=None, ge=0, le=100000),
@@ -410,6 +442,20 @@ class NearestAvailabilityRequest(BaseModel):
     start: datetime
     end: datetime
     lines: list[BookingLineRequest] = Field(min_length=1, max_length=30)
+
+
+class CalendarAvailabilityRequest(NearestAvailabilityRequest):
+    first_day: date
+
+
+@router.post("/api/miniapp/availability/calendar")
+async def booking_calendar_availability(payload: CalendarAvailabilityRequest, user=Depends(require_customer)):
+    from .rental import calendar_availability
+    try:
+        return await asyncio.to_thread(calendar_availability, payload.start, payload.end,
+            [line.model_dump() for line in payload.lines], payload.first_day)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/api/miniapp/availability/nearest")
@@ -520,7 +566,7 @@ class SupportQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str = Field(min_length=1, max_length=3000)
     booking_id: int | None = Field(default=None, gt=0)
-    screen: str = Field(pattern="^(profile|booking|request|bot)$")
+    screen: str = Field(pattern="^(profile|booking|request|bot|feedback)$")
 
 
 class SupportReply(BaseModel):
@@ -547,7 +593,7 @@ async def support_question(payload: SupportQuestion, tasks: BackgroundTasks, use
         raise HTTPException(503, str(exc)) from exc
     if result["owner_id"]:
         tasks.add_task(notify_support_owner, result["owner_id"], result["id"], result["request_number"])
-    return {"status": "Обращение получено", "id": result["id"]}
+    return {"status": "Спасибо! Мы рассмотрим ваше предложение." if payload.screen == "feedback" else "Обращение получено", "id": result["id"]}
 
 
 @router.get("/api/miniapp/support/threads")
@@ -675,6 +721,28 @@ async def update_reminder_preference(payload: ReminderPreference, user=Depends(r
 @router.post("/api/miniapp/onboarding/show")
 async def show_onboarding(user=Depends(require_customer)):
     return {"first_show": await asyncio.to_thread(mark_onboarding_shown, user["id"])}
+
+
+@router.get("/api/miniapp/release")
+async def latest_release(user=Depends(require_customer)):
+    from .release_notes import release_for_user
+    staff = await asyncio.to_thread(staff_allows, user["id"], "operator")
+    return {"release": await asyncio.to_thread(release_for_user, user["id"], staff)}
+
+
+class ReleaseSeenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: str = Field(pattern=r"^\d{1,5}\.\d{1,5}\.\d{1,5}$")
+
+
+@router.post("/api/miniapp/release/seen")
+async def acknowledge_release(payload: ReleaseSeenRequest, user=Depends(require_customer)):
+    from .release_notes import mark_release_seen
+    try:
+        await asyncio.to_thread(mark_release_seen, user["id"], payload.version)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "ok"}
 
 
 @router.post("/api/miniapp/onboarding/complete")
@@ -1294,7 +1362,7 @@ async def admin_catalog_options(page: int = Query(default=0, ge=0, le=100000), p
 
 
 @router.put("/api/miniapp/admin/catalog/articles/{article_id}/photo")
-async def admin_catalog_photo(article_id: int, photo: UploadFile = File(...), user=Depends(require_admin)):
+async def admin_catalog_photo(article_id: int, photo: UploadFile = File(...), user=Depends(require_catalog_manager)):
     from .catalog_images import MAX_UPLOAD, save_image
     raw = await photo.read(MAX_UPLOAD + 1)
     await photo.close()
@@ -1306,7 +1374,7 @@ async def admin_catalog_photo(article_id: int, photo: UploadFile = File(...), us
 
 
 @router.delete("/api/miniapp/admin/catalog/articles/{article_id}/photo")
-async def admin_delete_catalog_photo(article_id: int, user=Depends(require_admin)):
+async def admin_delete_catalog_photo(article_id: int, user=Depends(require_catalog_manager)):
     from .catalog_images import save_image
     try:
         await asyncio.to_thread(save_image, article_id, None, user["id"])
@@ -1316,7 +1384,7 @@ async def admin_delete_catalog_photo(article_id: int, user=Depends(require_admin
 
 
 @router.post("/api/miniapp/admin/catalog/import-csv")
-async def admin_import_catalog_csv(file: UploadFile = File(...), user=Depends(require_admin)):
+async def admin_import_catalog_csv(file: UploadFile = File(...), user=Depends(require_catalog_manager)):
     data = await file.read(MAX_CSV_BYTES + 1)
     await file.close()
     try:
@@ -1362,7 +1430,7 @@ class ArticleRequest(BaseModel):
 
 
 @router.post("/api/miniapp/admin/catalog/articles")
-async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin)):
+async def admin_save_article(payload: ArticleRequest, user=Depends(require_catalog_manager)):
     try:
         article_id = await asyncio.to_thread(
             save_article, payload.sku, payload.name, payload.description, Decimal("0"),
@@ -1377,6 +1445,28 @@ async def admin_save_article(payload: ArticleRequest, user=Depends(require_admin
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/api/miniapp/admin/catalog/articles/{article_id}/hide")
+async def admin_hide_article(article_id: int, user=Depends(require_admin)):
+    from .rental import hide_article
+    try:
+        await asyncio.to_thread(hide_article, article_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.delete("/api/miniapp/admin/catalog/articles/{article_id}")
+async def admin_archive_article(article_id: int, user=Depends(require_admin)):
+    if not staff_allows(user["id"], "admin"):
+        raise HTTPException(403, "Удалять артикулы может только администратор")
+    try:
+        return await asyncio.to_thread(archive_article, article_id, user["id"])
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 class EquipmentExpected(BaseModel):
@@ -1403,7 +1493,7 @@ class EquipmentRequest(BaseModel):
 
 
 @router.post("/api/miniapp/admin/catalog/equipment")
-async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_admin)):
+async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_catalog_manager)):
     try:
         equipment_id = await asyncio.to_thread(
             save_equipment, "", "", "", 0, payload.condition, payload.id,
@@ -1420,7 +1510,7 @@ async def admin_save_equipment(payload: EquipmentRequest, user=Depends(require_a
 
 
 @router.delete("/api/miniapp/admin/catalog/equipment/{equipment_id}")
-async def admin_delete_equipment(equipment_id: int, user=Depends(require_admin)):
+async def admin_delete_equipment(equipment_id: int, user=Depends(require_catalog_manager)):
     try:
         return await asyncio.to_thread(delete_equipment, equipment_id)
     except ValueError as exc:
@@ -1437,7 +1527,7 @@ class DependencyRequest(BaseModel):
 
 
 @router.put("/api/miniapp/admin/catalog/dependencies")
-async def admin_save_dependency(payload: DependencyRequest, user=Depends(require_admin)):
+async def admin_save_dependency(payload: DependencyRequest, user=Depends(require_catalog_manager)):
     try:
         await asyncio.to_thread(save_dependency, payload.parent_article_id,
                                 payload.child_article_id, payload.quantity, payload.billable)
@@ -1447,7 +1537,7 @@ async def admin_save_dependency(payload: DependencyRequest, user=Depends(require
 
 
 @router.delete("/api/miniapp/admin/catalog/dependencies/{parent_id}/{child_id}")
-async def admin_delete_dependency(parent_id: int, child_id: int, user=Depends(require_admin)):
+async def admin_delete_dependency(parent_id: int, child_id: int, user=Depends(require_catalog_manager)):
     await asyncio.to_thread(delete_dependency, parent_id, child_id)
     return {"status": "deleted"}
 
@@ -1876,7 +1966,13 @@ async def admin_external_blocks(equipment_id:int,user=Depends(require_admin)):
 @router.post("/api/miniapp/admin/catalog/equipment/{equipment_id}/blocks")
 async def admin_external_block(equipment_id:int,payload:ExternalBlockRequest,user=Depends(require_admin)):
     from .roadmap import save_external_block
-    return {"id":await workflow_call(save_external_block,equipment_id,payload.start,payload.end,payload.reason,user["id"])}
+    return await workflow_call(save_external_block, equipment_id, payload.start, payload.end, payload.reason, user["id"], True)
+
+
+@router.get("/api/miniapp/admin/catalog/equipment/{equipment_id}/schedule")
+async def admin_equipment_schedule(equipment_id:int,user=Depends(require_catalog_manager)):
+    from .roadmap import external_schedule
+    return {"items": await workflow_call(external_schedule, equipment_id)}
 
 
 @router.delete("/api/miniapp/admin/catalog/blocks/{block_id}")

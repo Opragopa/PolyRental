@@ -8,15 +8,16 @@
   <meta name="description" content="Бронирование фото- и видеотехники ПолиРентал: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>ПолиРентал — бронирование</title>
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__">
-  <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__-make1">
+  <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__-category-edit1">
   <script src="/miniapp/static/theme.js?v=__APP_VERSION__"></script>
   <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script>if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");</script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__-make1"></script>
-  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__-make1"></script>
+  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__-category-edit1"></script>
 </head>
 <body class="dates-view">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l4.5-1 12-12a2 2 0 0 0-4-4l-12 12L4 20Z"/></symbol>
     <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="3.5"/></symbol>
     <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M7.5 3v4m9-4v4M3.5 10h17m-12 4h.01m3.49 0h.01m3.49 0h.01m-7 3h.01m3.49 0h.01"/></symbol>
     <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c.8-3.8 3.3-5.7 7.5-5.7s6.7 1.9 7.5 5.7"/></symbol>
@@ -60,19 +61,19 @@
         <div><p class="eyebrow">БРОНИРОВАНИЕ В TELEGRAM</p><h1 id="page-title">Найдём всё для вашей съёмки</h1></div>
         <span class="timezone">Время · МСК</span>
       </div>
-      <p id="page-intro" class="intro">Выберите сроки и оборудование. На оформление уйдёт пара минут.</p>
+      <p id="page-intro" class="intro">Выберите оборудование, затем укажите сроки аренды.</p>
 
       <nav class="tabs" aria-label="Разделы">
         <button id="tab-admin" type="button" class="tab" hidden><svg class="tab-icon icon" aria-hidden="true"><use href="#icon-settings"></use></svg>Управление</button>
         <button id="tab-new" type="button" class="tab active" aria-current="page"><svg class="tab-icon icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>Бронирование</button>
-        <button id="tab-orders" type="button" class="tab"><svg class="tab-icon icon" aria-hidden="true"><use href="#icon-user"></use></svg>Профиль</button>
+        <button id="tab-orders" type="button" class="tab"><span id="tab-avatar" class="tab-avatar avatar-placeholder" aria-hidden="true"></span>Профиль</button>
       </nav>
       <div id="global-error" class="notice error" role="alert" hidden></div><section id="cart-sync-notice" class="notice cart-sync-notice" role="alert" hidden><p id="cart-sync-message"></p><p id="cart-sync-summary"></p><div class="action-row"><button id="cart-sync-server" class="button secondary" type="button">Использовать серверную подборку</button><button id="cart-sync-local" class="button primary" type="button">Сохранить мои изменения</button></div></section>
 
       <section id="booking-blocked" class="panel" hidden><h2>Бронирование недоступно</h2><p>Обратитесь в поддержку, чтобы уточнить причину.</p><button id="blocked-support" class="button secondary" type="button">Поддержка</button></section>
       <section id="booking-flow" aria-label="Оформление бронирования">
-        <div id="step-dates" class="panel step-panel">
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2>Когда нужна техника?</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-calendar"></use></svg></span></div>
+        <div id="step-dates" class="panel step-panel" hidden>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Когда нужна техника?</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-calendar"></use></svg></span></div>
           <p class="date-instruction">Выберите даты и время. Чтобы изменить период, нажмите новую дату начала.</p>
           <div class="date-grid">
             <label class="field"><span id="start-time-label">Начало (дата)</span><input id="start-date" type="hidden"><input id="start" type="hidden"><input id="start-time" type="time" required step="900" aria-labelledby="start-time-label"><small id="start-error" class="field-error" role="alert" hidden></small></label>
@@ -82,20 +83,22 @@
           <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p></div>
           <p id="period-error" class="period-error" role="status"></p>
           <p id="start-hint" class="date-instruction"></p>
+          <div id="availability-result" class="notice" role="status" hidden></div><button id="availability-edit-cart" class="button secondary" type="button" hidden>Изменить оборудование</button>
+          <div id="nearest-period" class="nearest-period" hidden><button id="nearest-search" class="button secondary" type="button">Найти ближайшие сроки для подборки</button><p id="nearest-status" role="status"></p><button id="nearest-apply" class="button primary" type="button" hidden>Выбрать эти сроки</button></div>
         </div>
 
-        <div id="step-items" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2 id="catalog-page-title" tabindex="-1">Каталог оборудования</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-camera"></use></svg></span></div>
-          <div class="catalog-period"><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты <span aria-hidden="true">›</span></button></div>
+        <div id="step-items" class="panel step-panel">
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><h2 id="catalog-page-title" tabindex="-1">Каталог оборудования</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-camera"></use></svg></span></div>
+          <div class="catalog-period" hidden><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты <span aria-hidden="true">›</span></button></div>
           <div id="items-status" class="notice" role="status" hidden></div>
-          <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button><div id="nearest-period" class="nearest-period" hidden><button id="nearest-search" class="button secondary" type="button">Найти ближайшие сроки для подборки</button><p id="nearest-status" role="status"></p><button id="nearest-apply" class="button primary" type="button" hidden>Выбрать эти сроки</button></div>
+          <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button>
           <label class="field"><span id="client-catalog-search-label">Поиск по всему каталогу</span><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"></label><div class="catalog-layout" role="group" aria-label="Вид каталога"><button type="button" class="button ghost catalog-layout-icon" id="catalog-list" aria-pressed="true" aria-label="Список" title="Список"><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg></button><button type="button" class="button ghost catalog-layout-icon" id="catalog-grid" aria-pressed="false" aria-label="Плитка" title="Плитка"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button></div><div id="client-categories" class="client-categories" aria-label="Категории оборудования"></div><div id="items-grid" class="items-grid" aria-label="Оборудование"></div><div id="client-catalog-pagination" class="action-row" hidden><button id="client-catalog-prev" class="button secondary" type="button">Назад</button><span id="client-catalog-page"></span><button id="client-catalog-next" class="button secondary" type="button">Далее</button></div>
           <div class="selection-bar"><span>Выбрано <strong id="selected-count">0</strong></span></div>
           <details id="unavailable-details" class="unavailable-details" hidden><summary>Занятые интервалы и недоступные экземпляры</summary><div id="unavailable-list"></div></details>
         </div>
 
         <div id="step-contact" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Ваша подборка</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-bag"></use></svg></span></div>
+          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Ваша подборка</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-bag"></use></svg></span></div>
           <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p><div class="contact-card"><h3>Как с вами связаться?</h3><p class="supporting">Менеджер использует эти данные только для согласования аренды и документов.</p>
           <label class="field"><span>Имя для заявки (не ФИО из анкеты)</span><input id="customer-name" type="text" autocomplete="nickname" maxlength="200" placeholder="Например, Анна" aria-describedby="name-error"><small id="name-error" class="field-error" role="alert" hidden></small></label>
           <label class="field"><span>Телефон или Telegram</span><input id="customer-contact" type="text" autocomplete="tel" maxlength="200" placeholder="+7 999 123-45-67 или @username" aria-describedby="contact-error"><small id="contact-error" class="field-error" role="alert" hidden></small></label>
@@ -187,7 +190,10 @@
       </section>
 
       <section id="support-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="support-title">
-        <div class="dialog-card"><h2 id="support-title">Поддержка</h2><p>Частые вопросы</p><div id="support-faq"></div><form id="support-form"><label class="field"><span>Написать оператору</span><textarea id="support-question" maxlength="3000" required></textarea></label><div class="action-row"><button id="support-close" class="button ghost" type="button">Закрыть</button><button class="button primary" type="submit">Отправить вопрос</button></div><p id="support-result" role="status"></p></form></div>
+        <div class="dialog-card"><h2 id="support-title">Поддержка</h2><p id="support-faq-heading">Частые вопросы</p><div id="support-faq"></div><form id="support-form"><label class="field"><span id="support-question-label">Написать оператору</span><textarea id="support-question" maxlength="3000" required></textarea></label><div class="action-row"><button id="support-close" class="button ghost" type="button">Закрыть</button><button id="support-submit" class="button primary" type="submit">Отправить вопрос</button></div><p id="support-result" role="status" tabindex="-1"></p></form></div>
+      </section>
+      <section id="release-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="release-title" aria-describedby="release-version">
+        <div class="dialog-card"><p id="release-version" class="supporting"></p><h2 id="release-title" tabindex="-1">Что нового</h2><div id="release-items" class="release-items"></div><div class="release-actions"><button id="release-feedback" class="button secondary" type="button">Помогите нам стать лучше</button><button id="release-close" class="button primary" type="button">Понятно</button></div></div>
       </section>
       <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy">
         <div class="dialog-card"><p id="onboarding-progress" class="step-kicker" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
@@ -222,7 +228,7 @@
         <div class="admin-tabs">
           <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
-          <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button><button id="admin-hidden-tests" class="button ghost admin-mode" data-mode="hidden_tests" type="button" hidden>Скрытые тестовые</button>
+          <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button>
         </div>
         <details id="admin-settings" class="admin-settings"><summary>Настройки</summary>
         <details id="operator-notification-settings" class="calendar-sync"><summary>Тихие часы уведомлений</summary><p>Обязательные уведомления будут доставлены после тихих часов. Пустые поля означают доставку в рабочее время.</p><form id="operator-quiet-form" class="form-grid"><label class="field"><span>Начало</span><input name="quiet_start" type="time"></label><label class="field"><span>Конец</span><input name="quiet_end" type="time"></label><button class="button secondary" type="submit">Сохранить</button><p id="operator-quiet-status" role="status"></p></form></details>
@@ -239,7 +245,7 @@
     </main>
 
     <div id="delete-snackbar" class="delete-snackbar" role="status" aria-live="polite" hidden><span id="delete-message"></span><button id="delete-undo" class="button secondary" type="button">Отменить</button><button id="delete-retry" class="button secondary" type="button" hidden>Повторить</button></div>
-    <footer id="action-bar" class="action-bar"><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
+    <footer id="action-bar" class="action-bar"><button id="clear-cart" class="button secondary" type="button" aria-label="Очистить корзину" hidden>Очистить</button><button id="main-button" class="button primary" type="button">Продолжить</button></footer>
   </div>
 </body>
 </html>

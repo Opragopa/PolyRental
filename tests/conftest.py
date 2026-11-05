@@ -21,9 +21,10 @@ def clean_database(monkeypatch):
     from app.miniapp import _PII_REQUESTS
     _PII_REQUESTS.clear()
     init_db()
-    from app.db import StaffRole, TrustedSigner, CatalogCategory
+    from app.db import StaffRole, TrustedSigner, CatalogCategory, ReleasePublication
     with Session.begin() as session:
         session.execute(delete(TrustedSigner))
+        session.execute(delete(ReleasePublication))
         for user_id, role in ((100, "admin"), (200, "manager")):
             row = session.get(StaffRole, user_id)
             if row is None:

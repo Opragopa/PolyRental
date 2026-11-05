@@ -46,20 +46,24 @@ def booking_link(booking_id):
 
 def render_card(session, booking):
     from .db import BookingLine, Article
+    from .catalog_titles import catalog_title
     from .booking_messages import STATUS_LABELS
-    lines = session.execute(select(Article.name, BookingLine.quantity).join(BookingLine).where(
+    lines = session.execute(select(Article, BookingLine.quantity).join(BookingLine).where(
         BookingLine.booking_id == booking.id, BookingLine.deleted_at.is_(None)).order_by(BookingLine.id)).all()
     local = ZoneInfo("Europe/Moscow")
     period = f"{booking.starts_at.astimezone(local):%d.%m.%Y %H:%M} — {booking.ends_at.astimezone(local):%d.%m.%Y %H:%M} МСК"
     items = ""
-    for index, (name, quantity) in enumerate(lines):
-        line = f"• {escape(name)} — {quantity} шт.\n"
+    for index, (article, quantity) in enumerate(lines):
+        name = catalog_title(article.name, article.kind, article.brand, article.key_spec)
+        line = f"• {escape(name[:100])} — {quantity} шт.\n"
         if len(items) + len(line) > 2800:
             items += f"… ещё позиций: {len(lines) - index}"
             break
         items += line
     status = "Заявка удалена" if booking.deleted_at else STATUS_LABELS.get(booking.status, booking.status)
     return (f"<b>Заявка {escape(booking.human_number or str(booking.id))}</b>\n"
+            f"Создана: {booking.created_at.astimezone(local):%d.%m.%Y %H:%M} МСК\n"
+            f"Кем: {escape((booking.customer_name or str(booking.customer_id))[:160])}\n"
             f"Статус: {escape(status)}\n{period}\n{items}\n"
             f'<a href="{escape(booking_link(booking.id), quote=True)}">Открыть заявку</a>')
 
@@ -140,6 +144,14 @@ def install_booking_events(factory):
                 number = escape(booking.human_number or str(booking_id))
                 author = "Система" if not actor else escape(booking.customer_name or str(actor)) if actor == booking.customer_id else f"Сотрудник {actor}"
                 description = "; ".join(dict.fromkeys(action_label(action) for action in actions))
+                details = session.info.get("booking_change_details", {}).get(booking_id)
+                if details and (details["lines"] or details["dates"]):
+                    changed = []
+                    if details["lines"]:
+                        changed.append(f"состав ({len(details['lines'])} поз.)")
+                    if details["dates"]:
+                        changed.append("сроки")
+                    description += ". Изменены: " + ", ".join(changed)
                 message = f'<b>Заявка {number}</b>\n{escape(description)}\nАвтор: {author}\n<a href="{escape(booking_link(booking_id), quote=True)}">Открыть заявку</a>'
                 for recipient in card_recipients:
                     if recipient in recipients:
@@ -158,7 +170,7 @@ def install_booking_events(factory):
     @event.listens_for(factory, "after_transaction_end")
     def clear(session, transaction):
         if transaction.parent is None:
-            for key in ("booking_event_commands", "booking_previous_assignees", "writing_booking_events", "legacy_booking_deliveries"):
+            for key in ("booking_event_commands", "booking_previous_assignees", "writing_booking_events", "legacy_booking_deliveries", "booking_change_details"):
                 session.info.pop(key, None)
 
 

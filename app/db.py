@@ -127,6 +127,8 @@ class Article(Base):
     hourly_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     buffer_hours: Mapped[int] = mapped_column(Integer, default=24)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     equipment: Mapped[list["Equipment"]] = relationship(back_populates="article")
 
@@ -516,6 +518,21 @@ class BookingRework(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
+class ReleasePublication(Base):
+    __tablename__ = "release_publications"
+    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
 class NotificationDelivery(Base):
     """Durable Telegram delivery log and retry queue."""
     __tablename__ = "notification_deliveries"
@@ -646,6 +663,10 @@ def init_db():
                     connection.execute(text(f"ALTER TABLE equipment ADD COLUMN {name} {ddl}"))
         if "articles" in tables:
             columns = _columns(connection, "articles")
+            if "archived_at" not in columns:
+                connection.execute(text("ALTER TABLE articles ADD COLUMN archived_at TIMESTAMPTZ"))
+            if "archived_by" not in columns:
+                connection.execute(text("ALTER TABLE articles ADD COLUMN archived_by BIGINT"))
             if "is_test" not in columns:
                 connection.execute(text("ALTER TABLE articles ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT false"))
             for name, size in (("kind", 80), ("brand", 100), ("key_spec", 120)):

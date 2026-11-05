@@ -179,18 +179,19 @@ async def inventory_save(query,state,nonce):
         operation=data['operation'];actor=query.from_user.id;asset_id=data['asset_id']
         required="manager" if operation in {"owner","block","block_release"} else "admin" if operation in {"feature_edit","feature_delete"} else "operator"
         if not await asyncio.to_thread(staff_allows,actor,required): raise PermissionError("Недостаточно прав")
-        values=data.get('values',{})
+        values=data.get('values',{}); warnings=[]
         if operation=="owner":
             await asyncio.to_thread(save_owner,asset_id,values['name'],values['contact'],actor,data['before'])
         elif operation=="block":
             # A fresh confirmation is required after any failure to avoid duplicate intervals.
             await state.clear()
-            await asyncio.to_thread(save_external_block,asset_id,datetime.fromisoformat(values['start']),datetime.fromisoformat(values['end']),values['reason'],actor)
+            result=await asyncio.to_thread(save_external_block,asset_id,datetime.fromisoformat(values['start']),datetime.fromisoformat(values['end']),values['reason'],actor,True)
+            warnings=result['warnings']
         elif operation=="block_release":
             await asyncio.to_thread(release_external_block,data['block_id'],actor)
         elif operation in {"feature_add","feature_edit","feature_delete"}:
             if operation=="feature_add": await state.clear()
             await asyncio.to_thread(save_feature,asset_id,values.get('description',''),actor,data.get('feature_id'),operation=="feature_delete",data.get('source','catalog'),data.get('before'))
         else: raise ValueError("Действие недоступно")
-        await state.clear();await query.answer("Сохранено")
+        await state.clear();await query.answer(f"Сохранено. Есть пересечения: {len(warnings)}." if warnings else "Сохранено",show_alert=bool(warnings))
         return await inventory_menu(query.message,actor,asset_id)

@@ -18,7 +18,7 @@ from .db import (DeletionIntent, ClientProfile, Article, ArticleTitleAudit, Arti
                  BookingOperationLease,
                  BookingItem, BookingLine,
                  CustomerIdentity, Equipment, Inspection, Occupancy, PIIAudit,
-                 RepairTicket, Session)
+                 RepairTicket, Session, CatalogCategory)
 from .catalog_titles import catalog_title
 from .catalog_categories import category_exists
 from .request_numbers import format_request_number, parse_request_number
@@ -161,7 +161,7 @@ _HISTORY_IDENTITY_ACTIONS = {"submitted", "verified", "changes_requested", "bloc
 
 
 def booking_history(booking_id):
-    """Merge existing audit trails using a strict, content-free event allowlist.
+    """Merge allowlisted events and saved equipment/date comparisons.
 
     Review comments, field names, document verdicts and access/download events
     never enter the staff history response. Actor IDs identify who acted without
@@ -188,8 +188,9 @@ def booking_history(booking_id):
                     SupportActivity.action.like("owner:%")))):
             items.append({"id": f"support:{row.id}", "action": f"support_{row.action}", "actor_id": row.actor_id,
                           "created_at": row.created_at.isoformat(), "category": "support"})
-        return sorted(items, key=lambda item: (item["created_at"], item["id"].split(":")[0],
-                                               int(item["id"].split(":")[1])))
+        from .booking_diff import attach_history_details
+        return attach_history_details(session, booking_id, sorted(items, key=lambda item: (item["created_at"], item["id"].split(":")[0],
+                                               int(item["id"].split(":")[1]))))
 
 
 def booking_history_page(booking_id, page, page_size=20):
@@ -214,7 +215,8 @@ def booking_history_page(booking_id, page, page_size=20):
         items = [{"id":f"{row.source}:{row.event_id}", "action":f"support_{row.action}" if row.source == "support" else row.action,
                   "actor_id":row.actor_id, "created_at":row.created_at.isoformat(),
                   "category":"identity" if row.source == "pii" else "support" if row.source == "support" else "status" if row.action in _HISTORY_STATUS_ACTIONS else "operation"} for row in rows]
-        return items, total
+        from .booking_diff import attach_history_details
+        return attach_history_details(session, booking_id, items), total
 
 
 def validated_rate(value):
@@ -249,6 +251,26 @@ def booking_total(start, end, rates):
 
 def lines_total(start, end, lines):
     return Decimal("0.00")
+
+
+def _external_block_events(blocks, start, end):
+    """Overlapping notes for one physical asset consume that asset only once."""
+    intervals = defaultdict(list)
+    for block in blocks:
+        left, right = max(start, block.starts_at), min(end, block.ends_at)
+        if left < right:
+            intervals[block.equipment_id].append((left, right))
+    events = []
+    for periods in intervals.values():
+        merged = []
+        for left, right in sorted(periods):
+            if merged and left <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], right))
+            else:
+                merged.append((left, right))
+        for left, right in merged:
+            events.extend(((left, 1), (right, -1)))
+    return events
 
 
 def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None):
@@ -300,8 +322,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
     blocks = session.scalars(select(EquipmentBlock).join(Equipment, Equipment.id == EquipmentBlock.equipment_id).where(
         Equipment.article_id == article_id, EquipmentBlock.released_at.is_(None),
         EquipmentBlock.starts_at < end, EquipmentBlock.ends_at > start)).all()
-    for block in blocks:
-        events.extend(((max(start,block.starts_at),1),(min(end,block.ends_at),-1)))
+    events.extend(_external_block_events(blocks, start, end))
     current = peak = 0
     for _, delta in sorted(events):
         current += delta
@@ -407,9 +428,7 @@ class AvailabilitySnapshot:
         for left, right, quantity in self.reservations[article_id]:
             if left < end and right > start:
                 events.extend(((max(start, left), quantity), (min(end, right), -quantity)))
-        for block in self.blocks[article_id]:
-            if block.starts_at < end and block.ends_at > start:
-                events.extend(((max(start, block.starts_at), 1), (min(end, block.ends_at), -1)))
+        events.extend(_external_block_events(self.blocks[article_id], start, end))
         current = peak = 0
         for _, delta in sorted(events):
             current += delta
@@ -448,7 +467,7 @@ def _availability_rows(session, articles, start, end):
             "id": article.id, "sku": article.sku, "name": article.name,
             "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
             "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
-            "description": article.description, "image_url": article.image_url,
+            "description": article.description, "composition": article.composition or "", "image_url": article.image_url,
             "image_data": previews.get(article.id, ""),
             "category": article.category,
             "owners": owners,
@@ -466,17 +485,18 @@ def availability(start, end):
     validate_interval(start, end)
     with Session.begin() as session:
         expire_holds(session)
-        articles = session.scalars(select(Article).where(Article.is_active.is_(True)).order_by(Article.name, Article.id)).all()
+        articles = session.scalars(select(Article).where(Article.is_active.is_(True), Article.archived_at.is_(None)).order_by(Article.name, Article.id)).all()
         return _availability_rows(session, articles, start, end)
 
 
 def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(), category=""):
     """Return the catalogue page and separately refresh all selected articles."""
-    validate_interval(start, end)
+    if start is not None and end is not None:
+        validate_interval(start, end)
     if page < 0 or not 1 <= page_size <= 100 or len(query) > 200 or len(selected_ids) > 30 or any(item <= 0 for item in selected_ids):
         raise ValueError("Неверные параметры каталога")
     selected_ids = list(dict.fromkeys(selected_ids))
-    conditions = [Article.is_active.is_(True)]
+    conditions = [Article.is_active.is_(True), Article.archived_at.is_(None)]
     if category:
         from .db import CatalogCategory
         descendants = select(CatalogCategory.code).where(CatalogCategory.parent_code == category).cte(recursive=True)
@@ -487,15 +507,55 @@ def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(
         searchable = func.concat_ws(" ", Article.name, Article.kind, Article.brand, Article.key_spec, Article.description, Article.sku)
         conditions.append(searchable.ilike(f"%{term}%", escape="\\"))
     with Session.begin() as session:
-        expire_holds(session)
+        if start is not None:
+            expire_holds(session)
         total = session.scalar(select(func.count()).select_from(Article).where(*conditions))
         articles = session.scalars(select(Article).where(*conditions).order_by(Article.name, Article.id).offset(page * page_size).limit(page_size)).all()
         page_ids = {article.id for article in articles}
         additional_ids = set(selected_ids) - page_ids
-        selected_articles = session.scalars(select(Article).where(Article.id.in_(additional_ids), Article.is_active.is_(True))).all() if additional_ids else []
-        rows = _availability_rows(session, articles + selected_articles, start, end)
+        selected_articles = session.scalars(select(Article).where(Article.id.in_(additional_ids), Article.is_active.is_(True), Article.archived_at.is_(None))).all() if additional_ids else []
+        if start is not None:
+            rows = _availability_rows(session, articles + selected_articles, start, end)
+        else:
+            from .catalog_images import image_data
+            all_articles = articles + selected_articles
+            previews = image_data(session, [article.id for article in all_articles])
+            rows = [{"id": article.id, "sku": article.sku, "name": article.name,
+                     "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+                     "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
+                     "description": article.description, "composition": article.composition or "", "image_url": article.image_url,
+                     "image_data": previews.get(article.id, ""), "category": article.category}
+                    for article in all_articles]
         by_id = {row["id"]: row for row in rows}
         return [by_id[article.id] for article in articles], [by_id[item] for item in selected_ids if item in by_id], total
+
+
+def calendar_availability(start, end, requested, first_day):
+    """Evaluate a visible calendar in one snapshot; each day starts an equal-length rental."""
+    from zoneinfo import ZoneInfo
+    local = ZoneInfo("Europe/Moscow")
+    if start.tzinfo is None or end.tzinfo is None or start >= end or end - start > timedelta(days=366):
+        raise ValueError("Укажите корректный период до 366 дней")
+    quantities = defaultdict(int)
+    for line in requested:
+        quantities[line["article_id"]] += line["quantity"]
+    if not quantities or len(quantities) > 30 or any(q < 1 or q > 30 for q in quantities.values()):
+        raise ValueError("Укажите не более 30 позиций и 30 единиц каждой позиции")
+    start, end = start.astimezone(local), end.astimezone(local)
+    first = datetime.combine(first_day, start.timetz())
+    duration = end - start
+    with Session() as session:
+        active = set(session.scalars(select(Article.id).where(Article.id.in_(quantities),
+            Article.is_active.is_(True), Article.archived_at.is_(None))))
+        snapshot = AvailabilitySnapshot(session, list(active), min(first, start), max(first + timedelta(days=42) + duration, end))
+        def state_at(left):
+            counts = [max(0, snapshot.capacities[aid] - snapshot.peak(aid, left, left + duration))
+                      if aid in active else 0 for aid in quantities]
+            if all(count >= quantity for count, quantity in zip(counts, quantities.values())):
+                return "all"
+            return "partial" if any(counts) else "none"
+        return {"selected": state_at(start), "days": {
+            (first + timedelta(days=i)).date().isoformat(): state_at(first + timedelta(days=i)) for i in range(42)}}
 
 
 def nearest_available_period(start, end, requested, horizon_days=90):
@@ -513,7 +573,7 @@ def nearest_available_period(start, end, requested, horizon_days=90):
     duration = end - start
     limit = start + timedelta(days=horizon_days)
     with Session() as session:
-        ids = set(session.scalars(select(Article.id).where(Article.id.in_(quantities), Article.is_active.is_(True))))
+        ids = set(session.scalars(select(Article.id).where(Article.id.in_(quantities), Article.is_active.is_(True), Article.archived_at.is_(None))))
         if ids != set(quantities):
             return None
         snapshot = AvailabilitySnapshot(session, list(quantities), start, limit + duration)
@@ -565,7 +625,7 @@ def _normalize_lines(session, requested):
     if not quantities or len(quantities) > 30:
         raise ValueError("Выберите оборудование")
     articles = {article.id: article for article in session.scalars(
-        select(Article).where(Article.id.in_(list(quantities)), Article.is_active.is_(True))).all()}
+        select(Article).where(Article.id.in_(list(quantities)), Article.is_active.is_(True), Article.archived_at.is_(None))).all()}
     if len(articles) != len(quantities):
         raise Conflict("Один из артикулов больше недоступен")
     return [(articles[article_id], quantity, Decimal("0"),
@@ -594,6 +654,9 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
             normalized = _normalize_lines(session, requested)
             for article, _, _, _, _ in sorted(normalized, key=lambda row: row[0].id):
                 session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article.id})
+                session.refresh(article)
+                if not article.is_active or article.archived_at is not None:
+                    raise Conflict("Один из артикулов больше недоступен")
             expire_holds(session)
             for article, quantity, _, _, _ in normalized:
                 free = _capacity(session, article.id) - _reserved_quantity(session, article.id, start, end)
@@ -1212,6 +1275,8 @@ def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="",
                 session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": int(equipment_id)})
                 asset = session.get(Equipment, int(equipment_id))
                 replacement = next((row for row in resolved_exceptions if not row.get("component") and row["line_id"] == line.id and row["reason"] == "replacement" and row["replacement_id"] == int(equipment_id)), None)
+                if replacement and asset and asset.article and asset.article.archived_at is not None:
+                    raise Conflict("Удалённый из каталога артикул нельзя выбрать для замены")
                 _validate_asset(asset, asset.article_id if replacement and asset else line.article_id)
                 if replacement:
                     replacement["replacement_name"] = f"{asset.name} #{asset.inventory_number}"
@@ -1524,13 +1589,13 @@ def list_equipment():
 
 def list_articles():
     with Session() as session:
-        return session.scalars(select(Article).options(selectinload(Article.equipment)).order_by(Article.name)).all()
+        return session.scalars(select(Article).where(Article.archived_at.is_(None)).options(selectinload(Article.equipment)).order_by(Article.name)).all()
 
 
 def _catalog_conditions(query="", condition="all"):
     if condition not in {"all", "available", "maintenance", "retired"}:
         raise ValueError("Неверное состояние оборудования")
-    conditions = []
+    conditions = [Article.archived_at.is_(None)]
     if query.strip():
         term = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{term}%"
@@ -1561,7 +1626,10 @@ def list_articles_page(page, page_size=20, query="", condition="all", options_on
 
 def list_dependencies():
     with Session() as session:
-        return session.scalars(select(ArticleDependency).options(selectinload(ArticleDependency.parent), selectinload(ArticleDependency.child)).order_by(
+        return session.scalars(select(ArticleDependency).where(
+            ArticleDependency.parent.has(Article.archived_at.is_(None)),
+            ArticleDependency.child.has(Article.archived_at.is_(None)),
+        ).options(selectinload(ArticleDependency.parent), selectinload(ArticleDependency.child)).order_by(
             ArticleDependency.parent_article_id, ArticleDependency.child_article_id)).all()
 
 
@@ -1569,8 +1637,14 @@ def save_dependency(parent_article_id, child_article_id, quantity=1, billable=Fa
     if parent_article_id == child_article_id or not 1 <= int(quantity) <= 30:
         raise ValueError("Неверная зависимость комплекта")
     with Session.begin() as session:
-        if not session.get(Article, parent_article_id) or not session.get(Article, child_article_id):
+        for article_id in sorted((parent_article_id, child_article_id)):
+            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
+        parent = session.get(Article, parent_article_id)
+        child = session.get(Article, child_article_id)
+        if not parent or not child:
             raise ValueError("Артикул не найден")
+        if parent.archived_at is not None or child.archived_at is not None:
+            raise Conflict("Удалённый артикул нельзя добавить в комплект")
         graph = defaultdict(set)
         for item in session.scalars(select(ArticleDependency)).all():
             graph[item.parent_article_id].add(item.child_article_id)
@@ -1597,6 +1671,17 @@ def delete_dependency(parent_article_id, child_article_id):
             session.delete(dependency)
 
 
+def hide_article(article_id, actor_id):
+    from .inventory import require_role
+    require_role(actor_id, "operator")
+    with Session.begin() as session:
+        session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
+        article = session.get(Article, article_id, with_for_update=True)
+        if not article or article.archived_at is not None:
+            raise ValueError("Артикул не найден")
+        article.is_active = False
+
+
 def save_article(sku, name, description, rate, category="generic", profile="generic",
                  buffer_hours=24, image_url="", article_id=None, active=True, composition="",
                  kind=None, brand=None, key_spec=None, actor_id=None, expected_before=None):
@@ -1610,9 +1695,15 @@ def save_article(sku, name, description, rate, category="generic", profile="gene
     if image_url and (urlparse(image_url).scheme != "https" or not urlparse(image_url).netloc):
         raise ValueError("Ссылка на фото должна начинаться с HTTPS")
     with Session.begin() as session:
+        if not session.get(CatalogCategory, category, with_for_update=True):
+            raise ValueError("Категория не найдена")
+        if article_id:
+            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
         article = session.get(Article, article_id, with_for_update=True) if article_id else Article()
         if article is None:
             raise ValueError("Артикул не найден")
+        if article.archived_at is not None:
+            raise Conflict("Артикул удалён из каталога и недоступен для изменения")
         if expected_before is not None:
             actual = {key: getattr(article, key) for key in expected_before}
             if actual != expected_before:
@@ -1672,6 +1763,13 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
         locked_articles={value for value in (item.article_id,article.id) if value is not None}
         for locked_article in sorted(locked_articles):
             session.execute(text("SELECT pg_advisory_xact_lock(:id)"),{"id":locked_article})
+        session.refresh(article)
+        if article.archived_at is not None:
+            raise Conflict("Артикул удалён из каталога; добавить или изменить экземпляр нельзя")
+        if equipment_id and item.article_id and item.article_id != article.id:
+            original = session.get(Article, item.article_id)
+            if original and original.archived_at is not None:
+                raise Conflict("Экземпляр удалённого артикула нельзя перенести")
         if equipment_id:
             if session.scalar(select(Equipment.id).where(Equipment.id==equipment_id)) is None:
                 raise ValueError("Экземпляр не найден")
@@ -1702,6 +1800,24 @@ def save_equipment(number, name, description, rate, condition, equipment_id=None
         session.add(item)
         session.flush()
         return item.id
+
+
+def archive_article(article_id, actor_id):
+    """Retire an article atomically while retaining assets and rental history."""
+    from .inventory import require_role
+    require_role(actor_id, "admin")
+    with Session.begin() as session:
+        session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article_id})
+        article = session.get(Article, article_id, with_for_update=True)
+        if article is None:
+            raise ValueError("Артикул не найден")
+        if article.archived_at is not None:
+            raise Conflict("Артикул уже удалён из каталога")
+        count = session.scalar(select(func.count()).select_from(Equipment).where(Equipment.article_id == article_id))
+        article.is_active = False
+        article.archived_at = now()
+        article.archived_by = actor_id
+        return {"article_id": article_id, "equipment_count": count}
 
 
 def delete_equipment(equipment_id):

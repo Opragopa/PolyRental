@@ -51,7 +51,7 @@ def main():
             for _ in range(2):
                 run(["docker","compose","run","--rm","--no-deps","--volume",f"{ROOT.as_posix()}:/app",
                     "--env",f"DATABASE_URL={dsn}","test","alembic","upgrade","head"])
-            if fingerprint(migration_name)["revision"]!="20261103_39":
+            if fingerprint(migration_name)["revision"]!="20261104_40":
                 raise RuntimeError("Fresh migrations did not reach the expected head")
         finally:
             run([*DB_COMMAND,"dropdb","-U","polyrental",migration_name])

@@ -41,6 +41,12 @@ def inventory_details_batch(equipment_ids, session):
     result = {equipment_id: {"features": []} for equipment_id in equipment_ids}
     if not result:
         return result
+    from .db import EquipmentBlock
+    for block in session.scalars(select(EquipmentBlock).where(EquipmentBlock.equipment_id.in_(result),
+            EquipmentBlock.released_at.is_(None), EquipmentBlock.ends_at > datetime.now(timezone.utc))
+            .order_by(EquipmentBlock.starts_at)):
+        result[block.equipment_id].setdefault("external_blocks", []).append({
+            "start": block.starts_at.isoformat(), "end": block.ends_at.isoformat(), "reason": block.reason})
     for owner in session.scalars(select(EquipmentOwner).where(EquipmentOwner.equipment_id.in_(result))):
         if owner.name:
             result[owner.equipment_id]["owner"] = owner.name

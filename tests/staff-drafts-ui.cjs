@@ -6,7 +6,11 @@ const {fixture,base} = require('./completion-ui.cjs');
   const engine = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? webkit : chromium;
   const browser = await engine.launch({headless:true, ...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
-    const {page,errors} = await fixture(browser,{admin:true,role:'operator',order:base('pending')});
+    const {page,errors} = await fixture(browser,{admin:true,role:'admin',order:base('pending')});
+    await page.route('**/api/miniapp/admin/catalog?*', route => route.fulfill({json:{
+      categories:[{code:'camera',name:'Камера'},{code:'generic',name:'Оборудование'}],
+      articles:[{id:1,name:'Камера Sony',sku:'CAM',category:'camera',active:true,equipment:[]}],dependencies:[],page:0,page_size:20,total:1,
+    }}));
     await page.locator('[data-mode="catalog"]').click();
     await page.getByRole('button',{name:'Новый артикул',exact:true}).click();
     const form=page.locator('.catalog-form');
@@ -49,7 +53,8 @@ const {fixture,base} = require('./completion-ui.cjs');
     assert.deepEqual(errors,[]);
     await form.getByRole('button',{name:'Отмена'}).click();
     await page.route('**/api/miniapp/admin/catalog/articles', route => route.fulfill({status:409,json:{detail:'Карточка модели изменилась. Откройте её заново'}}));
-    await page.getByRole('button',{name:'Изменить артикул',exact:true}).click();
+    await page.getByRole('button',{name:'Камера',exact:true}).click();
+    await page.getByRole('button',{name:/Изменить артикул:/}).click();
     await form.locator('[name="name"]').fill('Мои несохранённые изменения');
     await form.getByRole('button',{name:'Сохранить артикул'}).click();
     await page.getByText('Карточка модели изменилась. Откройте её заново',{exact:false}).waitFor();

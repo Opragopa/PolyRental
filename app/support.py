@@ -26,7 +26,7 @@ def _open(message):
 
 def submit_question(customer_id, booking_id, screen, question):
     question = question.strip()
-    if not question or len(question) > 3000 or screen not in {'profile', 'booking', 'request', 'bot'}:
+    if not question or len(question) > 3000 or screen not in {'profile', 'booking', 'request', 'bot', 'feedback'}:
         raise ValueError('Укажите вопрос длиной до 3000 символов')
     with Session.begin() as session:
         booking = session.get(Booking, booking_id) if booking_id is not None else None
@@ -50,7 +50,8 @@ def submit_question(customer_id, booking_id, screen, question):
         if thread.owner_id is None and eligible_assignee:
             thread.owner_id = eligible_assignee
             session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='routed_to_assignee'))
-        encrypted, nonce = _seal(thread.id, customer_id, 'client', question)
+        message = f"Предложение по приложению:\n{question}" if screen == 'feedback' else question
+        encrypted, nonce = _seal(thread.id, customer_id, 'client', message)
         session.add(SupportMessage(thread_id=thread.id, sender_id=customer_id, direction='client', ciphertext=encrypted, nonce=nonce))
         session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='client_message'))
         return {'id':thread.id, 'owner_id':thread.owner_id, 'request_number':number}

@@ -36,6 +36,10 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
           const style = document.documentElement.style;
           for (const [name,value] of Object.entries({"bg-color":"#17212b", "secondary-bg-color":"#232e3c", "text-color":"#ffffff", "hint-color":"#b4c0cc", "button-color":"#8bd4c3", "button-text-color":"#102e27"})) style.setProperty(`--tg-theme-${name}`,value);
         });
+        await page.locator(".item-card .plus").first().click();
+        await page.locator("#main-button").click();
+        await page.locator("#customer-name").fill("Анна"); await page.locator("#customer-contact").fill("@anna_user");
+        await page.locator("#main-button").click();
         assert.equal(await page.locator(".calendar-day").count(),42);
         assert.equal(await page.locator("#main-button").isDisabled(),true);
         assert.equal(await page.locator('[data-date="2026-10-26"]').isDisabled(),false);
@@ -137,7 +141,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     await page.locator(".admin-card").waitFor();
     assert.equal(await page.getByRole("button",{name:/^Проверить анкету/}).count(),0);
     await page.locator("#tab-new").click();
-    assert.equal(await page.locator("#range-calendar").isVisible(),true);
+    assert.equal(await page.locator("#step-items").isVisible(),true);
     piiAdmin=true; await page.reload();
     await page.locator('.request-card[data-booking-id="7"] .request-toggle').click();
     await page.getByRole("button",{name:/^Проверить анкету/}).click();
@@ -169,6 +173,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       if(url.hostname==="telegram.org")return route.fulfill({contentType:"text/javascript",body:sdk});
       if(url.pathname.startsWith("/miniapp/static/")){const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith("css")?"text/css":"text/javascript"});}
       if(url.pathname==="/api/miniapp/me")return route.fulfill({json:{id:42,admin:false,pii_admin:false}});
+      if(url.pathname==="/api/miniapp/catalog")return route.fulfill({json:{items:[{id:1,name:"Камера",available_quantity:1}],selected_items:[],page:0,page_size:20,total:1}});
       if(url.pathname.startsWith("/api/"))return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:"text/html"});
     });
@@ -178,6 +183,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     assert.equal(await native.locator("#action-bar").isVisible(),true);
     assert.equal(await native.locator(".tabs").isVisible(),true);
     assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);
+    await native.locator(".item-card .plus").first().tap(); await native.locator("#main-button").tap();
+    await native.locator("#customer-name").fill("Анна"); await native.locator("#customer-contact").fill("@anna_user"); await native.locator("#main-button").tap();
     await native.locator('[data-date="2026-10-30"]').tap();
     await native.locator('[data-date="2026-10-31"]').tap();
     assert.equal(await native.locator("#main-button").isEnabled(),true);

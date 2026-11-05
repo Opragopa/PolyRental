@@ -43,13 +43,16 @@ def test_external_use_competes_with_confirmations_and_releases_immediately(monke
     item=next(row for row in availability(start,end) if row["id"]==article)
     assert item["available_quantity"]==0 and item["unavailability"][0]["reason"]=="Съёмка медиацентра"
     with pytest.raises(Conflict): transition(booking_id,"confirmed",100)
-    with pytest.raises(Conflict): save_external_block(asset,start,end,"Другая работа",100)
+    second = save_external_block(asset,start,end,"Другая работа",100)
     release_external_block(block,100)
+    with pytest.raises(Conflict): transition(booking_id,"confirmed",100)
+    release_external_block(second,100)
     assert transition(booking_id,"confirmed",100)=="confirmed"
-    with pytest.raises(Conflict): save_external_block(asset,start,end,"Слишком поздно",100)
+    result = save_external_block(asset,start,end,"Внешняя работа",100,True)
+    assert result["id"] and result["warnings"][0]["kind"] == "booking"
 
 
-def test_concurrent_external_use_and_confirmation_cannot_both_win(monkeypatch):
+def test_concurrent_external_use_always_records_the_fact(monkeypatch):
     configure(monkeypatch)
     booking_id=pending_booking(); booking=get_booking(booking_id)
     with Session() as session: asset=session.scalar(select(Equipment.id).where(Equipment.article_id==booking.lines[0].article_id))
@@ -60,7 +63,8 @@ def test_concurrent_external_use_and_confirmation_cannot_both_win(monkeypatch):
             return "ok"
         except Conflict: return "conflict"
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(reserve,["block","booking"]))==["conflict","ok"]
+        results = list(pool.map(reserve,["block","booking"]))
+        assert results[0] == "ok" and results[1] in {"ok", "conflict"}
 
 
 def test_decline_reason_and_notification_are_encrypted(monkeypatch):

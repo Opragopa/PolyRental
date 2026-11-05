@@ -1,41 +1,39 @@
 """Timed external use, optional reminders and cross-device staff navigation."""
 from datetime import datetime, timedelta, timezone
 from html import escape
-from types import SimpleNamespace
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 
-from .db import (Booking, BookingReminder, ClientProfile, Equipment, EquipmentBlock,
+from .db import (Booking, BookingAsset, BookingLine, BookingReminder, ClientProfile, Equipment, EquipmentBlock,
                  InventoryAudit, NotificationDelivery, Session, StaffNavigation)
 from .inventory import require_role
-from .rental import Conflict, _asset_conflicts, _capacity, _reserved_quantity
+from .rental import Conflict, RESERVING_STATUSES
 
 
-def save_external_block(equipment_id, start, end, reason, actor_id):
+def save_external_block(equipment_id, start, end, reason, actor_id, with_warnings=False):
     require_role(actor_id, "manager")
     if start.tzinfo is None or end.tzinfo is None or start >= end or not reason.strip() or len(reason) > 2000:
         raise ValueError("Укажите срок занятости и причину до 2000 символов")
     from sqlalchemy import text
     with Session.begin() as session:
         asset = session.get(Equipment, equipment_id)
-        if not asset or asset.condition != "available":
-            raise ValueError("Экземпляр недоступен")
+        if not asset:
+            raise ValueError("Экземпляр не найден")
         session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id":asset.article_id})
         article_id=asset.article_id
         if session.scalar(select(Equipment.id).where(Equipment.id==equipment_id)) is None:
             raise Conflict("Экземпляр удалён; обновите каталог")
         session.refresh(asset,with_for_update=True)
-        if asset.article_id!=article_id or asset.condition!="available":
+        if asset.article_id!=article_id:
             raise Conflict("Карточка экземпляра изменилась; повторите проверку")
-        if _asset_conflicts(session, SimpleNamespace(id=0, starts_at=start, ends_at=end), equipment_id):
-            raise Conflict("Экземпляр уже занят в этот период")
-        if _capacity(session,asset.article_id) - _reserved_quantity(session,asset.article_id,start,end) < 1:
-            raise Conflict("На этот период уже подтверждены заявки")
+        warnings = [item for item in external_schedule(equipment_id, session) if
+            datetime.fromisoformat(item["start"]) < end
+            and (item["end"] is None or datetime.fromisoformat(item["end"]) > start)] if with_warnings else []
         row = EquipmentBlock(equipment_id=equipment_id,starts_at=start,ends_at=end,reason=reason.strip(),actor_id=actor_id)
         session.add(row); session.flush()
         session.add(InventoryAudit(equipment_id=equipment_id,actor_id=actor_id,action="external_block_created",
                                   detail={"block_id":row.id,"start":start.isoformat(),"end":end.isoformat(),"reason":reason.strip()}))
-        return row.id
+        return {"id": row.id, "warnings": warnings} if with_warnings else row.id
 
 
 def release_external_block(block_id, actor_id):
@@ -57,6 +55,36 @@ def external_blocks(equipment_id):
                 for row in session.scalars(select(EquipmentBlock).where(EquipmentBlock.equipment_id==equipment_id,
                     EquipmentBlock.released_at.is_(None),EquipmentBlock.ends_at>datetime.now(timezone.utc)).order_by(EquipmentBlock.starts_at))]
 
+
+def external_schedule(equipment_id, session=None):
+    """Busy intervals for staff warnings; never expose customer details."""
+    if session is None:
+        with Session() as current:
+            return external_schedule(equipment_id, current)
+    asset = session.get(Equipment, equipment_id)
+    if not asset:
+        raise ValueError("Экземпляр не найден")
+    current = datetime.now(timezone.utc)
+    items = [{"id": row.id, "kind": "external", "start": row.starts_at.isoformat(),
+              "end": row.ends_at.isoformat(), "label": "Занятость вне сервиса", "reason": row.reason}
+             for row in session.scalars(select(EquipmentBlock).where(
+                 EquipmentBlock.equipment_id == equipment_id, EquipmentBlock.released_at.is_(None)))]
+    assigned = select(BookingAsset.equipment_id).where(BookingAsset.booking_id == Booking.id,
+        BookingAsset.equipment_id == equipment_id, BookingAsset.deleted_at.is_(None)).exists()
+    article_line = select(BookingLine.id).where(BookingLine.booking_id == Booking.id,
+        BookingLine.article_id == asset.article_id, BookingLine.deleted_at.is_(None)).exists()
+    article_assigned = select(BookingAsset.equipment_id).join(Equipment, Equipment.id == BookingAsset.equipment_id).where(
+        BookingAsset.booking_id == Booking.id, Equipment.article_id == asset.article_id,
+        BookingAsset.deleted_at.is_(None)).exists()
+    for booking, is_assigned in session.execute(select(Booking, assigned).where(Booking.status.in_(RESERVING_STATUSES),
+            or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
+            or_(assigned, and_(article_line, ~article_assigned)))):
+        overdue = booking.status in {"issued", "return_inspection"} and booking.ends_at <= current
+        items.append({"id": booking.id, "kind": "booking", "start": booking.starts_at.isoformat(),
+            "end": None if overdue else booking.ends_at.isoformat(),
+            "label": f"Заявка {booking.human_number or booking.id}",
+            "reason": "Оборудование ещё не возвращено" if overdue else "Бронь модели; экземпляр ещё не назначен" if not is_assigned else "Экземпляр назначен на заявку"})
+    return sorted(items, key=lambda item: item["start"])
 
 def save_staff_section(actor_id, section):
     require_role(actor_id, "admin" if section == "hidden_tests" else "operator")

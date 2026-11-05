@@ -140,6 +140,7 @@ def test_card_is_edited_recovered_and_older_delivery_cannot_revert_it(monkeypatc
         async def __aenter__(self): return self
         async def __aexit__(self, *_): pass
         async def send_message(self, recipient, text, **kwargs):
+            assert kwargs["link_preview_options"].is_disabled is True
             sent.append((recipient, text))
             return SimpleNamespace(message_id=len(sent))
         async def edit_message_text(self, **kwargs):
@@ -156,6 +157,8 @@ def test_card_is_edited_recovered_and_older_delivery_cannot_revert_it(monkeypatc
     second = next(row for row in deliveries(events(booking_id)[-1].id, "card") if row.recipient_id == 42)
     assert asyncio.run(deliver_notification(second.id))
     assert len(sent) == 1 and len(edited) == 1
+    assert "Создана:" in sent[0][1] and "Кем:" in sent[0][1]
+    assert edited[0]["link_preview_options"].is_disabled is True
     assert "подтверждена" in edited[0]["text"]
     assert asyncio.run(deliver_notification(first.id))
     assert len(edited) == 1
@@ -311,7 +314,7 @@ def test_fresh_migration_chain(monkeypatch):
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 14
-            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261103_39"
+            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261105_41"
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

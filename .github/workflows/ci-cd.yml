@@ -65,7 +65,23 @@ jobs:
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/release-052-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/desktop-booking-time-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/cart-optimistic-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/catalog-operator-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/article-archive-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}

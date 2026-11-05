@@ -128,6 +128,14 @@ def test_client_catalog_pages_keep_selected_items_and_search_public_fields(monke
     start=now()+timedelta(days=3);end=start+timedelta(hours=1)
     params={'start':start.isoformat(),'end':end.isoformat(),'page':0,'page_size':10,'selected':ids[-1]}
     with TestClient(app) as client:
+        catalog=client.get('/api/miniapp/catalog',params={'page':0,'page_size':10,'selected':ids[-1]})
+        assert catalog.status_code == 200
+        catalog_data = catalog.json()
+        assert catalog_data['total'] == 25 and len(catalog_data['items']) == 10
+        assert catalog_data['selected_items'][0]['id'] == ids[-1]
+        assert 'available_quantity' not in catalog_data['selected_items'][0]
+        assert client.get('/api/miniapp/catalog',params={'q':'PRIVATE-SERIAL'}).json()['total'] == 0
+        assert client.get('/api/miniapp/catalog',params=[('selected', str(i)) for i in range(1,32)]).status_code == 422
         first=client.get('/api/miniapp/availability',params=params)
         assert first.status_code==200
         result=first.json()

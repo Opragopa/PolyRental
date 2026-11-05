@@ -27,9 +27,11 @@
     return "";
   }
   class RangeCalendar {
-    constructor(element, { minimum, start = "", end = "", onChange = () => {}, isDisabled = () => false }) {
+    constructor(element, { minimum, start = "", end = "", onChange = () => {}, onMonthChange = () => {}, isDisabled = () => false, dayNote = () => "", dayState = () => "" }) {
       this.element = element; this.minimum = minimum; this.range = { start, end }; this.onChange = onChange;
       this.isDisabled = isDisabled;
+      this.dayNote = dayNote;
+      this.dayState = dayState; this.onMonthChange = onMonthChange;
       this.month = `${start || minimum}`.slice(0, 7) + "-01";
       this.render();
     }
@@ -38,7 +40,7 @@
     moveMonth(amount) {
       const date = new Date(`${this.month}T12:00:00Z`);
       date.setUTCMonth(date.getUTCMonth() + amount);
-      this.month = date.toISOString().slice(0, 10); this.render();
+      this.month = date.toISOString().slice(0, 10); this.render(); this.onMonthChange();
     }
     render(focusDay = "", motion = {}) {
       const doc = this.element.ownerDocument;
@@ -74,13 +76,21 @@
         const selected = day === this.range.start || day === this.range.end;
         button.classList.toggle("selected", selected);
         button.classList.toggle("in-range", Boolean(this.range.start && this.range.end && day > this.range.start && day < this.range.end));
+        const note = this.dayNote(day);
+        const availability = this.dayState(day);
+        if (["all", "partial", "none"].includes(availability)) {
+          button.classList.add(`calendar-availability-${availability}`);
+          button.dataset.availability = availability;
+        }
+        button.classList.toggle("calendar-day-busy", Boolean(note));
+        if (note) button.title = note;
         button.classList.toggle("calendar-day-pop", day === motion.clickedDay);
         if (revealPositions.has(day)) {
           button.classList.add("calendar-day-reveal");
           button.style.setProperty("--range-reveal-delay", `${Math.round(110 + revealPositions.get(day) * revealStep)}ms`);
         }
         button.setAttribute("aria-pressed", String(selected));
-        button.setAttribute("aria-label", new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : ""));
+        button.setAttribute("aria-label", new Intl.DateTimeFormat("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
         button.addEventListener("click", () => {
           this.range = selectRange(this.range, day, this.minimum);
           this.onChange(this.range);
@@ -91,7 +101,7 @@
           if (!(event.key in offsets)) return;
           event.preventDefault(); const next = addDays(day, offsets[event.key]);
           if (next < this.minimum) return;
-          if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); }
+          if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); this.onMonthChange(); }
           else grid.querySelector(`[data-date="${next}"]`).focus();
         });
         grid.append(button);

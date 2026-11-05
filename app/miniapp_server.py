@@ -22,6 +22,7 @@ from .sla_escalations import queue_sla_escalations
 from .support import retry_support_replies, purge_expired_support
 from .booking_changes import process_change_deadlines
 from .roadmap import queue_optional_reminders
+from .release_channel import publication_loop
 
 
 async def retention_loop():
@@ -71,6 +72,7 @@ async def lifespan(_app):
     availability_task = asyncio.create_task(listen_for_availability())
     deletion_task = asyncio.create_task(deletion_loop())
     notification_task = asyncio.create_task(notification_loop())
+    release_task = asyncio.create_task(publication_loop())
     try:
         yield
     finally:
@@ -78,6 +80,7 @@ async def lifespan(_app):
         availability_task.cancel()
         deletion_task.cancel()
         notification_task.cancel()
+        release_task.cancel()
         with suppress(asyncio.CancelledError):
             await task
         with suppress(asyncio.CancelledError):
@@ -86,6 +89,8 @@ async def lifespan(_app):
             await availability_task
         with suppress(asyncio.CancelledError):
             await deletion_task
+        with suppress(asyncio.CancelledError):
+            await release_task
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, version=__version__)

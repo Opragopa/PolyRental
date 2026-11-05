@@ -16,20 +16,21 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  if(p==='/api/miniapp/cart'&&m==='GET')return route.fulfill({json:cart});
  if(p==='/api/miniapp/cart'&&m==='PUT'){cart={...route.request().postDataJSON(),version:cart.version+1};return route.fulfill({json:cart});}
  if(p==='/api/miniapp/catalog/categories')return route.fulfill({json:{items:categories}});
- if(p==='/api/miniapp/availability'){const category=u.searchParams.get('category'); const items=category==='light'?[]:[article];return route.fulfill({json:{items,all_items:items,selected_items:u.searchParams.getAll('selected').length?[article]:[],total:items.length,page:0,page_size:20,unavailable:[],unavailable_count:0}});}
+ if(p==='/api/miniapp/availability'||p==='/api/miniapp/catalog'){const category=u.searchParams.get('category'); const items=category==='light'?[]:[article];return route.fulfill({json:{items,all_items:items,selected_items:u.searchParams.getAll('selected').length?[article]:[],total:items.length,page:0,page_size:20,unavailable:[],unavailable_count:0}});}
  if(p==='/api/miniapp/admin/catalog')return route.fulfill({json:{categories,articles:[article],dependencies:[],total:1,page:0,page_size:20}});
  if(p.startsWith('/api/'))return route.fulfill({json:{items:[]}});
  return route.fulfill({body:html,contentType:'text/html'});
  });
  await page.clock.install({time:new Date('2026-10-26T10:00:00Z')}); await page.goto('http://polyrental.test/miniapp'); await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
- await page.locator('#main-button').click();
- await page.locator('#client-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#catalog-page-title').getByText('Камеры').waitFor();
+ await page.locator('#client-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#catalog-page-title').getByText('Камеры',{exact:true}).waitFor();
+ assert.equal(await page.locator('#client-categories').getByRole('button',{name:'Свет'}).count(),0); assert.equal(await page.locator('.category-morph-surface, .category-morph-label').count(),0);
  assert.equal(await page.locator('#catalog-page-title').evaluate(el=>el===document.activeElement),true);
  await page.locator('#client-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#catalog-page-title').getByText('Кинокамеры').waitFor();
- await page.getByRole('button',{name:'Добавить в корзину: Sony FX3'}).click(); assert.equal(await page.locator('#selected-count').innerText(),'1');
- await page.evaluate(()=>window.__telegramBack()); await page.locator('#catalog-page-title').getByText('Камеры').waitFor();
+ await page.getByRole('button',{name:'Увеличить количество: Sony FX3'}).click(); assert.equal(await page.locator('#selected-count').innerText(),'1');
+ await page.evaluate(()=>window.__telegramBack()); await page.locator('#catalog-page-title').getByText('Камеры',{exact:true}).waitFor();
  await page.locator('#top-back-button').click(); await page.locator('#catalog-page-title').getByText('Каталог оборудования').waitFor(); assert.equal(await page.locator('#selected-count').innerText(),'1');
- await page.locator('#tab-admin').click(); await page.locator('[data-mode="catalog"]').click(); await page.locator('.admin-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Камеры').waitFor();
- await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); await page.evaluate(()=>window.__telegramBack()); await page.locator('#admin-catalog-heading').getByText('Камеры').waitFor();
+ await page.locator('#tab-admin').click(); await page.locator('[data-mode="catalog"]').click(); await page.locator('.admin-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor();
+ await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); await page.evaluate(()=>window.__telegramBack()); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor();
+ await page.emulateMedia({reducedMotion:'reduce'}); await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры',{exact:true}).waitFor(); assert.equal(await page.locator('.category-morph-surface, .category-morph-label').count(),0);
  assert.deepEqual(errors,[]);console.log('Category screens, focus, Telegram back and retained selection: passed');
  }finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

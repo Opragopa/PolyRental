@@ -30,6 +30,7 @@ async function fixture(browser,{admin=false,role='operator',status='ready',width
     if(p==='/api/miniapp/profile') return route.fulfill({json:{display_name:'Анна',onboarding_seen:true,client_allowed:true,system_admin:admin&&role==='admin',start_screen:admin?'management':'booking',reminders_enabled:true}});
     if(p==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
     if(p==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
+    if(p==='/api/miniapp/catalog') return route.fulfill({json:{items,selected_items:items,page:0,page_size:20,total:items.length}});
     if(p==='/api/miniapp/availability') return route.fulfill({json:{items,unavailable:[],unavailable_count:0}});
     if(p==='/api/miniapp/catalog/categories') return route.fulfill({json:{items:categories}});
     if(p==='/api/miniapp/admin/catalog/categories') {const category={code:'custom_audio',name:route.request().postDataJSON().name};categories.push(category);return route.fulfill({json:category});}
@@ -67,14 +68,14 @@ async function capture(page,name) {
     for(const [width,dark] of [[440,false],[440,true],[320,false]]) {
       const suffix=`${width}-${dark?'dark':'light'}`;
       const {page,errors}=await fixture(browser,{width,dark,status:"issued"});
-      await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
-      await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
-      await capture(page,`dates-${suffix}`);await page.locator('#main-button').tap();
       await page.locator('.category-card').getByText('Камера', {exact:true}).tap();
       await page.locator('.item-card').first().waitFor();await capture(page,`catalog-${suffix}`);
       await page.locator('.item-card .plus').first().tap();await page.locator('#main-button').tap();
       await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@synthetic_customer');
-      await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();await capture(page,`review-${suffix}`);
+      await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();
+      await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
+      await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
+      await capture(page,`dates-${suffix}`);await page.locator('#main-button').tap();await page.locator('#step-review').waitFor();await capture(page,`review-${suffix}`);
       await page.locator('#tab-orders').tap();await page.locator('.customer-order-toggle').tap();
       assert.ok(await page.locator('.customer-order-period').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'rental period must not be clipped');
       await capture(page,`profile-${suffix}`);
@@ -91,10 +92,11 @@ async function capture(page,name) {
       assert.deepEqual(errors,[]);await page.close();
     }
     for(const status of ['pending','preparing','ready','return_inspection']) {
-      const {page,errors}=await fixture(browser,{admin:true,status});
+      const {page,errors}=await fixture(browser,{admin:true,role:'admin',status});
       await page.locator('.request-toggle').tap();await capture(page,`staff-${status}`);
       if(status==='pending') {
         await page.locator('[data-mode="catalog"]').tap();await page.locator('.article-card').first().waitFor();assert.ok(await page.locator('#admin-content > .action-row > .button').first().evaluate(el=>el.getBoundingClientRect().height>=44));
+        await page.locator('.article-toggle').first().click();
         await page.locator('.article-details > summary').first().click();
         assert.ok(!(await page.locator('.article-details').first().innerText()).includes('Профиль проверки: camera'));
         await page.locator('.article-details > summary').first().click();

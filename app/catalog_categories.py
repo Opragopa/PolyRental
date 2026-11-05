@@ -1,7 +1,7 @@
 """Persistent category names; equipment inspection profiles remain independent."""
 import unicodedata
 from uuid import uuid4
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from .db import Article, CatalogCategory, Session
@@ -15,9 +15,13 @@ def normalize_name(name):
 
 
 def seed_categories(connection):
-    for code, name in DEFAULT_CATEGORIES.items():
-        connection.execute(insert(CatalogCategory).values(code=code, name=name, normalized_name=normalize_name(name)).on_conflict_do_nothing())
-    for code in connection.scalars(select(Article.category).distinct()):
+    if not connection.scalar(select(CatalogCategory.code).limit(1)):
+        for code, name in DEFAULT_CATEGORIES.items():
+            connection.execute(insert(CatalogCategory).values(code=code, name=name, normalized_name=normalize_name(name)).on_conflict_do_nothing())
+    article_categories = select(Article.category).distinct()
+    if any(column["name"] == "archived_at" for column in inspect(connection).get_columns("articles")):
+        article_categories = article_categories.where(Article.archived_at.is_(None))
+    for code in connection.scalars(article_categories):
         if code and code not in DEFAULT_CATEGORIES:
             connection.execute(insert(CatalogCategory).values(code=code, name=code, normalized_name=normalize_name(code)).on_conflict_do_nothing())
 
@@ -32,6 +36,23 @@ def category_exists(code):
         return session.get(CatalogCategory, code) is not None
 
 
+def delete_category(code, actor_id):
+    from .inventory import require_role
+    from .rental import Conflict
+    require_role(actor_id, "operator")
+    if code == "generic":
+        raise Conflict("Основную категорию оборудования удалить нельзя")
+    with Session.begin() as session:
+        row = session.get(CatalogCategory, code, with_for_update=True)
+        if not row:
+            raise ValueError("Категория не найдена")
+        if session.scalar(select(Article.id).where(Article.category == code, Article.archived_at.is_(None)).limit(1)):
+            raise Conflict("Сначала перенесите артикулы в другую категорию")
+        if session.scalar(select(CatalogCategory.code).where(CatalogCategory.parent_code == code).limit(1)):
+            raise Conflict("Сначала удалите вложенные категории")
+        session.delete(row)
+
+
 def create_category(name, actor_id, parent_code=None, icon="equipment"):
     from .inventory import require_role
     require_role(actor_id)
@@ -44,6 +65,8 @@ def create_category(name, actor_id, parent_code=None, icon="equipment"):
         raise ValueError("Неизвестная пиктограмма")
     try:
         with Session.begin() as session:
+            if parent_code and not session.get(CatalogCategory, parent_code, with_for_update=True):
+                raise ValueError("Родительская категория не найдена")
             row = CatalogCategory(code=f"custom_{uuid4().hex}", name=name, normalized_name=normalize_name(name), parent_code=parent_code or None, icon=icon)
             session.add(row)
         return {"code": row.code, "name": row.name, "parent_code": row.parent_code, "icon": row.icon}
