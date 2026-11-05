@@ -8,7 +8,7 @@ import secrets
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -33,6 +33,14 @@ fallback_router = Router(name='booking_fallback')
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 
+class UserNameMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        from .user_names import remember_user_name
+        if event.from_user:
+            await asyncio.to_thread(remember_user_name, event.from_user)
+        return await handler(event, data)
+
+
 def make_bot(token):
     proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
     options = {"proxy": proxy} if proxy else {}
@@ -45,11 +53,12 @@ def make_bot(token):
 
 
 def customer_label(booking):
-    name = (booking.customer_name or "").strip()
+    from .user_names import clean_name
+    name = clean_name(booking.customer_name)
     contact = (booking.customer_contact or "").strip()
     if contact.startswith("@") and contact.lower() not in name.lower():
         return f"{name} ({contact})" if name else contact
-    return name or contact or f"Telegram ID {booking.customer_id}"
+    return name or "Пользователь"
 
 
 class Rent(StatesGroup):
@@ -664,7 +673,7 @@ async def change(message: Message, bot: Bot):
         booking_id = int(key) if key.isascii() and key.isdigit() and len(key) != 4 else await asyncio.to_thread(resolve_booking_number, key)
         operator = (getattr(message.from_user, "full_name", "") or "").strip()
         operator = operator or (f"@{message.from_user.username}" if getattr(message.from_user, "username", None)
-                                else f"оператор {message.from_user.id}")
+                                else "Сотрудник")
         status = await asyncio.to_thread(transition, booking_id, action, message.from_user.id, actor_name=operator)
         if status == "expired":
             return await message.answer("Удержание истекло; создайте новую заявку")
@@ -688,7 +697,11 @@ async def main():
         except Exception as exc:
             logging.warning("Не удалось настроить меню Mini App: %s", exc)
     dp = Dispatcher()
+    dp.message.outer_middleware(UserNameMiddleware())
+    dp.callback_query.outer_middleware(UserNameMiddleware())
     dp.include_router(router)
+    from .customer_changes_chat import router as customer_changes_router
+    dp.include_router(customer_changes_router)
     from .chat_workflows import router as chat_workflows_router
     dp.include_router(chat_workflows_router)
     from .chat_catalog import router as chat_catalog_router

@@ -27,7 +27,7 @@ if ($production['BOT_USERNAME'] -and $qa['BOT_USERNAME'].TrimStart('@') -eq $pro
 $testUrl = $null
 if (-not [Uri]::TryCreate($qa['PUBLIC_URL'], [UriKind]::Absolute, [ref]$testUrl) -or $testUrl.Scheme -ne 'https' -or $testUrl.Host -eq 'replace-with-separate-test-domain.example' -or $testUrl.AbsolutePath -ne '/' -or $testUrl.Query -or $testUrl.Fragment) { throw 'PUBLIC_URL должен быть отдельным HTTPS-адресом без пути.' }
 $prodUrl = $null
-if ($testUrl.Host -eq 'polyrental.cloudopragopa.online' -or ($production['PUBLIC_URL'] -and [Uri]::TryCreate($production['PUBLIC_URL'], [UriKind]::Absolute, [ref]$prodUrl) -and $prodUrl.Host -eq $testUrl.Host)) { throw 'Для приёмки нужен отдельный домен.' }
+if ($testUrl.Host -in @('polyrental.cloudopragopa.online', 'polyrental.opragopa.com') -or ($production['PUBLIC_URL'] -and [Uri]::TryCreate($production['PUBLIC_URL'], [UriKind]::Absolute, [ref]$prodUrl) -and $prodUrl.Host -eq $testUrl.Host)) { throw 'Для приёмки нужен отдельный домен.' }
 if ($qa['SESSION_SECRET'].Length -lt 32 -or $qa['ICAL_TOKEN'].Length -lt 32) { throw 'SESSION_SECRET и ICAL_TOKEN должны содержать не менее 32 символов.' }
 if ($qa['SESSION_SECRET'] -eq $qa['ICAL_TOKEN']) { throw 'Для SESSION_SECRET и ICAL_TOKEN нужны разные значения.' }
 foreach ($key in @('SESSION_SECRET', 'PII_MASTER_KEY', 'ICAL_TOKEN')) {

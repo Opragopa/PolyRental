@@ -11,6 +11,13 @@ from app.support import _open, submit_question
 from tests.test_miniapp import configure, signed_init_data
 
 
+def test_running_version_has_a_release_announcement():
+    from app import __version__
+    release = release_notes.current_release()
+    assert release is not None, f"Add release notes before deploying {__version__}"
+    assert release["version"] == __version__.split("-hotfix")[0]
+
+
 def test_release_acknowledgement_is_per_user_and_hotfix_keeps_identity(monkeypatch):
     configure(monkeypatch)
     monkeypatch.setattr(release_notes, '__version__', '0.5.1')
@@ -23,7 +30,7 @@ def test_release_acknowledgement_is_per_user_and_hotfix_keeps_identity(monkeypat
     monkeypatch.setattr(release_notes,'__version__','0.5.1-hotfix-1')
     assert release_notes.release_for_user(42)['version']=='0.5.1'
     assert release_notes.release_for_user(42)['seen'] is True
-    monkeypatch.setattr(release_notes,'__version__','0.5.3')
+    monkeypatch.setattr(release_notes,'__version__','0.5.99')
     assert release_notes.current_release() is None  # never reuse unrelated notes
 
 

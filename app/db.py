@@ -111,6 +111,24 @@ class BookingChange(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
+class CustomerChangeRequest(Base):
+    """A client's permission request, separate from actual booking edits."""
+    __tablename__ = "customer_change_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'approved', 'rejected', 'obsolete')", name="customer_change_requests_status_check"),
+        Index("customer_change_requests_one_pending", "booking_id", unique=True, postgresql_where=text("status = 'pending'")),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    reviewer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    change_id: Mapped[int | None] = mapped_column(ForeignKey("booking_changes.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Article(Base):
     __tablename__ = "articles"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -224,6 +242,7 @@ class RequestNumberCounter(Base):
 class ClientProfile(Base):
     __tablename__ = "client_profiles"
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     onboarding_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -678,6 +697,8 @@ def init_db():
             connection.execute(text("ALTER TABLE client_profiles ADD COLUMN reminders_enabled BOOLEAN NOT NULL DEFAULT true"))
         if "client_profiles" in tables and "client_blocked" not in _columns(connection, "client_profiles"):
             connection.execute(text("ALTER TABLE client_profiles ADD COLUMN client_blocked BOOLEAN NOT NULL DEFAULT false"))
+        if "client_profiles" in tables and "display_name" not in _columns(connection, "client_profiles"):
+            connection.execute(text("ALTER TABLE client_profiles ADD COLUMN display_name VARCHAR(200) NOT NULL DEFAULT ''"))
         if "client_activity" in tables and "actor_id" not in _columns(connection, "client_activity"):
             connection.execute(text("ALTER TABLE client_activity ADD COLUMN actor_id BIGINT"))
         if "inspections" in tables:

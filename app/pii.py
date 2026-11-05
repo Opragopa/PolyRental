@@ -119,7 +119,11 @@ def _review_comment(identity):
 
 
 def _purge_private_comments(session,booking_id):
-    from .db import BookingChange, BookingRework, NotificationDelivery
+    from .db import BookingChange, BookingRework, CustomerChangeRequest, NotificationDelivery
+    for request in session.scalars(select(CustomerChangeRequest).where(CustomerChangeRequest.booking_id==booking_id)):
+        request.ciphertext, request.nonce = b"", b""
+        if request.status == "pending":
+            request.status, request.decided_at = "obsolete", now()
     for change in session.scalars(select(BookingChange).where(BookingChange.booking_id==booking_id)):
         change.ciphertext,change.nonce=b"",b""
     for rework in session.scalars(select(BookingRework).where(BookingRework.booking_id==booking_id)):

@@ -14,6 +14,7 @@ from .pii import _decrypt_payload, _master_key
 from .receipt_archive import _five_years_after
 from .rental import Conflict, _claim_stage
 from .roles import configured_ids
+from .user_names import user_name
 
 
 def now():
@@ -25,7 +26,11 @@ def handover_state(booking_id, session=None):
         with Session() as current:
             return handover_state(booking_id, current)
     row = session.get(BookingHandover, booking_id)
-    return dict(row.data) if row else {}
+    data = dict(row.data) if row else {}
+    for field in ("issued_by", "returned_by"):
+        if data.get(field):
+            data[field + "_name"] = user_name(session, data[field], saved=data.get(field + "_name", ""))
+    return data
 
 
 def _row(session, booking_id):
@@ -259,7 +264,7 @@ def validate_issue(session, booking, actor_id=None, actor_name=""):
     data = dict(data)
     data["issued_at"] = now().isoformat()
     data["issued_by"] = actor_id
-    data["issued_by_name"] = " ".join(actor_name.split())[:200] or f"Сотрудник ID {actor_id}"
+    data["issued_by_name"] = user_name(session, actor_id, saved=actor_name)
     row.data = data
 
 
@@ -276,7 +281,7 @@ def validate_return_finish(session, booking, actor_id=None, actor_name=""):
     if row is None or not row.data.get("returning_at"):
         raise Conflict("Получатель должен отметить «Сдаю оборудование»")
     row.data = {**row.data, "returned_at": now().isoformat(), "returned_by": actor_id,
-                "returned_by_name": " ".join(actor_name.split())[:200] or f"Сотрудник ID {actor_id}"}
+                "returned_by_name": user_name(session, actor_id, saved=actor_name)}
 
 
 def record_return_finding(booking_id, equipment_id, actor_id, kind, description):

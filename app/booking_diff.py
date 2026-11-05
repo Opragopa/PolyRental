@@ -24,6 +24,8 @@ def comparison(before, after):
 
 
 def attach_history_details(session, booking_id, items):
+    from .user_names import history_names
+    history_names(session, items)
     from .db import BookingChange
     from .booking_changes import _decode
     targets = {item["id"]: item for item in items if item["action"] in {"request_changes_proposed", "request_updated"}}

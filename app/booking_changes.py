@@ -69,6 +69,8 @@ def decline_request(booking_id, actor_id, comment, expected_before=None):
             raise Conflict("Отклонение доступно до начала подготовки")
         if expected_before is not None and _snapshot(booking) != expected_before:
             raise Conflict("Заявка изменилась. Откройте её заново")
+        from .customer_changes import obsolete_request
+        obsolete_request(session, booking)
         nonce=os.urandom(12)
         payload={"before":_snapshot(booking),"after":_snapshot(booking),"comment":comment.strip()}
         session.add(BookingChange(booking_id=booking_id,actor_id=actor_id,change_type="rejected",status="rejected",
@@ -95,6 +97,8 @@ def propose_change(booking_id, actor_id, change_type, comment, proposed=None, ex
         before = _snapshot(booking)
         if expected_before is not None and before != expected_before:
             raise Conflict("Заявка изменилась во время редактирования. Откройте её заново")
+        from .customer_changes import obsolete_request
+        obsolete_request(session, booking)
         after = proposed or before
         if change_type == "manager_edit":
             start, end = datetime.fromisoformat(after["start"]), datetime.fromisoformat(after["end"])

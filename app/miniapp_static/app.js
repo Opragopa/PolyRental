@@ -1393,13 +1393,13 @@
       const result = await api(`/api/miniapp/admin/bookings/${order.id}/history?page=${page}&page_size=20`);
       if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
       body.replaceChildren();
-      const names = { pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
+      const names = { customer_change_requested: "Клиент запросил изменения", customer_change_approved: "Запрос клиента на изменения одобрен", customer_change_rejected: "Запрос клиента на изменения отклонён", pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
       if (!result.items?.length) { body.textContent = "Записей пока нет."; return; }
       const list = document.createElement("ol"); list.className = "request-history-list";
       for (const event of result.items) {
         const item = document.createElement("li"); const label = document.createElement("strong"); const meta = document.createElement("span");
-        label.textContent = names[event.action] || (event.action.startsWith("support_owner:") ? `Обращение передано сотруднику ID ${event.action.split(":")[1]}` : event.action.startsWith("assignee:") ? `Назначен владелец ID ${event.action.split(":")[1]}` : event.action.startsWith("asset_deleted:") ? `Экземпляр ${event.action.split(":")[1]} удалён` : event.action.startsWith("asset_restored:") ? `Экземпляр ${event.action.split(":")[1]} восстановлен` : event.action.startsWith("line_deleted:") ? `Позиция ${event.action.split(":")[1]} удалена` : event.action.startsWith("line_restored:") ? `Позиция ${event.action.split(":")[1]} восстановлена` : event.action.startsWith("sla_") ? "Уведомление о сроке обработки" : event.action.includes("_delete_intent") ? "Запрошено удаление" : event.action.includes("_delete_undo") ? "Удаление отменено" : event.action === "request_deleted" ? "Заявка удалена" : event.action === "request_restored" ? "Заявка восстановлена" : "Служебное действие");
-        meta.textContent = `${dateText(event.created_at)} МСК · ${event.actor_id ? `ID ${event.actor_id}` : "Система"}`;
+        label.textContent = names[event.action] || (event.action.startsWith("support_owner:") ? `Обращение передано: ${event.target_name || "Сотрудник"}` : event.action.startsWith("assignee:") ? `Назначен ответственный: ${event.target_name || "Сотрудник"}` : event.action.startsWith("asset_deleted:") ? `Экземпляр ${event.action.split(":")[1]} удалён` : event.action.startsWith("asset_restored:") ? `Экземпляр ${event.action.split(":")[1]} восстановлен` : event.action.startsWith("line_deleted:") ? `Позиция ${event.action.split(":")[1]} удалена` : event.action.startsWith("line_restored:") ? `Позиция ${event.action.split(":")[1]} восстановлена` : event.action.startsWith("sla_") ? "Уведомление о сроке обработки" : event.action.includes("_delete_intent") ? "Запрошено удаление" : event.action.includes("_delete_undo") ? "Удаление отменено" : event.action === "request_deleted" ? "Заявка удалена" : event.action === "request_restored" ? "Заявка восстановлена" : "Служебное действие");
+        meta.textContent = `${dateText(event.created_at)} МСК · ${event.actor_name || (event.actor_id ? "Пользователь" : "Система")}`;
         item.append(label, meta);
         if (event.changes || event.changes_unavailable) {
           const details = plainButton("Что изменилось", () => workflowDialog("Изменения заявки", event.changes ? changeDetailsHtml(event.changes) : "<p>Для этого старого изменения подробности не сохранились.</p>", "Закрыть"), "ghost compact");
@@ -1436,8 +1436,8 @@
     const otherOwner=hardStage&&order.assignee_id!==state.role?.id;
     ownership.classList.toggle("stage-lock-expired", Boolean(expired));
     ownership.textContent = !lease ? (order.assignee_id === state.role?.id ? "Закреплено за вами" : order.assignee_id ? "Закреплено за сотрудником" : "Ожидает сотрудника")
-      : expired ? `Закрепление истекло: ${lease.actor_name || `ID ${lease.actor_id}`}, до ${dateText(lease.expires_at)} МСК. Этап доступен для обработки.`
-      : `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name || `ID ${lease.actor_id}`}. Закрепление до ${dateText(lease.expires_at)} МСК.`;
+      : expired ? `Закрепление истекло: ${lease.actor_name || "Сотрудник"}, до ${dateText(lease.expires_at)} МСК. Этап доступен для обработки.`
+      : `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name || "Сотрудник"}. Закрепление до ${dateText(lease.expires_at)} МСК.`;
     if (hardStage) ownership.textContent=`${otherOwner?"Закреплено за сотрудником":"Закреплено за вами"}. ${lease ? (expired?"Мягкая блокировка истекла.":ownership.textContent) : ""}`;
     for (const button of card.querySelectorAll(".request-actions button:not(.document-button):not(.lock-exempt)")) {
       if ((otherOwner && !button.classList.contains("handover-action")) || (lease && !expired && !mine)) {
@@ -1465,7 +1465,7 @@
       const settings = plainButton("Сотрудники", async () => {
         const result = await api("/api/miniapp/admin/staff");
         if (!result.items?.length) throw new Error("Нет сотрудников для настройки. Обратитесь к администратору.");
-        const data = await workflowDialog("Сотрудники", `<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.full_name || String(item.telegram_id))}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label><p class="workflow-hint">Доступ к персональным данным назначается отдельно.</p>`, "Сохранить", (dialog) => {
+        const data = await workflowDialog("Сотрудники", `<label class="field"><span>Сотрудник</span><select name="staff">${result.items.map((item) => `<option value="${item.telegram_id}">${escapeHtml(item.name || item.full_name || "Сотрудник")}</option>`).join("")}</select></label><label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="manager">Менеджер</option><option value="admin">Администратор</option></select></label><p class="workflow-hint">Доступ к персональным данным назначается отдельно.</p>`, "Сохранить", (dialog) => {
           const populate = () => { const item = result.items.find(row => row.telegram_id === Number(dialog.querySelector('[name="staff"]').value)); dialog.querySelector('[name="role"]').value = item?.role || "operator"; };
           dialog.querySelector('[name="staff"]').addEventListener("change", populate); populate();
         }, async data => {
@@ -1640,7 +1640,8 @@
         }
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
         if (order.status === "confirmed") {
-          if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
+          if (order.customer_change_request?.status === "pending") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент запросил изменения. Рассмотрите запрос до начала подготовки."; actions.append(note); }
+          else if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
           else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = state.role?.pii_admin ? "Дождитесь заполнения анкеты клиентом и проверьте документы. Затем начните подготовку." : "Дождитесь заполнения анкеты клиентом и проверки сотрудником с доступом к персональным данным. Затем начните подготовку."; actions.append(note); }
         }
         if (order.status === "preparing") {
@@ -2682,7 +2683,7 @@
     const result = await api("/api/miniapp/admin/assignees");
     const items = (result.items || []).filter(item => Number.isInteger(item.id) && item.id > 0);
     if (!items.length) throw new Error("Нет доступных сотрудников для назначения. Обратитесь к администратору.");
-    const options = items.map(item => `<option value="${item.id}" ${item.id === order.assignee_id ? "selected" : ""}>${escapeHtml(item.name || `ID ${item.id}`)}</option>`).join("");
+    const options = items.map(item => `<option value="${item.id}" ${item.id === order.assignee_id ? "selected" : ""}>${escapeHtml(item.name || "Сотрудник")}</option>`).join("");
     await workflowDialog("Назначить ответственного", `<label class="field"><span>Сотрудник</span><select name="assignee" required><option value="">Выберите сотрудника</option>${options}</select></label>`, "Подтвердить", null, async data => api(`/api/miniapp/admin/bookings/${order.id}/assignee`, {method:"PUT", body:JSON.stringify({assignee_id:Number(data.get("assignee"))})}));
   }
 
@@ -2709,7 +2710,7 @@
   }
 
   function workflowSnapshot(result) {
-    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
+    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, customer_change_request: order.customer_change_request, can_request_changes: order.can_request_changes, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
   }
 
   function workflowRefreshSafe() {
@@ -2879,13 +2880,31 @@
     const notice = workflowNotice(order);
     if (notice) { const strip = document.createElement("p"); strip.className = "notice stage-notice"; strip.setAttribute("role","status"); strip.textContent = notice; card.append(strip); }
     if (order.status === "pending") card.append(plainButton("Изменить заявку", () => editRequestDialog(order)));
+    const request = order.customer_change_request;
+    if (order.status === "confirmed" && request) {
+      const note = document.createElement("p"); note.className="notice"; note.setAttribute("role","status");
+      note.textContent = request.status === "pending" ? "Запрос на изменения отправлен. Дождитесь решения оператора." : request.status === "rejected" ? "Оператор отклонил запрос на изменения. Заявка остаётся подтверждённой." : "";
+      if (note.textContent) card.append(note);
+      if (["pending","rejected"].includes(request.status)) card.append(plainButton("Посмотреть запрос на изменения", async () => {
+        const details = await api(`/api/miniapp/bookings/${order.id}/change-request`);
+        await workflowDialog("Запрос на изменения", `<p>${escapeHtml(details?.reason || "")}</p>${details?.decision_comment ? `<p>Комментарий оператора: ${escapeHtml(details.decision_comment)}</p>` : ""}`, "Закрыть");
+      }));
+    }
+    if (order.can_request_changes) card.append(plainButton("Запросить изменения", async () => {
+      const data = await workflowDialog("Запросить изменения", '<p>Укажите, что хотите изменить и почему. После одобрения вы сможете исправить даты или состав заявки и отправить её на повторное подтверждение.</p><label class="field"><span>Причина запроса</span><textarea name="reason" maxlength="2000" required></textarea></label>', "Отправить запрос", null, async data => {
+        const reason = String(data.get("reason") || "").trim();
+        if (!reason) throw new Error("Обязательно укажите причину запроса.");
+        await api(`/api/miniapp/bookings/${order.id}/change-request`, {method:"POST",body:JSON.stringify({reason})});
+      });
+      if (data) await showOrders();
+    }));
     if(order.rework_available)card.append(plainButton("Комментарий доработки",async()=>{const reason=await api(`/api/miniapp/bookings/${order.id}/rework-reason`);await workflowDialog("Вернули на доработку",`<p>${escapeHtml(reason.comment)}</p>`,"Закрыть");}));
     if (order.change_status === "rejected") card.append(plainButton("Причина отклонения",async () => {
       const change=await api(`/api/miniapp/bookings/${order.id}/changes`);
       await workflowDialog("Заявка отклонена",`<p>${escapeHtml(change?.comment || "")}</p>`,"Закрыть");
     }));
     if (order.status === "needs_changes" || order.change_status === "unanswered") {
-      card.append(plainButton(order.change_status === "unanswered" ? "Клиент не ответил: решение у менеджера" : "Посмотреть изменения", async () => {
+      card.append(plainButton(order.change_status === "unanswered" ? "Клиент не ответил: решение у менеджера" : request?.status === "approved" ? "Внести изменения" : "Посмотреть изменения", async () => {
         const change = await api(`/api/miniapp/bookings/${order.id}/changes`);
         if (!change) return;
         if (change.change_type === "client_fix") { const data = await workflowDialog("Нужно исправить", `<p>${escapeHtml(change.comment)}</p>`, "Перейти к исправлению"); if (data) await editRequestDialog(order,false,change); return; }
@@ -2912,6 +2931,15 @@
     showStageNotice(order,true);
     const role = state.role?.staff_role || "operator";
     const manager = ["manager","admin"].includes(role);
+    if (order.customer_change_request?.status === "pending" && order.status === "confirmed" && state.role?.staff_role) {
+      actions.append(actionButton("Рассмотреть запрос на изменения", async () => {
+        const request = await api(`/api/miniapp/bookings/${order.id}/change-request`);
+        if (!request || request.status !== "pending") throw new Error("Запрос уже обработан. Обновите заявку.");
+        await workflowDialog("Запрос клиента на изменения", `<p class="eyebrow">Причина клиента</p><p>${escapeHtml(request.reason)}</p><label class="field"><span>Решение</span><select name="decision"><option value="approve">Подтвердить запрос</option><option value="reject">Отклонить запрос</option></select></label><p>При подтверждении клиент сможет исправить заявку и отправить её на повторное подтверждение. При отказе заявка останется подтверждённой.</p><label class="field"><span>Комментарий клиенту (необязательно)</span><textarea name="comment" maxlength="2000"></textarea></label>`, "Сохранить решение", null, async data => {
+          await api(`/api/miniapp/admin/bookings/${order.id}/change-request/${request.id}/decision`, {method:"POST",body:JSON.stringify({approve:data.get("decision")==="approve",comment:data.get("comment") || ""})});
+        });
+      }, order.id, "primary"));
+    }
     if (manager && ["pending","needs_changes","confirmed","preparing","ready","issued","return_inspection"].includes(order.status)) actions.append(actionButton(order.assignee_id ? "Передать заявку" : "Назначить ответственного", () => chooseAssignee(order), order.id, "secondary lock-exempt"));
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; actions.append(badge); }
     if (manager && ["pending","confirmed"].includes(order.status)) {
@@ -2931,8 +2959,8 @@
     if (state.role?.pii_admin && ["issued","return_inspection"].includes(order.status) && !order.handover?.snapshot?.length) actions.append(actionButton("Подготовить расписку старой выдачи", async () => {
       if (await workflowDialog("Перенос старой выдачи", "<p>Будет подготовлена PDF-расписка по проверенной анкете. Исторические документы сохранятся. Особенности на момент выдачи неизвестны; при возврате нужна ручная сверка.</p>")) await api(`/api/miniapp/admin/bookings/${order.id}/migrate-receipt`,{method:"POST"});
     },order.id,"secondary lock-exempt"));
-    if (order.handover?.issued_by) { const note = document.createElement("p"); note.textContent = `Выдал: ${order.handover.issued_by_name || `сотрудник ID ${order.handover.issued_by}`}`; actions.append(note); }
-    if (order.handover?.returned_by) { const note = document.createElement("p"); note.textContent = `Принял: ${order.handover.returned_by_name || `сотрудник ID ${order.handover.returned_by}`}`; actions.append(note); }
+    if (order.handover?.issued_by) { const note = document.createElement("p"); note.textContent = `Выдал: ${order.handover.issued_by_name || "Сотрудник"}`; actions.append(note); }
+    if (order.handover?.returned_by) { const note = document.createElement("p"); note.textContent = `Принял: ${order.handover.returned_by_name || "Сотрудник"}`; actions.append(note); }
     if (order.status === "ready") actions.append(actionButton("Выдать оборудование", () => api(`/api/miniapp/admin/bookings/${order.id}/transition`,{method:"POST",body:JSON.stringify({action:"issued"})}),order.id,"primary workflow-next handover-action"));
     if (order.status === "return_inspection") for (const asset of order.assets) actions.append(actionButton(`Особенности при возврате: ${asset.name}`, async () => {
       const original = order.handover?.snapshot?.find((item) => item.id === asset.id);
@@ -3357,7 +3385,7 @@
     for (const thread of result.items) {
       const card = document.createElement("article"); card.className = "admin-card"; card.dataset.supportThreadId = String(thread.id);
       const heading = document.createElement("h3"); heading.textContent = `Обращение №${thread.id}${thread.request_number ? ` · ${thread.request_number}` : ""}`; card.append(heading);
-      const meta = document.createElement("p"); meta.textContent = `${thread.status === "resolved" ? "Закрыто" : thread.owner_id ? `Владелец ID ${thread.owner_id}` : "Без владельца"} · ${dateText(thread.created_at)} МСК`; card.append(meta);
+      const meta = document.createElement("p"); meta.textContent = `${thread.status === "resolved" ? "Закрыто" : thread.owner_id ? `Ответственный: ${thread.owner_name || "Сотрудник"}` : "Без владельца"} · ${dateText(thread.created_at)} МСК`; card.append(meta);
       if (!thread.owner_id && thread.status !== "resolved" && state.role?.pii_admin) {
         const claim = document.createElement("button"); claim.type = "button"; claim.className = "button secondary"; claim.textContent = "Взять обращение";
         claim.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/claim`, {method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(claim);
@@ -3370,7 +3398,7 @@
             const previousForm = body.querySelector("form");
             if (previousForm && staffFormDirty(previousForm) && !window.confirm("Отменить несохранённые изменения?")) return;
             const result = await api(`/api/miniapp/admin/support/${thread.id}/messages`); body.replaceChildren();
-            const context = document.createElement("p"); context.textContent = `Telegram ID ${result.customer_id} · экран ${result.screen}`; body.append(context);
+            const context = document.createElement("p"); context.textContent = `${result.customer_name || "Пользователь"} · экран ${result.screen}`; body.append(context);
             for (const message of result.items) { const p = document.createElement("p"); p.textContent = `${message.direction === "client" ? "Клиент" : "Оператор"}: ${message.text}`; body.append(p); }
             if (thread.status !== "resolved") { const form = document.createElement("form"); form.innerHTML = `<label class="field"><span>Ответ</span><textarea maxlength="3000" required></textarea></label><button class="button primary" type="submit">Ответить в Telegram</button>`;
               registerStaffForm(form); form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/reply`, {method:"POST", body:JSON.stringify({text:form.querySelector("textarea").value})}); registerStaffForm(form); await showAdmin("support"); } catch (error) { showError(error.message); } }); body.append(form); }
@@ -3378,7 +3406,7 @@
         });
       }
       if (state.role?.pii_admin && thread.owner_id === state.role?.id && thread.status !== "resolved") { const done = document.createElement("button"); done.type="button"; done.className="button ghost"; done.textContent="Закрыть обращение"; done.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/resolve`,{method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(done); }
-      if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>`; for (const id of (result.eligible_owners || [])) { const option = document.createElement("option"); option.value = id; option.textContent = `Telegram ID ${id}`; form.querySelector("select").append(option); } form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("select").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
+      if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>`; for (const id of (result.eligible_owners || [])) { const option = document.createElement("option"); option.value = id; option.textContent = (result.eligible_staff || []).find(item => item.id === id)?.name || "Сотрудник"; form.querySelector("select").append(option); } form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("select").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
       content.append(card);
       if (state.supportTargetId === thread.id) { state.supportTargetId = null; card.scrollIntoView({block:"center"}); }
     }

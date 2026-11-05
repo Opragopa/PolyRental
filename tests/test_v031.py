@@ -58,10 +58,15 @@ def test_history_is_staff_only_ordered_and_content_free(monkeypatch):
             assert [item["actor_id"] for item in items] == [42, 100, 100, 200, 200, 200]
             assert [item["category"] for item in items] == ["status", "operation", "status", "identity", "identity", "identity"]
             assert len({item["id"] for item in items}) == len(items)
-            assert all(set(item) == {"id", "action", "actor_id", "created_at", "category"} for item in items)
+            for item in items:
+                expected = {"id", "action", "actor_id", "actor_name", "created_at", "category"}
+                if item["action"].startswith("assignee:"):
+                    expected.add("target_name")
+                assert set(item) == expected
+                assert item["actor_name"]
             assert [item["created_at"] for item in items] == sorted(item["created_at"] for item in items)
             assert client.get(url, headers=headers(staff)).json() == response.json()
-            assert "Клиент" not in response.text and "@client" not in response.text
+            assert "@client" not in response.text  # Contact details are not display-name fallbacks.
         assert client.get("/api/miniapp/admin/bookings/999999999/history", headers=headers(100)).status_code == 404
 
 
@@ -101,7 +106,11 @@ def test_invalid_actions_and_competing_operator_never_create_history(monkeypatch
                                     (100, "ready", 409), (100, "invented-state", 409)):
             response = client.post(url + "/transition", headers=headers(actor), json={"action": action})
             assert response.status_code == code
-            assert client.get(url + "/history", headers=headers(100)).json() == original
+            current = client.get(url + "/history", headers=headers(100)).json()
+            # Authenticated requests may refresh a public Telegram name, but
+            # failed operations must not add or alter stored audit events.
+            stored = lambda result: [{key: value for key, value in item.items() if key not in {"actor_name", "target_name"}} for item in result["items"]]
+            assert stored(current) == stored(original)
             assert get_booking(booking_id).status == "pending"
 
 

@@ -136,7 +136,7 @@ def login():
 def auth_telegram(request: Request):
     data = dict(request.query_params)
     if not verify_telegram(data) or not is_staff(int(data["id"])):
-        raise HTTPException(403, "Telegram ID не разрешен или подпись неверна")
+        raise HTTPException(403, "Нет доступа или подпись неверна")
     request.session["admin_id"] = int(data["id"])
     return RedirectResponse("/admin", status_code=303)
 

@@ -127,6 +127,8 @@ def require_customer(request: Request, x_telegram_init_data: str = Header(defaul
     user = verify_init_data(x_telegram_init_data) if x_telegram_init_data else site_user(request)
     if user is None:
         raise HTTPException(401, "Откройте приложение через Telegram ещё раз")
+    from .user_names import remember_user_name
+    remember_user_name(user)
     return user
 
 
@@ -189,8 +191,8 @@ def require_system_admin(user=Depends(require_customer)):
 
 
 def operator_name(user):
-    name = " ".join(filter(None, [user.get("first_name", ""), user.get("last_name", "")])).strip()
-    return name or (f"@{user['username']}" if user.get("username") else f"оператор {user['id']}")
+    from .user_names import telegram_name
+    return telegram_name(user, "Сотрудник")
 
 
 def require_pii_admin(user=Depends(require_customer)):
@@ -229,7 +231,11 @@ def booking_view(booking):
         change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id).order_by(BookingChange.id.desc()).limit(1))
         from .db import BookingRework
         rework=session.scalar(select(BookingRework).where(BookingRework.booking_id==booking.id).order_by(BookingRework.id.desc()).limit(1))
+        from .customer_changes import can_request, latest_request, summary
+        client_request = latest_request(session, booking.id)
     return {
+        "can_request_changes": can_request(booking, client_request),
+        "customer_change_request": summary(client_request),
         "rework_available":bool(rework and rework.to_status==booking.status),
         "change_status": change.status if change else None,
         "receipt_preview_available":booking.status=="ready" and bool(handover.get("snapshot")),
@@ -509,7 +515,8 @@ async def current_role(user=Depends(require_customer)):
         with Session.begin() as session:
             signer=session.get(TrustedSigner,user["id"])
             staff=session.get(StaffRole,user["id"])
-            display = (f"@{user['username']}" if user.get("username") else " ".join(filter(None, [user.get("first_name", ""), user.get("last_name", "")])))[:200]
+            from .user_names import telegram_name
+            display = telegram_name(user, "")
             if staff and display and staff.display_name != display: staff.display_name = display
             role["trusted_signer"]=bool(signer and signer.active)
     elif role["pii_admin"]:
@@ -616,7 +623,12 @@ async def admin_support_threads(page: int | None = Query(default=None, ge=0, le=
         total = len(rows)
     else:
         rows, total = await asyncio.to_thread(support_threads_page, page=page, page_size=page_size, thread_id=thread_id)
-    return {"items": rows, "total":total, "page":page, "page_size":page_size, "eligible_owners": sorted(uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator"))}
+    eligible = sorted(uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator"))
+    from .user_names import user_names
+    with Session() as session:
+        names = user_names(session, eligible)
+    return {"items": rows, "total":total, "page":page, "page_size":page_size,
+            "eligible_owners": eligible, "eligible_staff": [{"id": uid, "name": names.get(uid, "Сотрудник")} for uid in eligible]}
 
 
 @router.post("/api/miniapp/admin/support/{thread_id}/claim")
@@ -675,7 +687,7 @@ class ClientBlockRequest(BaseModel):
 @router.put("/api/miniapp/admin/clients/{customer_id}/booking-block")
 async def admin_set_client_booking_block(customer_id: int, payload: ClientBlockRequest, user=Depends(require_system_admin)):
     if customer_id <= 0:
-        raise HTTPException(422, "Неверный Telegram ID")
+        raise HTTPException(422, "Пользователь не найден")
     await asyncio.to_thread(set_client_block, customer_id, user["id"], payload.blocked)
     return {"blocked": payload.blocked}
 
@@ -996,11 +1008,9 @@ def admin_booking_view(booking):
     from .handover import handover_state
     result["handover"] = handover_state(booking.id)
     result["assignee_id"] = booking.assignee_id
-    from .db import StaffRole, TrustedSigner
     with Session() as session:
-        staff = session.get(StaffRole, booking.assignee_id) if booking.assignee_id else None
-        signer = session.get(TrustedSigner, booking.assignee_id) if booking.assignee_id else None
-        result["assignee_name"] = (staff.display_name if staff else "") or (signer.full_name if signer else "")
+        from .user_names import user_name
+        result["assignee_name"] = user_name(session, booking.assignee_id) if booking.assignee_id else ""
     result["sla"] = request_sla(booking)
     ordered_assets = sorted(booking.assets, key=lambda row: (
         row.equipment.storage_location or "", row.equipment.article.name if row.equipment.article else row.equipment.name,
@@ -1882,6 +1892,36 @@ class SignerRequest(BaseModel):
     active: bool = True
 
 
+class CustomerChangeRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class CustomerChangeDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approve: bool
+    comment: str = Field(default="", max_length=2000)
+
+
+@router.post("/api/miniapp/bookings/{booking_id}/change-request")
+async def customer_request_changes(booking_id: int, payload: CustomerChangeRequestBody, user=Depends(require_customer)):
+    from .customer_changes import request_changes
+    return await workflow_call(request_changes, booking_id, user["id"], payload.reason)
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/change-request")
+async def customer_change_request_view(booking_id: int, user=Depends(require_customer)):
+    from .customer_changes import view_request
+    return await workflow_call(view_request, booking_id, user["id"])
+
+
+@router.post("/api/miniapp/admin/bookings/{booking_id}/change-request/{request_id}/decision")
+async def admin_decide_customer_changes(booking_id: int, request_id: int, payload: CustomerChangeDecision,
+                                       user=Depends(require_admin)):
+    from .customer_changes import decide_request
+    return await workflow_call(decide_request, booking_id, request_id, user["id"], payload.approve, payload.comment)
+
+
 @router.get("/api/miniapp/admin/staff")
 async def admin_staff(user=Depends(require_system_admin)):
     from .db import StaffRole, TrustedSigner
@@ -1889,7 +1929,8 @@ async def admin_staff(user=Depends(require_system_admin)):
         rows = []
         for telegram_id in sorted(configured_ids("ADMIN_IDS")):
             role, signer = session.get(StaffRole, telegram_id), session.get(TrustedSigner, telegram_id)
-            rows.append({"telegram_id": telegram_id, "role": role.role if role else None,
+            from .user_names import user_name
+            rows.append({"telegram_id": telegram_id, "name": user_name(session, telegram_id), "role": role.role if role else None,
                          "full_name": signer.full_name if signer else "", "trusted": bool(signer and signer.active)})
         return {"items": rows}
 
@@ -1900,8 +1941,9 @@ async def admin_assignees(user=Depends(require_admin)):
         raise HTTPException(403, "Передавать заявки может менеджер")
     from .db import StaffRole, TrustedSigner
     with Session() as session:
+        from .user_names import user_name
         return {"items": [{"id": row.telegram_id, "role": row.role,
-                 "name": row.display_name or (signer.full_name if (signer := session.get(TrustedSigner, row.telegram_id)) else "Сотрудник")}
+                 "name": user_name(session, row.telegram_id)}
                 for row in session.scalars(select(StaffRole).where(StaffRole.telegram_id.in_(configured_ids("ADMIN_IDS"))))]}
 
 

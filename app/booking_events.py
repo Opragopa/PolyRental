@@ -7,6 +7,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import event, inspect, select, delete
 
 ACTION_LABELS = {
+    "customer_change_requested": "Клиент запросил изменения. Требуется решение оператора",
+    "customer_change_approved": "Запрос клиента одобрен. Заявка открыта для исправления и повторного подтверждения",
+    "customer_change_rejected": "Запрос клиента на изменения отклонён. Заявка остаётся подтверждённой",
     "created": "Заявка создана", "confirmed": "Заявка подтверждена",
     "preparing": "Начата подготовка", "ready": "Готово к выдаче",
     "issued": "Оборудование выдано", "return_inspection": "Начата приёмка",
@@ -48,6 +51,7 @@ def render_card(session, booking):
     from .db import BookingLine, Article
     from .catalog_titles import catalog_title
     from .booking_messages import STATUS_LABELS
+    from .user_names import user_name
     lines = session.execute(select(Article, BookingLine.quantity).join(BookingLine).where(
         BookingLine.booking_id == booking.id, BookingLine.deleted_at.is_(None)).order_by(BookingLine.id)).all()
     local = ZoneInfo("Europe/Moscow")
@@ -63,7 +67,7 @@ def render_card(session, booking):
     status = "Заявка удалена" if booking.deleted_at else STATUS_LABELS.get(booking.status, booking.status)
     return (f"<b>Заявка {escape(booking.human_number or str(booking.id))}</b>\n"
             f"Создана: {booking.created_at.astimezone(local):%d.%m.%Y %H:%M} МСК\n"
-            f"Кем: {escape((booking.customer_name or str(booking.customer_id))[:160])}\n"
+            f"Кем: {escape(user_name(session, booking.customer_id, fallback='Пользователь', saved=booking.customer_name)[:160])}\n"
             f"Статус: {escape(status)}\n{period}\n{items}\n"
             f'<a href="{escape(booking_link(booking.id), quote=True)}">Открыть заявку</a>')
 
@@ -142,7 +146,9 @@ def install_booking_events(factory):
                     NotificationDelivery.booking_id == booking_id, NotificationDelivery.delivery_kind == "card").distinct()))
                 card_recipients = recipients | (previous_cards & (staff | {booking.customer_id}))
                 number = escape(booking.human_number or str(booking_id))
-                author = "Система" if not actor else escape(booking.customer_name or str(actor)) if actor == booking.customer_id else f"Сотрудник {actor}"
+                from .user_names import user_name
+                author = escape(user_name(session, actor, fallback="Пользователь",
+                                         saved=booking.customer_name if actor == booking.customer_id else ""))
                 description = "; ".join(dict.fromkeys(action_label(action) for action in actions))
                 details = session.info.get("booking_change_details", {}).get(booking_id)
                 if details and (details["lines"] or details["dates"]):

@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .handover import customer_attest, handover_state
 from .rental import Conflict, customer_history_page, get_booking, transition
+from .user_names import telegram_name, user_name, user_names
 from .roles import staff_allows
 
 router = Router(name="chat_workflows")
@@ -123,6 +124,16 @@ async def show_customer_booking(message, booking_id, user_id):
         rows.append([button("Отменить заявку", f"cw:askcancel:{booking.id}")])
     if booking.status == "pending":
         rows.append([button("Изменить заявку", f"cw:edit:{booking.id}")])
+    from .customer_changes import request_overview
+    change_request = await asyncio.to_thread(request_overview, booking)
+    if change_request["can_request"]:
+        rows.append([button("Запросить изменения", f"ccr:ask:{booking.id}")])
+    if change_request["request"] and change_request["request"]["status"] == "pending":
+        text += "\nЗапрос на изменения отправлен. Дождитесь решения оператора."
+    elif change_request["request"] and change_request["request"]["status"] == "rejected" and booking.status == "confirmed":
+        text += "\nОператор отклонил запрос на изменения. Заявка остаётся подтверждённой."
+    elif change_request["request"] and change_request["request"]["status"] == "approved" and booking.status == "needs_changes":
+        text += "\nЗапрос на изменения одобрен. Исправьте заявку через кнопку ниже и отправьте её на повторное подтверждение."
     if booking.status == "needs_changes":
         rows.append([button("Посмотреть предложенные изменения", f"cw:changes:{booking.id}")])
     if booking.status == "issued":
@@ -245,6 +256,12 @@ async def show_staff_booking(message, booking_id, user_id):
                    "preparing": [("Готова к выдаче", "ready")], "ready": [("Выдать", "issued")],
                    "issued": [("Начать приёмку", "return_inspection")], "return_inspection": [("Завершить заявку", "returned")]}
     rows = [[button(label, f"sw:ask:{booking_id}:{action}")] for label, action in transitions.get(booking.status, [])]
+    from .customer_changes import request_overview
+    change_request = (await asyncio.to_thread(request_overview, booking))["request"]
+    if change_request and change_request["status"] == "pending" and booking.status == "confirmed":
+        rows = []
+        rows.append([button("Рассмотреть запрос на изменения", f"ccr:review:{booking_id}:{change_request['id']}")])
+        text += "\nКлиент запросил изменения. Рассмотрите запрос до начала подготовки."
     manager = await asyncio.to_thread(staff_allows, user_id, "manager")
     if manager and booking.status in {"pending", "needs_changes", "confirmed", "preparing", "ready", "issued", "return_inspection"}:
         rows.append([button("Назначить ответственного", f"wf:assignees:{booking_id}:0")])
@@ -313,7 +330,7 @@ async def staff_action(query: CallbackQuery, state: FSMContext):
                 if not await asyncio.to_thread(staff_allows, query.from_user.id, "operator"):
                     raise PermissionError("Доступ только для сотрудников")
                 from .rental import assign_booking_assets
-                actor = (getattr(query.from_user, "full_name", "") or "").strip() or f"оператор {query.from_user.id}"
+                actor = telegram_name(query.from_user, "Сотрудник")
                 await asyncio.to_thread(assign_booking_assets, data["booking_id"], query.from_user.id, data["assignments"], actor, data.get("exceptions"))
                 await state.clear(); await query.answer("Экземпляры назначены")
                 return await show_staff_booking(query.message, data["booking_id"], query.from_user.id)
@@ -345,7 +362,7 @@ async def staff_action(query: CallbackQuery, state: FSMContext):
             await query.answer()
             return await query.message.answer("Подтвердить изменение статуса заявки?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button("Подтвердить", f"sw:do:{booking_id}:{target}"), button("Назад", f"sw:open:{booking_id}")]]))
         if parts[1] == "do":
-            actor = (getattr(query.from_user, "full_name", "") or "").strip() or f"оператор {query.from_user.id}"
+            actor = telegram_name(query.from_user, "Сотрудник")
             await asyncio.to_thread(transition, booking_id, target, query.from_user.id, actor_name=actor)
             await query.answer("Статус изменён")
             return await show_staff_booking(query.message, booking_id, query.from_user.id)
@@ -610,7 +627,7 @@ async def inspection_action(query, state, parts):
             result, checklist = "fail", {}
         else: raise Conflict("Действие устарело. Откройте проверку заново")
         from .rental import record_inspection
-        actor = (getattr(query.from_user, "full_name", "") or "").strip() or f"оператор {query.from_user.id}"
+        actor = telegram_name(query.from_user, "Сотрудник")
         await asyncio.to_thread(record_inspection, booking_id, equipment_id, data["stage"], result, checklist, data.get("notes", ""), query.from_user.id, data.get("defect", ""), data.get("cost", "0"), data.get("charge_customer", False), actor, data["signature"])
         wants_photo = result == "fail" and data["stage"] == "check_in"
         if wants_photo:
@@ -906,7 +923,7 @@ async def support_detail(message, actor_id, thread_id):
     if not row: raise ValueError("Обращение не найдено")
     pii = actor_id in configured_ids("PII_ADMIN_IDS")
     owner = row["owner_id"]
-    text = f"<b>Обращение №{thread_id}</b>\nЗаявка: {html.escape(row['request_number'] or 'общее')}\nСтатус: {html.escape(row['status'])}\nОтветственный: {owner or 'не назначен'}"
+    text = f"<b>Обращение №{thread_id}</b>\nЗаявка: {html.escape(row['request_number'] or 'общее')}\nСтатус: {html.escape(row['status'])}\nОтветственный: {html.escape(row.get('owner_name') or ('Сотрудник' if owner else 'не назначен'))}"
     rows = []
     if row["status"] != "resolved":
         if owner is None and pii: rows.append([button("Взять в работу", f"sp:claim:{thread_id}")])
@@ -950,7 +967,10 @@ async def staff_support_action(query: CallbackQuery):
             return await support_detail(query.message, actor, identifier)
         if action == "owners" and len(parts) == 3:
             candidates = [uid for uid in sorted(configured_ids("PII_ADMIN_IDS")) if await asyncio.to_thread(staff_allows, uid, "operator")]
-            rows = [[button(f"Сотрудник {uid}", f"sp:owner:{identifier}:{uid}")] for uid in candidates[:90]]
+            from .db import Session
+            with Session() as session:
+                names = user_names(session, candidates)
+            rows = [[button(names.get(uid, "Сотрудник"), f"sp:owner:{identifier}:{uid}")] for uid in candidates[:90]]
             if not rows: raise ValueError("Нет сотрудников с доступом к персональным данным")
             await query.answer(); return await query.message.answer("Кому передать обращение?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         if action == "owner" and len(parts) == 4:
@@ -1161,7 +1181,7 @@ def staff_assignees():
         for row in rows:
             if row.role not in {'operator','manager','admin'}: continue
             signer=session.get(TrustedSigner,row.telegram_id)
-            result.append({'id':row.telegram_id,'name':signer.full_name if signer and signer.full_name else str(row.telegram_id)})
+            result.append({'id':row.telegram_id,'name':user_name(session,row.telegram_id)})
         return sorted(result,key=lambda item:item['id'])
 
 
@@ -1267,7 +1287,7 @@ async def staff_workflow_save(query,state,nonce):
         operation=data['workflow_operation'];booking_id=data['workflow_booking']
         role='manager' if operation in {'assignee','fix','decline'} else 'operator'
         if not await asyncio.to_thread(staff_allows,actor,role):raise PermissionError('Недостаточно прав')
-        actor_name=(getattr(query.from_user,'full_name','') or '').strip() or f'оператор {actor}'
+        actor_name=telegram_name(query.from_user, "Сотрудник")
         if operation=='assignee':
             from .rental import reassign_booking
             await asyncio.to_thread(reassign_booking,booking_id,actor,data['workflow_target'],data['workflow_previous'],True)

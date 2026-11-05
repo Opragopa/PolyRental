@@ -71,8 +71,10 @@ def support_threads_page(customer_id=None, page=0, page_size=20, thread_id=None)
         total = session.scalar(select(func.count()).select_from(SupportThread).where(*conditions))
         rows = session.execute(select(SupportThread, responded.label('responded')).where(*conditions)
             .order_by(SupportThread.created_at.desc(), SupportThread.id.desc()).offset(page * page_size).limit(page_size)).all()
+        from .user_names import user_names
+        names = user_names(session, [row.owner_id for row, _ in rows])
         return [{'id':row.id, 'request_number':row.request_number, 'status':row.status,
-                 'owner_id':row.owner_id, 'screen':row.screen, 'created_at':row.created_at.isoformat(),
+                 'owner_id':row.owner_id, 'owner_name':names.get(row.owner_id, 'Сотрудник') if row.owner_id else '', 'screen':row.screen, 'created_at':row.created_at.isoformat(),
                  'customer_state':'Оператор ответил' if responded else 'Обращение получено'} for row, responded in rows], total
 
 
@@ -122,7 +124,8 @@ def read_messages(thread_id, actor_id):
         session.add(PIIAudit(booking_id=thread.booking_id, actor_id=actor_id, action='support_read'))
         session.add(SupportActivity(thread_id=thread.id, actor_id=actor_id, action='messages_read'))
         rows = session.scalars(select(SupportMessage).where(SupportMessage.thread_id == thread_id).order_by(SupportMessage.id)).all()
-        return {'customer_id': thread.customer_id, 'request_number': thread.request_number, 'screen': thread.screen,
+        from .user_names import user_name
+        return {'customer_id': thread.customer_id, 'customer_name': user_name(session, thread.customer_id, fallback='Пользователь'), 'request_number': thread.request_number, 'screen': thread.screen,
                 'items': [{'id':row.id, 'direction':row.direction, 'text':_open(row), 'created_at':row.created_at.isoformat()} for row in rows]}
 
 

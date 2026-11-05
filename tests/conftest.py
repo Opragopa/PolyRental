@@ -21,7 +21,7 @@ def clean_database(monkeypatch):
     from app.miniapp import _PII_REQUESTS
     _PII_REQUESTS.clear()
     init_db()
-    from app.db import StaffRole, TrustedSigner, CatalogCategory, ReleasePublication
+    from app.db import StaffRole, TrustedSigner, CatalogCategory, ReleasePublication, CustomerChangeRequest
     with Session.begin() as session:
         session.execute(delete(TrustedSigner))
         session.execute(delete(ReleasePublication))
@@ -32,7 +32,7 @@ def clean_database(monkeypatch):
             else:
                 row.role = role
     with Session.begin() as session:
-        for model in (OperatorNotificationPreference, PurgeLog, SupportActivity, SupportMessage, SupportThread, SlaEscalation, BookingCart, ClientActivity, ClientProfile, ArticleTitleAudit, NotificationDelivery, BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
+        for model in (CustomerChangeRequest, OperatorNotificationPreference, PurgeLog, SupportActivity, SupportMessage, SupportThread, SlaEscalation, BookingCart, ClientActivity, ClientProfile, ArticleTitleAudit, NotificationDelivery, BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
                       RepairTicket, Inspection, BookingAsset, BookingLine, Audit,
                       Occupancy, BookingItem, Booking, ArticleDependency, Equipment, Article):
             session.execute(delete(model))

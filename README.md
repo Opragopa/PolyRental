@@ -59,14 +59,14 @@ Telegram-бот и ролевая Mini App для аренды оборудов�
 
 ### Публикация через Nginx
 
-Для домена `polyrental.cloudopragopa.online` подготовлен Compose-файл `compose.public.yaml`. Из-за уже работающего в Windows Nginx контейнер проекта использует локальные порты 8080 и 8443; сам Mini App доступен напрямую только с этого компьютера по `127.0.0.1:8000`. Панель сайта `web` при таком запуске не включается.
+Production использует `https://polyrental.opragopa.com` и Windows Nginx в `C:\nginx-1.31.8`. Mini App доступен локально по `127.0.0.1:8000`; `compose.miniapp.yaml` задаёт новый публичный адрес для бота и Mini App. Старый домен `polyrental.cloudopragopa.online` сохранён для существующих ссылок.
 
-1. Убедитесь, что A-запись домена указывает на внешний IP компьютера или маршрутизатора. На маршрутизаторе создайте правила TCP: внешний порт 80 → `192.168.1.161:8080`, внешний порт 443 → `192.168.1.161:8443`. Разрешите локальные порты 8080 и 8443 в брандмауэре. Для выпуска сертификата путь `http://polyrental.cloudopragopa.online/.well-known/acme-challenge/` должен быть доступен из интернета на стандартном порту 80.
-2. Запустите `docker compose -f compose.yaml -f compose.miniapp.yaml -f compose.public.yaml up -d --build db bot miniapp nginx`. До получения сертификата Nginx отдаёт на обычные запросы HTTP 503; путь проверки домена уже работает.
-3. После обновления DNS из папки `C:\PROJECTS\PolyRental` выполните `powershell -ExecutionPolicy Bypass -File .\scripts\enable-https.ps1 -Email you@example.com`, подставив свой адрес для уведомлений Let's Encrypt. Из любой другой папки укажите полный путь `C:\PROJECTS\PolyRental\scripts\enable-https.ps1`. Скрипт получает сертификат, проверяет конфигурацию Nginx, включает HTTPS, записывает `PUBLIC_URL=https://polyrental.cloudopragopa.online` в `.env` и пересоздаёт бота и Mini App.
-4. Проверьте `https://polyrental.cloudopragopa.online/health` и `https://polyrental.cloudopragopa.online/miniapp`. В @BotFather задайте URL Mini App `https://polyrental.cloudopragopa.online/miniapp`.
+1. A-запись `polyrental` в зоне `opragopa.com` должна указывать на `146.120.70.68`. Внешние порты 80/443 должны приходить на Windows Nginx. ACME-проверка использует `C:\nginx-1.31.8\html`.
+2. Скрипт `scripts/enable-opragopa-https.ps1` запускается от администратора: выпускает сертификат через win-acme и включает отдельный хост из `nginx/production-windows-opragopa.conf`. Он не пересоздаёт приложение и не меняет его окружение.
+3. В `.env` задайте `PUBLIC_URL=https://polyrental.opragopa.com`. При обновлении приложения сохраняйте нужный релизный образ; штатная смена домена затрагивает только `bot` и `miniapp`.
+4. Проверьте `https://polyrental.opragopa.com/health` и `/miniapp`. В @BotFather URL Main Mini App должен быть `https://polyrental.opragopa.com/miniapp`, домен входа на сайт — `polyrental.opragopa.com`.
 
-Сертификат необходимо продлевать. Запускайте `powershell -ExecutionPolicy Bypass -File .\scripts\renew-certificate.ps1` по расписанию, например раз в месяц; команда проверяет срок сертификата и перезагружает Nginx.
+Продление нового сертификата зарегистрировано в win-acme; после продления вызывается `scripts/reload-windows-nginx.ps1`. Подробности переезда и отката — в [инструкции](docs/domain-migration-opragopa.md). `compose.public.yaml`, `scripts/enable-https.ps1` и `scripts/renew-certificate.ps1` относятся к прежнему контейнерному варианту Nginx; для нового Windows-хоста они не используются.
 
 Новые акты не формируются. В готовности создаётся DOCX по старому шаблону для скачивания и печати; при выдаче он атомарно включается в неизменяемый архив на пять лет. Клиент видит только свою расписку; полные документы сотрудников и исторические DOCX доступны только `PII_ADMIN_IDS`. Ранее сохранённые PDF остаются доступными в исходном формате. Старые файлы не перезаписываются. Логические подтверждения Mini App не заменяют бумажные подписи.
 

@@ -86,13 +86,15 @@ def _claim_stage(session, booking, actor_id, actor_name="", stage=None, bypass_o
     lease = session.get(BookingOperationLease, (booking.id, stage))
     current = now()
     if lease and lease.expires_at > current and lease.actor_id != actor_id:
-        raise Conflict(f"Этап обрабатывает {lease.actor_name or f'оператор {lease.actor_id}'}. Попробуйте позже")
+        from .user_names import user_name
+        raise Conflict(f"Этап обрабатывает {user_name(session, lease.actor_id, saved=lease.actor_name)}. Попробуйте позже")
     if lease is None:
         lease = BookingOperationLease(booking_id=booking.id, stage=stage)
         session.add(lease)
     same_actor = lease.actor_id == actor_id if lease.actor_id is not None else False
     lease.actor_id = actor_id
-    lease.actor_name = (actor_name or (lease.actor_name if same_actor else "")).strip()[:160] or f"оператор {actor_id}"
+    from .user_names import user_name
+    lease.actor_name = user_name(session, actor_id, saved=actor_name or (lease.actor_name if same_actor else ""))[:160]
     lease.expires_at = current + OPERATION_LEASE
     return lease
 
@@ -137,8 +139,10 @@ def operation_lease_states():
             Booking, Booking.id == BookingOperationLease.booking_id).where(
             Booking.status.in_(ACTIVE_STATUSES),
             BookingOperationLease.stage == Booking.status)).all()
+        from .user_names import clean_name, user_names
+        names = user_names(session, [lease.actor_id for lease, _ in rows])
         return {lease.booking_id: {"stage": lease.stage, "actor_id": lease.actor_id,
-                                   "actor_name": lease.actor_name, "expires_at": lease.expires_at.isoformat(),
+                                   "actor_name": clean_name(lease.actor_name) or names.get(lease.actor_id, "Сотрудник"), "expires_at": lease.expires_at.isoformat(),
                                    "expired": lease.expires_at <= current}
                 for lease, _ in rows}
 
@@ -156,6 +160,7 @@ _HISTORY_OPERATION_ACTIONS.update({"customer_received", "customer_returning", "p
     "request_changes_proposed", "request_changes_disputed", "request_changes_unanswered", "request_updated",
     "return_finding_existing", "return_finding_damage", "return_finding_lost", "legacy_receipt_migrated"})
 _HISTORY_OPERATION_ACTIONS.add("request_rejected")
+_HISTORY_OPERATION_ACTIONS.update({"customer_change_requested", "customer_change_approved", "customer_change_rejected"})
 _HISTORY_IDENTITY_ACTIONS = {"submitted", "verified", "changes_requested", "blocked", "unblocked",
                              "manual_delete", "subject_request", "retention_purge"}
 
@@ -164,8 +169,8 @@ def booking_history(booking_id):
     """Merge allowlisted events and saved equipment/date comparisons.
 
     Review comments, field names, document verdicts and access/download events
-    never enter the staff history response. Actor IDs identify who acted without
-    copying names or other personal data into the log.
+    never enter the staff history response. Stored audit rows keep actor IDs;
+    public display names are resolved when returning the history to the UI.
     """
     with Session() as session:
         if session.get(Booking, booking_id) is None:
@@ -1213,6 +1218,8 @@ def assign_booking_assets(booking_id, actor_id, assignments=None, actor_name="",
         if not booking or booking.deleted_at is not None or booking.status not in {"confirmed", "preparing"}:
             raise Conflict("Комплектация доступна только для подтверждённого заказа")
         starting_preparation = booking.status == "confirmed"
+        from .customer_changes import ensure_no_pending_request
+        ensure_no_pending_request(session, booking)
         _claim_stage(session, booking, actor_id, actor_name)
         if booking.identity_status != "verified":
             raise Conflict("Сначала клиент должен заполнить документы и пройти проверку у оператора")
@@ -1410,6 +1417,8 @@ def return_for_rework(booking_id, target, comment, actor_id, actor_name=""):
         if booking is None or booking.deleted_at is not None:
             raise ValueError("Заявка не найдена")
         previous = booking.status
+        from .customer_changes import obsolete_request
+        obsolete_request(session, booking)
         if pii_only and (previous != "ready" or target != "preparing"):
             raise PermissionError("Администратор ПД может вернуть только готовую заявку в подготовку")
         if REWORK_TRANSITIONS.get(previous) != target:
@@ -1478,6 +1487,9 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             raise Conflict("Отмена клиентом доступна только до начала комплектации")
         if action not in TRANSITIONS.get(booking.status, set()):
             raise Conflict("Недопустимое изменение статуса")
+        if action in {"cancelled", "expired"}:
+            from .customer_changes import obsolete_request
+            obsolete_request(session, booking)
         if customer_id is not None and actor_id != customer_id:
             raise PermissionError("Неверный участник действия")
         if customer_id is None:
@@ -1574,7 +1586,8 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
         session.add(Audit(booking_id=booking.id, actor_id=actor_id, action=action))
         from .booking_changes import queue
         from .booking_messages import booking_status_text
-        message = booking_status_text(booking.human_number or booking.id, action, actor_name or f"оператор {actor_id}")
+        from .user_names import user_name
+        message = booking_status_text(booking.human_number or booking.id, action, user_name(session, actor_id, saved=actor_name))
         queue(session, booking, f"status_{action}", message)
         if action == "returned":
             queue(session, booking, "booking_completed_operator", message, actor_id)
