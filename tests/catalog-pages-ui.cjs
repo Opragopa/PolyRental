@@ -3,7 +3,7 @@ const {chromium,webkit}=require('playwright');
 const assert=require('node:assert/strict');
 const {fixture,base}=require('./completion-ui.cjs');
 (async()=>{const engine=process.env.PLAYWRIGHT_BROWSER==='webkit'?webkit:chromium;const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{
- const {page,errors}=await fixture(browser,{admin:true,role:'operator',order:base('pending')});
+ const {page,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending')});
  const articles=Array.from({length:45},(_,i)=>({id:i+1,name:`Камера ${String(i+1).padStart(2,'0')}`,sku:`SKU-${i+1}`,category:'camera',active:true,description:'',equipment:[{id:i+101,asset_code:`ID-${i+1}`,condition:i===44?'maintenance':'available',location:'A1'}]}));
  let last;
  await page.route('**/api/miniapp/admin/catalog?*',route=>{const q=new URL(route.request().url()).searchParams;last=Object.fromEntries(q);const matches=articles.filter(a=>(!q.get('q')||`${a.name} ${a.sku}`.toLowerCase().includes(q.get('q').toLowerCase()))&&(q.get('condition')==='all'||a.equipment.some(e=>e.condition===q.get('condition'))));const pageNum=Number(q.get('page'));return route.fulfill({json:{articles:matches.slice(pageNum*20,pageNum*20+20),categories:[{code:'camera',name:'Камера'}],dependencies:[],total:matches.length,page:pageNum,page_size:20}})});

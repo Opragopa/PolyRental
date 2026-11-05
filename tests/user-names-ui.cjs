@@ -1,10 +1,11 @@
 /* Public names replace Telegram IDs in staff views; IDs still select actions. */
-const { chromium } = require('playwright');
+const { chromium, webkit } = require('playwright');
 const assert = require('node:assert/strict');
 const { fixture, base } = require('./completion-ui.cjs');
 
 (async () => {
-  const browser = await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
+  const engine = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? webkit : chromium;
+  const browser = await engine.launch({headless:true, ...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
     const order = {...base('pending'), operation_lease:{stage:'pending',actor_id:987654321,actor_name:'Анна Иванова',expires_at:'2026-10-29T11:00:00Z'}};
     const {page,errors} = await fixture(browser,{admin:true,role:'admin',order});

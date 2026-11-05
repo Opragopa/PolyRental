@@ -43,8 +43,10 @@ const assertHistory = async (page, id) => {
   await entries.nth(1).waitFor({ state: "visible" });
   assert.deepEqual(await entries.locator("strong").allTextContents(), ["Заявка подтверждена", "Анкета одобрена", "Анкета отправлена", "Клиент подтвердил получение", "Бумажная подпись при выдаче отмечена", "Клиент подтвердил сдачу", "Бумажная подпись при возврате отмечена"]);
   const actors = await entries.locator("span").allTextContents();
-  assert.match(actors[0], /МСК · ID 100$/);
-  assert.match(actors[1], /МСК · ID 200$/);
+  assert.match(actors[0], /МСК · QA admin$/);
+  assert.match(actors[1], /МСК · QA operator$/);
+  assert.match(actors[2], /МСК · Пользователь$/);
+  assert.doesNotMatch(actors.join('\n'), /\bID\b/);
 };
 const waitUntil = async (predicate, message) => {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -86,8 +88,8 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       return route.fulfill({ json: { status: "saved" } });
     }
     if (url.pathname.endsWith("/history")) return route.fulfill({ json: { items: [
-      { id: "audit:1", action: "confirmed", actor_id: 100, created_at: "2026-10-26T09:00:00Z", category: "status" },
-      { id: "pii:1", action: "verified", actor_id: 200, created_at: "2026-10-26T09:01:00Z", category: "identity" },
+      { id: "audit:1", action: "confirmed", actor_id: 100, actor_name: "QA admin", created_at: "2026-10-26T09:00:00Z", category: "status" },
+      { id: "pii:1", action: "verified", actor_id: 200, actor_name: "QA operator", created_at: "2026-10-26T09:01:00Z", category: "identity" },
       ...["submitted", "customer_received", "paper_issue_signed", "customer_returning", "paper_return_signed"].map((action, index) => ({ id: `qa:${index}`, action, actor_id: 42, created_at: "2026-10-26T09:02:00Z", category: "operation" })),
     ] } });
     if (url.pathname.endsWith("/identity/review")) {

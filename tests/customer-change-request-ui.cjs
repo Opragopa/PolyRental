@@ -1,10 +1,11 @@
 /* Request permission, require a reason, and decide without prematurely editing. */
-const {chromium} = require('playwright');
+const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const {fixture, base} = require('./completion-ui.cjs');
 
 (async () => {
-  const browser = await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
+  const engine = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? webkit : chromium;
+  const browser = await engine.launch({headless:true,...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
     for (const width of [320,390]) {
       const order = {...base('confirmed'),identity_status:'submitted',can_request_changes:true,customer_change_request:null};

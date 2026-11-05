@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const {fixture,base}=require('./completion-ui.cjs');
 (async()=>{const engine=process.env.PLAYWRIGHT_BROWSER==='webkit'?webkit:chromium;
 const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
-try {const {page,errors}=await fixture(browser,{admin:true,role:'operator',order:base('pending')});
+try {const {page,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending')});
 await page.locator('[data-mode="catalog"]').click();
 await page.locator('.catalog-operations > summary').click();
 await page.locator('.catalog-import > summary').click();

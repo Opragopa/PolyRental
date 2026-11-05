@@ -43,6 +43,11 @@ def main():
     parser.add_argument("--fresh-migrations",action="store_true")
     args=parser.parse_args()
     if args.fresh_migrations:
+        expected_head = run(["docker", "compose", "run", "--rm", "--no-deps",
+            "--volume", f"{ROOT.as_posix()}:/app", "test", "python", "-c",
+            "from alembic.config import Config; from alembic.script import ScriptDirectory; "
+            "print(ScriptDirectory.from_config(Config('alembic.ini')).get_current_head())"
+        ]).decode().strip()
         migration_name="polyrental_migration_test_"+uuid4().hex
         assert migration_name.startswith("polyrental_migration_test_") and len(migration_name)<63
         run([*DB_COMMAND,"createdb","-U","polyrental",migration_name])
@@ -51,8 +56,9 @@ def main():
             for _ in range(2):
                 run(["docker","compose","run","--rm","--no-deps","--volume",f"{ROOT.as_posix()}:/app",
                     "--env",f"DATABASE_URL={dsn}","test","alembic","upgrade","head"])
-            if fingerprint(migration_name)["revision"]!="20261104_40":
-                raise RuntimeError("Fresh migrations did not reach the expected head")
+            revision = fingerprint(migration_name)["revision"]
+            if revision != expected_head:
+                raise RuntimeError(f"Fresh migrations reached {revision}, expected {expected_head}")
         finally:
             run([*DB_COMMAND,"dropdb","-U","polyrental",migration_name])
     if args.seed_synthetic:

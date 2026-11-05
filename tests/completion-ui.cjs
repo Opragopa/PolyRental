@@ -97,7 +97,7 @@ if(require.main===module)(async()=>{
       assert.deepEqual(errors,[]);await page.close();passed++;
     }
     {
-      const {page,errors}=await fixture(browser,{admin:true,role:'operator',order:base('pending')});
+      const {page,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending')});
       assert.ok(await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).isVisible());
       await page.locator('[data-mode="catalog"]').click();
       await page.getByRole('button',{name:'Новый артикул',exact:true}).click();
@@ -249,6 +249,7 @@ if(require.main===module)(async()=>{
     {
       const {page,errors,writes}=await fixture(browser,{admin:true,role:'admin'});
       await page.locator('[data-mode="catalog"]').click();
+      await page.locator('.article-toggle').first().click();
       await page.getByRole('button',{name:'Загрузить фото модели',exact:true}).click();
       let dialog=page.locator('.workflow-dialog');
       await dialog.locator('[name="photo"]').setInputFiles({name:'synthetic.webp',mimeType:'image/webp',buffer:Buffer.from('UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/vtV4/+lwf/S4P/pcH/pcH8bss4bpAAA','base64')});
