@@ -40,6 +40,7 @@ function samplePdf() {
       }),'PDF page contains rendered text, not a blank canvas');
       assert.ok(await page.getByRole('button',{name:'Скачать PDF',exact:true}).isVisible());
       await page.getByRole('button',{name:'Назад к заявке',exact:true}).click();
+      await page.locator('.workflow-dialog').waitFor({state:'detached'});
       assert.equal(await page.locator('.receipt-pages canvas').count(),0);
       assert.deepEqual(errors,[]); await page.close();
     }

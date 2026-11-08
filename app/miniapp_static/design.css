@@ -1878,16 +1878,17 @@ h1, h2, h3 { text-wrap: balance; }
 .cart-media, .review-media, .article-media { width: calc(var(--ui-unit) * 18); height: calc(var(--ui-unit) * 20); }
 .article-card .article-card-head { grid-template-columns: calc(var(--ui-unit) * 18) minmax(0, 1fr) auto; gap: var(--space-2); }
 .item-card .quantity-control, #cart-items .quantity-control, #review-content .quantity-control {
-  grid-template-columns: minmax(0, 1fr) minmax(1.5em, .7fr) minmax(0, 1fr);
-  width: min(100%, calc(var(--ui-unit) * 30));
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr);
+  width: min(100%, max(114px, calc(var(--ui-unit) * 30)));
   font-size: clamp(12px, 3.5vw, 14px);
 }
 .item-card .quantity-control .button, #cart-items .quantity-control .button, #review-content .quantity-control .button {
-  width: 100%; min-width: 0; min-height: 0; height: auto; aspect-ratio: 1;
+  width: 100%; min-width: 0; min-height: 44px; height: auto; aspect-ratio: 1;
   padding: 0; border-radius: 0; font-size: 1.25em;
 }
 .customer-order-body { grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: var(--space-3); padding: var(--space-4); }
 .dialog-backdrop { padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-3), env(safe-area-inset-right)) max(var(--space-3), env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-left)); }
+.identity-check-review .button { min-width: min(44px, 100%); min-height: 44px; }
 .dialog-card, .workflow-dialog .dialog-card, #release-dialog .dialog-card {
   max-height: calc(100dvh - var(--space-6) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   min-width: 0; gap: var(--space-3); padding: var(--space-4); overscroll-behavior: contain;

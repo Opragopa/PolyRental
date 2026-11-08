@@ -4,6 +4,7 @@
   function setDialogHidden(dialog, hidden) {
     dialog.inert = hidden;
     dialog.hidden = hidden;
+    window.PolyRentalDialogs?.refresh();
   }
   function removeNotice(notice) {
     if (window.PolyRentalMotion) void window.PolyRentalMotion.removeDialog(notice);
@@ -16,6 +17,11 @@
   reducedMotion?.addEventListener("change", () => {
     if (reducedMotion.matches) for (const state of disclosureAnimations.values()) state.animation.finish();
   });
+  function scrollElementIntoView(element, options) {
+    // Read the current preference at the action boundary, including WebKit updates.
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    element.scrollIntoView({...options, behavior: reduce ? "auto" : "smooth"});
+  }
   function disclosureIsOpen(details) {
     return disclosureAnimations.get(details)?.opening ?? details.open;
   }
@@ -26,7 +32,7 @@
     if (!element.isConnected || (control && document.activeElement !== control)) return;
     const viewportHeight = window.visualViewport?.height || window.innerHeight;
     const tall = element.getBoundingClientRect().height > viewportHeight - 32;
-    element.scrollIntoView({block: tall ? "start" : "nearest", inline: "nearest", behavior: reducedMotion?.matches ? "auto" : "smooth"});
+    scrollElementIntoView(element, {block: tall ? "start" : "nearest", inline: "nearest"});
   }
   function setDisclosureOpen(details, opening, focus = false) {
     const summary = [...details.children].find(child => child.tagName === "SUMMARY");
@@ -114,6 +120,7 @@
   let profileLoadSequence = 0;
   let profileIdentitySequence = 0;
   let availabilitySequence = 0;
+  let availabilityCheck = null;
   let nearestProposal = null;
   let leaseRefreshTimer = null;
   let adminOrdersSnapshot = null, customerOrdersSnapshot = null, workflowRefreshBusy = false;
@@ -125,6 +132,8 @@
   let schedulePolicy = null;
   let availabilityFresh = false;
   const identityPhotoDrafts = new Map();
+  let identitySession = null;
+  let identityGeneration = 0;
   let profileIdentityData = null;
   const photoDraftLifetime = 24 * 60 * 60 * 1000;
   const exampleItems = [
@@ -308,7 +317,7 @@
     if (!error) { error = document.createElement("small"); error.className = "field-error identity-field-error"; error.setAttribute("role", "alert"); field.append(error); }
     error.textContent = message; input.setAttribute("aria-invalid", "true");
     input.setAttribute("aria-describedby", error.id || (error.id = `identity-error-${name}`));
-    field.scrollIntoView({ behavior: "smooth", block: "center" }); input.focus({ preventScroll: true });
+    scrollElementIntoView(field, {block: "center"}); input.focus({ preventScroll: true });
   }
   function clearIdentityFieldError(input) {
     input.removeAttribute("aria-invalid"); input.removeAttribute("aria-describedby");
@@ -495,28 +504,36 @@
     try { await photoDraftTransaction("readwrite", (store) => store.put(entry, key)); }
     catch (_) { /* current form still keeps the selected file */ }
   }
-  async function restoreIdentityPhotos(savedDocuments = []) {
+  async function restoreIdentityPhotos(session, savedDocuments = []) {
     const inputs = [...document.querySelectorAll('#identity-form input[type="file"]')];
     for (const input of inputs) {
-      const key = identityPhotoKey(input.name); let entry = identityPhotoDrafts.get(key);
+      if (!identitySessionCurrent(session)) return;
+      const key = identityPhotoKey(input.name, session.bookingId); let entry = identityPhotoDrafts.get(key);
       if (!entry) {
         try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; }
       }
+      if (!identitySessionCurrent(session)) return;
       if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) identityPhotoDrafts.set(key, entry);
       else { identityPhotoDrafts.delete(key); entry = null; try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} }
+      if (!identitySessionCurrent(session)) return;
       const status = input.closest(".field")?.querySelector(".file-draft-status");
       if (status) status.textContent = entry ? `Загружено ✓ · ${entry.name}`
         : savedDocuments.includes(input.name) ? "Загружено ✓ · сохранено в заявке"
         : "";
     }
   }
-  async function restoreReusableIdentityPhotos(bookingId, documents = state.identityReusableDocuments) {
+  async function restoreReusableIdentityPhotos(session, documents) {
+    const bookingId = session.bookingId;
     await Promise.all(documents.map(async (kind) => {
+      const photoVersion = session.photoVersions.get(kind) || 0;
+      const current = () => identitySessionCurrent(session) && (session.photoVersions.get(kind) || 0) === photoVersion;
+      if (!current()) return;
       const key = identityPhotoKey(kind, bookingId);
       let entry = identityPhotoDrafts.get(key);
       if (!entry) {
         try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; }
       }
+      if (!current()) return;
       if (entry && Date.now() - entry.savedAt <= photoDraftLifetime) {
         identityPhotoDrafts.set(key, entry);
         return;
@@ -527,12 +544,15 @@
         const response = await fetch(`/api/miniapp/bookings/${bookingId}/identity/reusable-profile/documents/${kind}`, {
           headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store",
         });
+        if (!current()) return;
         if (!response.ok) throw new Error("download failed");
         const blob = await response.blob();
-        if (state.identityBookingId !== bookingId) return;
+        if (!current()) return;
         await saveIdentityPhoto(kind, new File([blob], `previous-${kind}.jpg`, { type: blob.type || "image/jpeg" }), bookingId);
+        if (!current()) return;
         if (status) status.textContent = "Фото из предыдущей анкеты прикреплено. Новое фото заменит его.";
       } catch (_) {
+        if (!current()) return;
         if (status) status.textContent = "Не удалось перенести фото автоматически. Прикрепите его вручную.";
       }
     }));
@@ -623,7 +643,7 @@
   }
 
   function openCartView() {
-    if (!guardStaffNavigation()) return;
+    if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     clearError();
     if (state.profile?.client_allowed === false) { state.view = "blocked"; render(); return; }
     if (!state.items.length && preview) state.items = [...exampleItems];
@@ -634,6 +654,9 @@
   }
 
   function render() {
+    if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
+      availabilityCheck = null; availabilitySequence++; state.busy = false;
+    }
     if (state.view !== "orders") {
       profileIdentitySequence++; profileIdentityData = null;
       $("profile-identity-fields").replaceChildren(); $("profile-identity-fields").hidden = true;
@@ -980,8 +1003,11 @@
       state.step = 2; render(); queueCalendarAvailability();
     } else if (state.step === 2) {
       if (!validateDates()) return;
+      const check = {}; availabilityCheck = check;
       saveDraft(); state.busy = true; render();
       const loaded = await loadItems(true);
+      if (availabilityCheck !== check) return;
+      availabilityCheck = null;
       state.busy = false;
       if (!loaded) { render(); return; }
       const missing = unavailableSelection();
@@ -999,7 +1025,7 @@
     clearError();
     if (state.view === "admin" && !guardStaffNavigation()) return;
     if (catalogBack()) return;
-    if (state.view === "identity") { try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {} void showOrders(); return; }
+    if (state.view === "identity") { void showOrders(); return; }
     if (state.view !== "flow") { state.view = "flow"; if (state.step === 0) void loadItems(); render(); return; }
     if (state.step === 4) { void showOrders(); return; }
     if (state.step > 0 && state.step < 4) { state.step--; if (state.step === 1) renderCart(); if (state.step === 0) void loadItems(); render(); }
@@ -1071,7 +1097,7 @@
   }
 
   async function showOrders() {
-    if (!guardStaffNavigation()) return;
+    if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const sequence = ++profileLoadSequence;
     clearError(); state.view = "orders"; render();
     const telegramProfile = tg?.initDataUnsafe?.user || siteProfile || {};
@@ -1214,12 +1240,48 @@
     addressSuggestTimer = setTimeout(() => searchAddressSuggestions(query, sequence), 350);
   }
 
+  function identitySessionCurrent(session) {
+    return Boolean(session && identitySession === session && session.generation === identityGeneration && state.identityBookingId === session.bookingId && state.view === "identity");
+  }
+  function identityFormSnapshot() {
+    return JSON.stringify([staffFormSnapshot($("identity-form")), [...state.identityRequiredPhotos].sort()]);
+  }
+  function identityFormDirty() {
+    return identitySessionCurrent(identitySession) && identitySession.baseline !== null && identitySession.baseline !== identityFormSnapshot();
+  }
+  function clearIdentityRestoreKey() {
+    try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {}
+  }
+  function closeIdentitySession() {
+    identityGeneration++; identitySession = null;
+    state.identityBookingId = null; state.consent = null;
+    state.identityNeedsChanges = false; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
+    state.identityLegacyInstitution = null;
+    closeAddressSuggestions(); clearIdentityRestoreKey();
+    $("identity-form").reset();
+  }
+  function guardIdentityNavigation() {
+    if (state.view !== "identity") return true;
+    if (identitySession?.submitting) { showError("Дождитесь завершения отправки анкеты."); return false; }
+    if (identityFormDirty() && !window.confirm("В анкете есть несохранённые изменения. Закрыть её и потерять введённые данные?")) return false;
+    closeIdentitySession();
+    return true;
+  }
+  window.addEventListener("beforeunload", event => {
+    if (identityFormDirty() || identitySession?.submitting) { event.preventDefault(); event.returnValue = ""; }
+  });
+
   async function openIdentity(bookingId) {
+    if (!guardIdentityNavigation()) return;
+    const session = {bookingId, generation: ++identityGeneration, baseline: null, submitting: false, photoVersions: new Map()};
+    identitySession = session;
     clearError(); state.identityBookingId = bookingId; state.view = "identity";
     try { localStorage.setItem("polyrental-identity-booking", String(bookingId)); } catch (_) {}
     render();
-    state.consent = null; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
+    state.consent = null; state.identityNeedsChanges = false; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
     $("identity-form").reset();
+    $("identity-submit").disabled = false; $("identity-submit").textContent = "Отправить на проверку";
+    $("identity-form").querySelectorAll("input, textarea").forEach(clearIdentityFieldError);
     document.querySelectorAll('#identity-form .needs-fix').forEach((field) => field.classList.remove("needs-fix"));
     document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = false; });
     document.querySelector('[name="residential_address"]').readOnly = false;
@@ -1227,11 +1289,14 @@
     $("consent-check").checked = false; $("consent-text").textContent = "Загружаем текст согласия…";
     try {
       const current = await api(`/api/miniapp/bookings/${bookingId}/identity`);
+      if (!identitySessionCurrent(session)) return;
       state.identityNeedsChanges = current.status === "needs_changes";
-      await restoreIdentityPhotos(current.documents || []);
+      await restoreIdentityPhotos(session, current.documents || []);
+      if (!identitySessionCurrent(session)) return;
       const fields = current.fields || {};
       if (!state.identityNeedsChanges && !Object.values(fields).some((value) => Boolean(value))) {
         const saved = await api(`/api/miniapp/bookings/${bookingId}/identity/reusable-profile`);
+        if (!identitySessionCurrent(session)) return;
         if (saved.reusable) {
           Object.assign(fields, saved.fields || {});
           state.identityReusableDocuments = saved.documents || [];
@@ -1244,7 +1309,7 @@
         ? (fields.student_institution || null) : null;
       const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
       if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
-      for (const [name, value] of Object.entries(fields)) { const input = document.querySelector(`[name="${name}"]`); if (input) input.value = value || ""; }
+      for (const [name, value] of Object.entries(fields)) { const input = $("identity-form").elements.namedItem(name); if (input) input.value = value || ""; }
       const feedback = $("identity-feedback");
       if (current.status === "needs_changes") {
         state.identityRequiredPhotos = (current.review_fields || []).filter((field) => ["passport_main", "passport_registration", "student_front"].includes(field));
@@ -1258,11 +1323,15 @@
         feedback.hidden = false; $("consent-step").hidden = true; $("identity-form").hidden = false;
         for (const field of current.review_fields || []) { const input = document.querySelector(`[name="${field}"]`); input?.closest(".field")?.classList.add("needs-fix"); }
         document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => { input.required = false; });
+        session.baseline = identityFormSnapshot();
         return;
       }
-      state.consent = await api("/api/miniapp/privacy-consent");
+      const consent = await api("/api/miniapp/privacy-consent");
+      if (!identitySessionCurrent(session)) return;
+      state.consent = consent;
       $("consent-text").textContent = state.consent.text;
-    } catch (error) { $("consent-text").textContent = "Форма временно недоступна."; showError(error.message); }
+      session.baseline = identityFormSnapshot();
+    } catch (error) { if (identitySessionCurrent(session)) { $("consent-text").textContent = "Форма временно недоступна."; showError(error.message); } }
   }
 
   async function jpegFile(file) {
@@ -1277,6 +1346,9 @@
 
   async function submitIdentity(event) {
     event.preventDefault(); clearError();
+    const session = identitySession;
+    if (!identitySessionCurrent(session) || session.submitting || $("identity-submit").disabled) return;
+    const bookingId = session.bookingId;
     const form = event.currentTarget; const button = $("identity-submit");
     const data = new FormData(form); const fields = {};
     const textFields = ["full_name", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"];
@@ -1299,27 +1371,32 @@
     if (fields.student_id_number.trim().length > 8) { showIdentityFieldError("student_id_number", "Номер студенческого должен содержать не более 8 символов."); return; }
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields));
     if (state.consent) { upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash); }
+    session.submitting = true;
     button.disabled = true; button.textContent = "Шифруем и отправляем…";
     try {
       for (const name of ["passport_main", "passport_registration", "student_front"]) {
-        const selected = data.get(name); const key = identityPhotoKey(name);
+        const selected = data.get(name); const key = identityPhotoKey(name, bookingId);
         let entry = identityPhotoDrafts.get(key);
         if (!entry) { try { entry = await photoDraftTransaction("readonly", (store) => store.get(key)); } catch (_) { entry = null; } }
+        if (!identitySessionCurrent(session)) return;
         const freshFile = selected?.size ? selected : null;
         if (state.identityRequiredPhotos.includes(name) && !freshFile) { const photoError = new Error(`Загрузите новое фото: ${name === "passport_main" ? "паспорт — страница с фото" : name === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = name; throw photoError; }
         const file = freshFile || (entry && Date.now() - entry.savedAt <= photoDraftLifetime ? new File([entry.blob], entry.name, { type: entry.type }) : null);
         if (file?.size) upload.set(name, await jpegFile(file));
+        if (!identitySessionCurrent(session)) return;
       }
       const missingPhoto = !state.identityNeedsChanges && ["passport_main", "passport_registration", "student_front"].find((name) => !upload.get(name));
       if (missingPhoto) { const photoError = new Error(`Добавьте фото: ${missingPhoto === "passport_main" ? "паспорт — страница с фото" : missingPhoto === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = missingPhoto; throw photoError; }
-      await api(`/api/miniapp/bookings/${state.identityBookingId}/identity`, { method: "POST", body: upload });
-      await clearIdentityPhotoDrafts(state.identityBookingId);
-      try { localStorage.removeItem("polyrental-identity-booking"); } catch (_) {}
+      await api(`/api/miniapp/bookings/${bookingId}/identity`, { method: "POST", body: upload });
+      await clearIdentityPhotoDrafts(bookingId);
+      if (!identitySessionCurrent(session)) return;
+      session.baseline = null; session.submitting = false;
+      clearIdentityRestoreKey();
       form.reset();
       if (document.startViewTransition && !reducedMotion?.matches) document.startViewTransition(() => { void showOrders(); });
       else void showOrders();
-    } catch (error) { showIdentityError(error); }
-    finally { button.disabled = false; button.textContent = "Отправить на проверку"; }
+    } catch (error) { if (identitySessionCurrent(session)) showIdentityError(error); }
+    finally { session.submitting = false; if (identitySessionCurrent(session)) { button.disabled = false; button.textContent = "Отправить на проверку"; } }
   }
 
   function updateRentalProgress(summary) {
@@ -1505,7 +1582,7 @@
   }
 
   async function showAdmin(mode = "orders") {
-    if (!guardStaffNavigation()) return;
+    if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     $("admin-panel").classList.remove("catalog-editing");
     $("admin-settings").hidden = Boolean(state.role?.pii_only);
     if (state.role?.pii_only) {mode = "orders";document.querySelectorAll("#admin-panel .calendar-sync").forEach(node=>node.hidden=true);}
@@ -2116,6 +2193,9 @@
   function trapDialogFocus(event, dialog) {
     const focusable = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex='0']")].filter((node) => !node.hidden && node.getClientRects().length);
     const first = focusable[0], last = focusable[focusable.length - 1];
+    if (!first || !dialog.contains(document.activeElement) || document.activeElement === dialog) {
+      event.preventDefault(); window.PolyRentalDialogs?.focus(dialog, event.shiftKey); return;
+    }
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   }
@@ -2705,7 +2785,7 @@
 
   function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null) {
     return new Promise((resolve) => {
-      const previous = document.activeElement;
+      const previous = window.PolyRentalDialogs?.opener() || document.activeElement;
       const dialog = document.createElement("section"); dialog.className = "dialog-backdrop workflow-dialog";
       dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-label", title);
       dialog.innerHTML = `<form class="dialog-card"><h2>${escapeHtml(title)}</h2>${content}<div class="action-row"><button type="button" class="button ghost workflow-cancel">Отмена</button><button type="submit" class="button primary">${escapeHtml(submitLabel)}</button></div></form>`;
@@ -2720,8 +2800,10 @@
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         const exit = window.PolyRentalMotion ? window.PolyRentalMotion.removeDialog(dialog) : (dialog.remove(), Promise.resolve());
         void exit.then(() => {
-          if (previous?.isConnected && !document.querySelector('.dialog-backdrop:not([hidden])')) previous.focus({preventScroll:true});
           resolve(value);
+          window.PolyRentalDialogs?.restoreFocus(previous);
+          // Async button handlers re-enable the opener after this promise resolves.
+          requestAnimationFrame(() => window.PolyRentalDialogs?.restoreFocus(previous));
         });
       };
       dialog.querySelector(".workflow-cancel").addEventListener("click", () => finish(null));
@@ -2731,11 +2813,12 @@
         event.preventDefault();if(pending)return;
         const form=event.currentTarget,data=new FormData(form);
         if (!onSubmit) { finish(data);return; }
-        pending=true;const buttons=[...form.querySelectorAll("button")];buttons.forEach(button=>button.disabled=true);
+        pending=true;const buttons=[...form.querySelectorAll("button")], disabled=buttons.map(button=>button.disabled);buttons.forEach(button=>button.disabled=true);
+        form.setAttribute("aria-busy", "true"); window.PolyRentalDialogs?.focus(dialog);
         try { await onSubmit(data);pending=false;finish(data); }
-        catch(error) {pending=false;buttons.forEach(button=>button.disabled=false);let message=form.querySelector(".workflow-error");if(!message){message=document.createElement("p");message.className="workflow-error field-error";message.setAttribute("role","alert");form.append(message);}message.textContent=error.message;}
+        catch(error) {pending=false;form.removeAttribute("aria-busy");buttons.forEach((button,index)=>button.disabled=disabled[index]);let message=form.querySelector(".workflow-error");if(!message){message=document.createElement("p");message.className="workflow-error field-error";message.setAttribute("role","alert");form.append(message);}message.textContent=error.message;window.PolyRentalDialogs?.focus(dialog);}
       });
-      document.body.append(dialog); if (setup) setup(dialog);
+      document.body.append(dialog); window.PolyRentalDialogs?.refresh(); if (setup) setup(dialog);
       registerStaffForm(dialog.querySelector("form"));
       (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus();
     });
@@ -3089,7 +3172,7 @@
       form.append(group);
     }
     const buttons = document.createElement("div"); buttons.className = "action-row"; buttons.innerHTML = `<button class="button primary" type="submit">Сохранить замену</button>`; form.append(buttons);
-    $("admin-content").prepend(editor); editor.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("admin-content").prepend(editor); scrollElementIntoView(editor, {block: "start"});
     registerStaffForm(form);
     editor.querySelector(".assignment-close").addEventListener("click", () => { if (!staffFormDirty(form) || window.confirm("Отменить несохранённые изменения?")) editor.remove(); });
     const refreshAssignmentOptions = () => {
@@ -3148,9 +3231,9 @@
     if (targetRow) {
       targetRow.classList.add("has-inspection-editor");
       targetRow.append(card);
-      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      scrollElementIntoView(card, {block: "nearest"});
     } else {
-      content.prepend(card); card.scrollIntoView({ behavior: "smooth", block: "start" });
+      content.prepend(card); scrollElementIntoView(card, {block: "start"});
     }
     registerStaffForm(card.querySelector("form"));
     card.querySelector(".inspection-close").addEventListener("click", () => {
@@ -3362,6 +3445,12 @@
   $("availability-edit-cart").addEventListener("click", () => { state.step = 1; renderCart(); render(); });
   $("top-back-button").addEventListener("click", back);
   let supportContext = { screen: "profile", bookingId: null }, supportReturnFocus = null;
+  const supportDrafts = new Map();
+  const supportDraftKey = context => JSON.stringify([context.screen, context.bookingId]);
+  $("support-question").addEventListener("input", () => {
+    const key = supportDraftKey(supportContext), value = $("support-question").value;
+    if (value) supportDrafts.set(key, value); else supportDrafts.delete(key);
+  });
   let releasePending = null, releaseCurrent = null, releaseReturnFocus = null;
   function showPendingRelease() {
     if (!releasePending || document.hidden || state.onboardingLoading || document.querySelector('.dialog-backdrop:not([hidden])')) return;
@@ -3408,7 +3497,7 @@
     $("support-question-label").textContent = feedback ? "Что вы хотите изменить в приложении?" : "Написать оператору";
     $("support-submit").textContent = feedback ? "Отправить предложение" : "Отправить вопрос";
     $("support-faq").hidden = feedback; $("support-faq-heading").hidden = feedback;
-    setDialogHidden($("support-dialog"), false); $("support-result").textContent = ""; $("support-result").classList.remove("success"); $("support-question").value = ""; render();
+    setDialogHidden($("support-dialog"), false); $("support-result").textContent = ""; $("support-result").classList.remove("success"); $("support-question").value = supportDrafts.get(supportDraftKey(supportContext)) || ""; render();
     if (feedback) $("support-question").focus();
     else { $("support-close").focus(); await loadSupportFaq(); }
   }
@@ -3430,8 +3519,11 @@
     $("support-result").textContent = ""; $("support-result").classList.remove("success");
     try {
       const result = await api("/api/miniapp/support/questions", { method:"POST", body:JSON.stringify({ question, screen:context.screen, booking_id:context.bookingId }) });
+      const key = supportDraftKey(context);
+      if (supportDrafts.get(key) === question) supportDrafts.delete(key);
       if (!$("support-dialog").hidden && supportContext === activeSupportContext) {
-        $("support-question").value = ""; $("support-result").textContent = context.screen === "feedback" ? "Спасибо! Мы рассмотрим ваше предложение." : result.status;
+        if ($("support-question").value === question) $("support-question").value = "";
+        $("support-result").textContent = context.screen === "feedback" ? "Спасибо! Мы рассмотрим ваше предложение." : result.status;
         $("support-result").classList.add("success"); $("support-result").focus(); $("support-result").scrollIntoView({block:"nearest"});
       }
     }
@@ -3515,7 +3607,7 @@
     finally { state.onboardingLoading = false; showPendingRelease(); }
   }
   function enterClientMode() {
-    if (!guardStaffNavigation()) return;
+    if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     clearError();
     if (state.role?.admin && state.view === "admin") {
       api("/api/miniapp/operator/client-mode", { method: "POST" }).catch(() => showError("Не удалось записать переход в режим бронирования."));
@@ -3578,26 +3670,27 @@
   $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
   $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
   $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
-  $("identity-close").addEventListener("click", () => { $("identity-form").reset(); state.consent = null; state.identityBookingId = null; showOrders(); });
+  $("identity-close").addEventListener("click", () => { void showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer();  });
   $("document-viewer").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("document-viewer")); });
   $("document-viewer-prev").addEventListener("click", async () => { if (documentViewerIndex > 0) { documentViewerIndex -= 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("document-viewer-next").addEventListener("click", async () => { if (documentViewerIndex < documentViewerItems.length - 1) { documentViewerIndex += 1; try { await loadDocumentViewerImage(documentViewerBookingId); } catch (error) { showError(error.message); } } });
   $("consent-next").addEventListener("click", async () => {
+    const session = identitySession;
+    if (!identitySessionCurrent(session)) return;
     if (!state.consent) return showError("Текст согласия не загружен.");
     if (!$("consent-check").checked) return showError("Чтобы продолжить, подтвердите согласие.");
     clearError(); const button = $("consent-next"); button.disabled = true;
     try {
       $("consent-step").hidden = true; $("identity-form").hidden = false;
-      const bookingId = state.identityBookingId;
       const reusableDocuments = [...state.identityReusableDocuments];
       if (!reusableDocuments.length) return;
       const status = $("identity-status"), submit = $("identity-submit");
       status.textContent = "Подготавливаем фотографии из предыдущей анкеты…"; status.hidden = false;
       submit.disabled = true; submit.textContent = "Подготавливаем фотографии…";
-      void restoreReusableIdentityPhotos(bookingId, reusableDocuments).finally(() => {
-        if (state.identityBookingId !== bookingId || $("identity-form").hidden) return;
+      void restoreReusableIdentityPhotos(session, reusableDocuments).finally(() => {
+        if (!identitySessionCurrent(session) || $("identity-form").hidden) return;
         status.hidden = true; submit.disabled = false; submit.textContent = "Отправить на проверку";
       });
     } catch (error) { showError(error.message); }
@@ -3609,7 +3702,11 @@
   $("registration_address").addEventListener("keydown", (event) => { if (event.key === "Escape") closeAddressSuggestions(); });
   document.addEventListener("click", (event) => { if (!event.target.closest(".address-search")) closeAddressSuggestions(); });
   document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => input.addEventListener("change", async () => {
-    const file = input.files?.[0] || null; await saveIdentityPhoto(input.name, file);
+    const session = identitySession;
+    if (!identitySessionCurrent(session)) return;
+    const version = (session.photoVersions.get(input.name) || 0) + 1; session.photoVersions.set(input.name, version);
+    const file = input.files?.[0] || null; await saveIdentityPhoto(input.name, file, session.bookingId);
+    if (!identitySessionCurrent(session) || session.photoVersions.get(input.name) !== version) return;
     const status = input.closest(".field")?.querySelector(".file-draft-status");
     if (status) status.textContent = file ? `Загружено ✓ · ${file.name}` : "";
     clearIdentityFieldError(input);
@@ -3618,12 +3715,14 @@
     const buttons = document.createElement("div"); buttons.className="action-row photo-actions";
     buttons.append(plainButton("Заменить",()=>input.click(),"ghost"));
     const remove = plainButton("🗑",async () => {
-      input.value=""; await saveIdentityPhoto(input.name,null);
-      identityPhotoDrafts.delete(identityPhotoKey(input.name));
-      try { await photoDraftTransaction("readwrite",(store)=>store.delete(identityPhotoKey(input.name))); } catch (_) {}
+      const session = identitySession;
+      if (!identitySessionCurrent(session)) return;
+      const version = (session.photoVersions.get(input.name) || 0) + 1; session.photoVersions.set(input.name, version);
+      input.value="";
       input.required=true;
       if (!state.identityRequiredPhotos.includes(input.name)) state.identityRequiredPhotos.push(input.name);
       const status=input.closest(".field").querySelector(".file-draft-status"); if (status) status.textContent="Фото удалено. Загрузите новое перед отправкой.";
+      await saveIdentityPhoto(input.name, null, session.bookingId);
     },"ghost danger"); remove.setAttribute("aria-label","Удалить фото"); buttons.append(remove);
     input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
@@ -3681,7 +3780,7 @@
   if (siteProfile) {
     document.querySelector('.eyebrow').textContent = 'БРОНИРОВАНИЕ ЧЕРЕЗ TELEGRAM';
     const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'button ghost'; logout.textContent = 'Выйти';
-    logout.addEventListener('click', async () => { try { const response = await fetch('/site/logout', {method:'POST',headers:{'X-Telegram-Init-Data':''}}); if (response.ok || response.redirected) location.assign('/site/login'); else showError('Не удалось выйти. Повторите попытку.'); } catch (_) { showError('Не удалось выйти. Проверьте соединение.'); } });
+    logout.addEventListener('click', async () => { if (!guardIdentityNavigation()) return; try { const response = await fetch('/site/logout', {method:'POST',headers:{'X-Telegram-Init-Data':''}}); if (response.ok || response.redirected) location.assign('/site/login'); else showError('Не удалось выйти. Повторите попытку.'); } catch (_) { showError('Не удалось выйти. Проверьте соединение.'); } });
     document.querySelector('.topbar').append(logout);
   }
   const profile = tg?.initDataUnsafe?.user || siteProfile;
@@ -3724,19 +3823,20 @@
         if (pending) { cartPending = pending; showCartSyncProblem("Не удалось проверить серверную подборку. Подключитесь к сети для выбора действия."); }
       }
       void claimStageNotices();
-      let identityDraft = null; try { identityDraft = localStorage.getItem("polyrental-identity-booking"); } catch (_) {}
-      if (identityDraft && /^\d+$/.test(identityDraft)) return openIdentity(Number(identityDraft));
       const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
       const linkedBooking = /^booking_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("booking");
       if (linkedBooking && /^\d+$/.test(linkedBooking)) {
+        clearIdentityRestoreKey();
         if (role.admin) { selectedRequestId = Number(linkedBooking); state.adminTargetId = selectedRequestId; return showAdmin("orders"); }
         selectedCustomerOrderId = Number(linkedBooking); state.profileTargetId = Number(linkedBooking); state.profileFilter = "all"; $("profile-filter").value = "all"; return showOrders();
       }
       const linkedSupport = /^support_(\d+)$/.exec(startParam || "")?.[1];
-      if (linkedSupport && role.admin) { state.supportTargetId = Number(linkedSupport); state.supportFilterId = state.supportTargetId; state.supportPage = 0; return showAdmin("support"); }
-      if (["my_bookings", "orders"].includes(startParam)) return showOrders();
+      if (linkedSupport && role.admin) { clearIdentityRestoreKey(); state.supportTargetId = Number(linkedSupport); state.supportFilterId = state.supportTargetId; state.supportPage = 0; return showAdmin("support"); }
+      if (["my_bookings", "orders"].includes(startParam)) { clearIdentityRestoreKey(); return showOrders(); }
       if (profileState?.start_screen === "blocked") { state.view = "blocked"; render(); return; }
-      if (startParam === "booking" && role.admin) { state.view = "admin"; enterClientMode(); return; }
+      if (startParam === "booking") { clearIdentityRestoreKey(); if (role.admin) state.view = "admin"; enterClientMode(); return; }
+      let identityDraft = null; try { identityDraft = localStorage.getItem("polyrental-identity-booking"); } catch (_) {}
+      if (identityDraft && /^\d+$/.test(identityDraft)) return openIdentity(Number(identityDraft));
       if ((profileState?.start_screen || (role.admin ? "management" : "booking")) === "management" && role.admin) {
         let mode = profileState?.last_section || "orders"; if (!profileState?.last_section) try { mode = localStorage.getItem(`polyrental-admin-tab:${role.id}`) || "orders"; } catch (_) {}
         if (!["orders", "catalog", "repairs", "support", ].includes(mode)) mode = "orders";

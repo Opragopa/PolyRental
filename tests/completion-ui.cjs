@@ -13,8 +13,8 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null}={}) {
-  const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null,isMobile=true}={}) {
+  const page=await browser.newPage({viewport:{width,height:844},isMobile,hasTouch:isMobile});
   const errors=[],writes=[];let catalogPreview='';
   let releaseInspectionRefresh;
   const inspectionRefresh=new Promise(resolve=>{releaseInspectionRefresh=resolve;});
@@ -184,8 +184,10 @@ if(require.main===module)(async()=>{
       await operator.page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Завершить заявку'&&!button.disabled));
       assert.ok(await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).isEnabled());
       await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).click();
+      const completionResponse=operator.page.waitForResponse(response=>response.url().endsWith('/transition')&&response.request().postDataJSON()?.action==='returned');
       await operator.page.locator('.workflow-dialog').getByRole('button',{name:'Подтвердить',exact:true}).click();
       await operator.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
+      await completionResponse;
       assert.ok(operator.writes.some(row=>row.body.action==='returned'));
       assert.deepEqual(client.errors,[]); assert.deepEqual(operator.errors,[]);
       await client.page.close(); await operator.page.close(); passed++;

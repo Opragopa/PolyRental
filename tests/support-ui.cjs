@@ -27,12 +27,14 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.getByRole('button',{name:'Поддержка',exact:true}).click();
     const dialog=page.locator('#support-dialog'); await dialog.waitFor({state:'visible'});
     await dialog.getByText('Как?',{exact:true}).click();
+    await dialog.getByText('Выберите даты.').waitFor({state:'visible'});
     assert.equal(await dialog.getByText('Выберите даты.').isVisible(),true);
     await dialog.locator('#support-question').fill('Нужна помощь');
     await dialog.getByRole('button',{name:'Отправить вопрос'}).click();
     await dialog.getByText('Обращение получено').waitFor();
     assert.deepEqual(questions,[{question:'Нужна помощь',screen:'profile',booking_id:null}]);
     await dialog.getByRole('button',{name:'Закрыть'}).click();
+    await dialog.waitFor({state:'hidden'});
     assert.equal(await dialog.isHidden(),true); assert.deepEqual(errors,[]);
     console.log('Support sheet checks passed');
   } finally { await browser.close(); }

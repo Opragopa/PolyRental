@@ -14,6 +14,7 @@
   }
   function removeDialog(dialog, {collapse = false} = {}) {
     if (exits.has(dialog)) return exits.get(dialog).promise;
+    dialog.setAttribute("data-modal-closing", "");
     dialog.inert = true;
     if (preference.matches || typeof dialog.animate !== "function") {
       dialog.remove();
