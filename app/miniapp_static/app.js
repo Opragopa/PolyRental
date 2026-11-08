@@ -2191,7 +2191,7 @@
   let documentViewerSequence = 0;
   let documentViewerReturnFocus = null;
   function trapDialogFocus(event, dialog) {
-    const focusable = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex='0']")].filter((node) => !node.hidden && node.getClientRects().length);
+    const focusable = [...dialog.querySelectorAll("button, input, textarea, select, summary, a[href], [tabindex]")].filter((node) => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden], [inert]') && node.getClientRects().length);
     const first = focusable[0], last = focusable[focusable.length - 1];
     if (!first || !dialog.contains(document.activeElement) || document.activeElement === dialog) {
       event.preventDefault(); window.PolyRentalDialogs?.focus(dialog, event.shiftKey); return;

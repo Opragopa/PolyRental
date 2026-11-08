@@ -9,7 +9,7 @@
     opener = event.target.closest?.('button, a[href], input, select, textarea') || document.activeElement;
   }, true);
   function focusables(dialog) {
-    return [...dialog.querySelectorAll('button, input, textarea, select, a[href], [tabindex]')]
+    return [...dialog.querySelectorAll('button, input, textarea, select, summary, a[href], [tabindex]')]
       .filter(node => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden], [inert]') && node.getClientRects().length);
   }
   function focus(dialog, last = false) {

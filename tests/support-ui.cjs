@@ -26,6 +26,13 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#profile-header > summary').click();
     await page.getByRole('button',{name:'Поддержка',exact:true}).click();
     const dialog=page.locator('#support-dialog'); await dialog.waitFor({state:'visible'});
+    const faqSummary=dialog.locator('summary').first();
+    await faqSummary.waitFor();
+    await dialog.locator('#support-submit').focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await faqSummary.evaluate(el=>document.activeElement===el),true,'FAQ summary participates in modal keyboard navigation');
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await dialog.locator('#support-submit').evaluate(el=>document.activeElement===el),true);
     await dialog.getByText('Как?',{exact:true}).click();
     await dialog.getByText('Выберите даты.').waitFor({state:'visible'});
     assert.equal(await dialog.getByText('Выберите даты.').isVisible(),true);
