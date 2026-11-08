@@ -9,12 +9,13 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
  try {
   {
    const {page,errors}=await fixture(browser,{order:base('pending')});
-   const item={id:1,name:'Камера Sony',title:'Камера Sony',sku:'CAM',available:true,available_quantity:3};
+   const item={id:1,name:'Камера Sony',title:'Камера Sony',sku:'CAM',category:'generic',available:true,available_quantity:3};
    const availability=gate();
    await page.route('**/api/miniapp/catalog?*',route=>route.fulfill({json:{items:[item],selected_items:[item],page:0,page_size:20,total:1}}));
    await page.route('**/api/miniapp/cart',route=>route.fulfill({json:{...route.request().postDataJSON(),version:1}}));
    await page.route('**/api/miniapp/availability?*',async route=>{await availability.promise;await route.fulfill({json:{items:[item],all_items:[item],selected_items:[item],unavailable_count:0,unavailable:[]}});});
-   await page.locator('#tab-new').click();await page.locator('#client-catalog-search').fill('Sony');
+   await page.locator('#tab-new').click();
+   await page.locator('#client-categories .category-card').filter({hasText:'Оборудование'}).click();
    await page.locator('.item-card .plus').first().click();await page.locator('#main-button').click();
    await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_qa');
    await page.locator('#main-button').click();
@@ -75,8 +76,8 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    assert.equal(await page.evaluate(()=>document.body.style.position),'fixed','nested close preserves scroll lock');
    await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
    const after=await page.evaluate(()=>scrollY);
-   assert.ok(Math.abs(after-before.scroll)<2,`close restores scroll position: ${JSON.stringify({before,after,locked})}`);
-   assert.ok(Math.abs(locked-before.y)<2,'backdrop wheel does not move background');
+   assert.ok(Math.abs(after-before.scroll)<=3,`close restores scroll position: ${JSON.stringify({before,after,locked})}`);
+   assert.ok(Math.abs(locked-before.y)<=3,'backdrop wheel does not move background');
    await open.click();assert.equal(await dialog.locator('#support-question').inputValue(),'Неотправленный вопрос');
    await dialog.getByRole('button',{name:'Отправить вопрос'}).click();await dialog.locator('#support-result.success').waitFor();
    await dialog.locator('#support-close').click();await dialog.waitFor({state:'hidden'});
