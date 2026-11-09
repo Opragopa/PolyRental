@@ -56,3 +56,21 @@ def test_category_with_only_archived_articles_can_be_removed_without_losing_hist
             seed_categories(connection)
         with Session() as session:
             assert session.get(CatalogCategory, code) is None
+
+
+def test_catalog_capacity_excludes_unusable_assets_and_refreshes_selected_models(monkeypatch):
+    from app.db import Equipment
+    configure(monkeypatch)
+    article_id = article_with_assets('CAPACITY', 4)
+    empty_id = article_with_assets('EMPTY-CAPACITY', 1)
+    with Session.begin() as session:
+        assets = session.scalars(select(Equipment).where(Equipment.article_id == article_id).order_by(Equipment.id)).all()
+        assets[0].condition = 'maintenance'
+        assets[1].condition = 'retired'
+        session.scalar(select(Equipment).where(Equipment.article_id == empty_id)).condition = 'maintenance'
+    with TestClient(app) as client:
+        response = client.get('/api/miniapp/catalog', params={'q':'EMPTY-CAPACITY', 'selected':article_id})
+        assert response.status_code == 200
+        data = response.json()
+        assert next(item for item in data['items'] if item['id'] == empty_id)['capacity'] == 0
+        assert next(item for item in data['selected_items'] if item['id'] == article_id)['capacity'] == 2

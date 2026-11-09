@@ -9,7 +9,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
   const page=await browser.newPage({viewport:{width:390,height:844}}), errors=[];page.on('pageerror',e=>errors.push(e.message));
   let server={start:'2026-11-01T10:00',end:'2026-11-02T10:00',lines:[],version:1}, writes=0, offline=false, release, received;
   const requestReceived=new Promise(resolve=>{received=resolve});const gate=new Promise(resolve=>{release=resolve});
-  const items=[1,2].map(id=>({id,name:`Камера ${id}`,title:`Камера ${id}`,sku:`CAM-${id}`,description:'',available:true,available_quantity:3}));
+  const items=[1,2].map(id=>({id,name:`Камера ${id}`,title:`Камера ${id}`,sku:`CAM-${id}`,description:'',available:true,capacity:3,available_quantity:3}));
   await page.route('**/*',async route=>{const url=new URL(route.request().url()),method=route.request().method();
    if(url.hostname==='telegram.org')return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42}}}}'});
    if(url.pathname.startsWith('/miniapp/static/')){const f=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(f),contentType:f.endsWith('.css')?'text/css':'text/javascript'});}
@@ -49,9 +49,9 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
    }
    assert.equal(await card.locator('.minus').isDisabled(),true);
    await card.locator('.plus').evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('.item-card .plus').click();});
-   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 30');
+   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 3');
    assert.equal(await card.locator('.plus').isDisabled(),true);
-   assert.equal(await card.locator('.quantity-value').innerText(),'30');
+   assert.equal(await card.locator('.quantity-value').innerText(),'3');
    assert.doesNotMatch(await card.innerText(),/добавить в корзину|в корзине:/i);
    const size=await card.locator('.quantity-control').evaluate(el=>({width:el.getBoundingClientRect().width,available:el.parentElement.getBoundingClientRect().width,buttons:[...el.querySelectorAll('button')].map(button=>({width:button.getBoundingClientRect().width,height:button.getBoundingClientRect().height}))}));
    assert.ok(size.width<=size.available+1,JSON.stringify(size));

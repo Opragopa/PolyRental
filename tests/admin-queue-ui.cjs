@@ -28,6 +28,27 @@ const { fixture, base } = require('./completion-ui.cjs');
     await page.locator('#admin-next').click();
     await page.locator('.request-card[data-booking-id="8"]').waitFor();
     assert.equal(last.page,'1');
+    for (const width of [320,390,440,1440]) {
+      await page.setViewportSize({width,height:900});
+      await page.clock.runFor(300);
+      const before=await page.locator('#admin-queues').boundingBox();
+      const button=page.locator('#admin-queues [data-queue="review"]');
+      await button.evaluate(el=>{window.__queueButton=el;el.focus();});
+      const response=page.waitForResponse(r=>r.url().includes('/api/miniapp/admin/bookings?'));
+      await button.click();await response;await page.clock.runFor(300);
+      const after=await page.locator('#admin-queues').boundingBox();
+      assert.ok(Math.abs(before.height-after.height)<1,`${width}: filter height changed`);
+      assert.equal(await button.evaluate(el=>el===window.__queueButton),true,'filter DOM must survive refresh');
+      assert.equal(await button.evaluate(el=>document.activeElement===el),true,'filter focus must survive refresh');
+      assert.equal(await button.evaluate(el=>getComputedStyle(el).transform),'none');
+      assert.equal(await button.evaluate(el=>el.style.getPropertyValue('--button-fit')),'');
+      const columns=await page.locator('#admin-queues').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
+      assert.equal(columns,width<=600?2:4);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    }
+    await page.addStyleTag({content:'#admin-queues > .button {font-size:20px !important}'});
+    await page.setViewportSize({width:320,height:900});await page.clock.runFor(300);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     assert.deepEqual(errors, []);
     console.log('Staff queue filter and pagination: passed');
   } finally { await browser.close(); }

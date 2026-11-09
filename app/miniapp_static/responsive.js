@@ -59,7 +59,7 @@
   }
   function discover() {
     document.querySelectorAll(".button").forEach(button => {
-      if (buttons.has(button) || !button.textContent.trim() || button.closest(".quantity-control") || button.matches(".admin-mode, .icon-action, .catalog-layout-icon")) return;
+      if (buttons.has(button) || !button.textContent.trim() || button.closest(".quantity-control, #admin-queues") || button.matches(".admin-mode, .icon-action, .catalog-layout-icon")) return;
       buttons.add(button);
       observer.observe(button);
     });

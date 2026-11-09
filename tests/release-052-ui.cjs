@@ -15,7 +15,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    const errors=[]; page.on('pageerror',error=>errors.push(error.message));
    let color='all', calendarCalls=0, avatarRoute;
    let cart={start:'',end:'',lines:[],version:0};
-   const item={id:1,name:'Камера Sony',category:'camera',sku:'CAM',composition:'Камера\nКрышка\nКабель',image_url:'https://images.test/camera.svg'};
+   const item={id:1,name:'Камера Sony',category:'camera',sku:'CAM',capacity:3,composition:'Камера\nКрышка\nКабель',image_url:'https://images.test/camera.svg'};
    await page.route('**/*', async route=>{
     const url=new URL(route.request().url());
     if(url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:42,photo_url:"https://images.test/avatar.svg"}}}}'});

@@ -525,11 +525,15 @@ def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(
             from .catalog_images import image_data
             all_articles = articles + selected_articles
             previews = image_data(session, [article.id for article in all_articles])
+            capacities = dict(session.execute(select(Equipment.article_id, func.count()).where(
+                Equipment.article_id.in_([article.id for article in all_articles]),
+                Equipment.condition == "available").group_by(Equipment.article_id)).all())
             rows = [{"id": article.id, "sku": article.sku, "name": article.name,
                      "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
                      "kind": article.kind, "brand": article.brand, "key_spec": article.key_spec,
                      "description": article.description, "composition": article.composition or "", "image_url": article.image_url,
-                     "image_data": previews.get(article.id, ""), "category": article.category}
+                     "image_data": previews.get(article.id, ""), "category": article.category,
+                     "capacity": capacities.get(article.id, 0)}
                     for article in all_articles]
         by_id = {row["id"]: row for row in rows}
         return [by_id[article.id] for article in articles], [by_id[item] for item in selected_ids if item in by_id], total

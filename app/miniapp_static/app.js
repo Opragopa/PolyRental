@@ -617,7 +617,7 @@
   function updateMainAction(total) {
     const labels = [`В корзину · ${total}`, "Выбрать даты", "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
-    $("main-button").disabled = state.busy || cartLocked || (state.step === 2 &&
+    $("main-button").disabled = state.busy || cartLocked || (state.step === 3 && (exceedsStock() || !availabilityFresh)) || (state.step === 2 &&
       (!$("start-date").value || !$("end-date").value || ($("start-time").value && $("end-time").value && Boolean(dateValidationMessage())))) || (!authorized && !keyboardMode && !preview);
     $("clear-cart").hidden = !(state.view === "flow" && state.step === 0);
     $("clear-cart").disabled = state.busy || cartLocked || !total;
@@ -655,7 +655,7 @@
 
   function render() {
     if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
-      availabilityCheck = null; availabilitySequence++; state.busy = false;
+      availabilityCheck = null; availabilitySequence++; stockLoading = false; state.busy = false;
     }
     if (state.view !== "orders") {
       profileIdentitySequence++; profileIdentityData = null;
@@ -720,6 +720,26 @@
     return true;
   }
 
+  const quantityStocks = new Map();
+  let stockLoading = false;
+  function stockPeriod() { return $("start").value && $("end").value ? `${$("start").value}|${$("end").value}` : ""; }
+  function quantityLimit(id) {
+    const stock = quantityStocks.get(id);
+    if (stockLoading || !stock) return 0;
+    const period = stockPeriod();
+    const count = period ? (stock.period === period ? stock.available : null) : stock.capacity;
+    return Number.isInteger(count) ? Math.max(0, Math.min(30, count)) : 0;
+  }
+  function stockLabel(id) {
+    const stock = quantityStocks.get(id), period = stockPeriod();
+    const count = period ? (stock?.period === period ? stock.available : null) : stock?.capacity;
+    if (stockLoading || !Number.isInteger(count)) return "Проверяем доступное количество…";
+    return `${period ? "Свободно на выбранный срок" : "Всего для аренды"}: ${count}`;
+  }
+  function exceedsStock() { return [...state.quantities].some(([id, quantity]) => quantity > quantityLimit(id)); }
+  function stockWarning(id, quantity) {
+    return quantity > quantityLimit(id) ? `${stockLabel(id)}. Уменьшите количество или удалите позицию.` : stockLabel(id);
+  }
   function availabilityPath(start, end) {
     const params = new URLSearchParams({start:toIso(start), end:toIso(end), page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:$("client-catalog-search").value.trim()});
     if (clientCatalog.category) params.set("category", clientCatalog.category);
@@ -733,7 +753,7 @@
     for (const item of data.selected_items || []) merged.set(item.id, item);
     for (const [id] of state.quantities) if (!merged.has(id)) {
       const previous = previousItems.find(item => item.id === id);
-      const missing = {...(previous || {id, name:"Позиция больше недоступна", description:""}), available_quantity:0};
+      const missing = {...(previous || {id, name:"Позиция больше недоступна", description:""}), capacity:0, available_quantity:0};
       merged.set(id, missing); if (!paged) pageItems.push(missing);
     }
     clientCatalog.paged = paged;
@@ -744,7 +764,9 @@
   }
   async function loadItems(checkAvailability = false) {
     if (typeof checkAvailability !== "boolean") checkAvailability = false;
+    if (stockPeriod() && toIso($("start").value) && toIso($("end").value) && $("start").value < $("end").value) checkAvailability = true;
     if (checkAvailability) availabilityFresh = false;
+    stockLoading = true;
     const sequence = ++availabilitySequence;
     const periodStart = $("start").value, periodEnd = $("end").value;
     const requestedPage = clientCatalog.page, requestedQuery = $("client-catalog-search").value.trim(), requestedCategory = clientCatalog.category;
@@ -763,7 +785,16 @@
       if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedCategory !== clientCatalog.category || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
       if (Number.isInteger(data.page) && data.page > 0 && data.page * data.page_size >= data.total) { clientCatalog.page = Math.max(0, Math.ceil(data.total / data.page_size) - 1); return loadItems(checkAvailability); }
       state.items = reconcileAvailability(data, previousItems);
+      for (const item of state.items) {
+        const old = quantityStocks.get(item.id) || {};
+        const capacity = Number.isInteger(item.capacity) ? item.capacity : (Number.isInteger(item.available_quantity) ? item.available_quantity : null);
+        quantityStocks.set(item.id, {capacity: capacity ?? old.capacity, period: checkAvailability ? stockPeriod() : "", available: checkAvailability ? (item.available_quantity ?? 0) : null});
+      }
+      stockLoading = false;
       availabilityFresh=checkAvailability;
+      if (state.view === "flow" && state.step === 1) renderCart();
+      if (state.view === "flow" && state.step === 3) renderReview();
+      updateCartCounters();
       if (!checkAvailability) {
         $("items-status").hidden = Boolean(clientCatalog.pageItems.length);
         $("items-status").textContent = requestedQuery ? "По вашему запросу ничего не найдено." : "В каталоге пока нет оборудования.";
@@ -785,6 +816,10 @@
       renderItems(); return true;
     } catch (error) {
       if (sequence !== availabilitySequence) return false;
+      stockLoading = false; quantityStocks.clear();
+      if (state.view === "flow" && state.step === 1) renderCart();
+      if (state.view === "flow" && state.step === 3) renderReview();
+      updateCartCounters();
       $("items-grid").replaceChildren();
       $("items-status").textContent = `Не удалось загрузить оборудование: ${error.message}`;
       $("retry-items").hidden = false;
@@ -857,16 +892,19 @@
       card.className = `item-card${selected ? " selected" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">Доступность проверим после выбора дат</span><div class="item-notes"></div></div></div><div class="quantity-control" role="group" aria-label="Количество: ${escapeHtml(catalogTitle(item))}"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong class="quantity-value" aria-live="polite" aria-atomic="true">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= 30 ? "disabled" : ""}>+</button></div></div>`;
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${escapeHtml(stockWarning(item.id, quantity))}</span><div class="item-notes"></div></div></div><div class="quantity-control" role="group" aria-label="Количество: ${escapeHtml(catalogTitle(item))}"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong class="quantity-value" aria-live="polite" aria-atomic="true">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div>`;
       const changeQuantity = (delta) => {
-        const next = Math.max(0, Math.min(30, (state.quantities.get(item.id) || 0) + delta));
+        const current = state.quantities.get(item.id) || 0;
+        if (delta > 0 && current >= quantityLimit(item.id)) return;
+        const next = Math.max(0, current + delta);
         if (next > 0 && !state.quantities.has(item.id) && state.quantities.size >= 30) { showError("В подборке может быть не больше 30 позиций."); return; }
         if (next > 0) state.quantities.set(item.id, next); else state.quantities.delete(item.id);
-        state.requestId = null; availabilityFresh = false;
+        state.requestId = null;
         card.classList.toggle("selected", next > 0);
         card.querySelector(".quantity-value").textContent = String(next);
         card.querySelector(".minus").disabled = next === 0;
-        card.querySelector(".plus").disabled = next >= 30;
+        card.querySelector(".plus").disabled = next >= quantityLimit(item.id);
+        card.querySelector(".available-badge").textContent = stockWarning(item.id, next);
         updateCartCounters(); saveDraft();
       };
       card.querySelector(".minus").addEventListener("click", () => changeQuantity(-1));
@@ -945,13 +983,16 @@
       const item = state.items.find((row) => row.id === id) || {id, name:"Позиция недоступна", available_quantity:0};
       const row = document.createElement("article"); row.className = "order-card cart-item";
       row.innerHTML = `${catalogMedia(item, "cart")}<div class="cart-item-main"><h3>${escapeHtml(catalogTitle(item))}</h3></div>`;
-      if (availabilityFresh && quantity > (item.available_quantity ?? 0)) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = `Осталось ${item.available_quantity} шт. Уменьшите количество или удалите позицию.`; row.querySelector(".cart-item-main").append(warning); }
+      if (quantity > quantityLimit(id)) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = stockWarning(id, quantity); row.querySelector(".cart-item-main").append(warning); }
+      const stockNote = document.createElement("p"); stockNote.className = "supporting stock-note"; stockNote.textContent = stockLabel(id); row.querySelector(".cart-item-main").append(stockNote);
       const controls = document.createElement("div"); controls.className = "quantity-control";
-      controls.innerHTML = `<button type="button" class="button ghost minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary plus" aria-label="Увеличить количество" ${quantity >= 30 ? "disabled" : ""}>+</button>`;
+      controls.innerHTML = `<button type="button" class="button ghost minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary plus" aria-label="Увеличить количество" ${quantity >= quantityLimit(id) ? "disabled" : ""}>+</button>`;
       const changeQuantity = delta => {
-        const next = Math.max(0, Math.min(30, (state.quantities.get(id) || 0) + delta));
+        const current = state.quantities.get(id) || 0;
+        if (delta > 0 && current >= quantityLimit(id)) return;
+        const next = Math.max(0, current + delta);
         if (next) state.quantities.set(id, next); else state.quantities.delete(id);
-        state.requestId = null; availabilityFresh = false;
+        state.requestId = null;
         if (!next) {
           const returnFocus = row.nextElementSibling?.querySelector(".plus") || row.previousElementSibling?.querySelector(".plus") || $("top-back-button");
           if (row.contains(document.activeElement)) returnFocus.focus({preventScroll:true});
@@ -962,8 +1003,9 @@
           updateCartCounters(); saveDraft(); return;
         }
         controls.querySelector("strong").textContent = String(next);
-        controls.querySelector(".plus").disabled = next >= 30;
-        container.querySelectorAll('[role="status"]').forEach(warning => warning.remove());
+        controls.querySelector(".plus").disabled = next >= quantityLimit(id);
+        const warning = row.querySelector('[role="status"]');
+        if (warning) { if (next <= quantityLimit(id)) warning.remove(); else warning.textContent = stockWarning(id, next); }
         const total = [...state.quantities.values()].reduce((sum, count) => sum + count, 0);
         $("cart-total").textContent = `Всего: ${total} шт.`;
         updateCartCounters(); saveDraft();
@@ -979,9 +1021,10 @@
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
     const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
-    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= Math.min(30, item.available_quantity) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
+    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><p class="supporting">${escapeHtml(stockWarning(item.id, state.quantities.get(item.id)))}</p><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
     $("review-content").querySelectorAll(".review-minus, .review-plus").forEach((button) => button.addEventListener("click", () => {
       const id = Number(button.dataset.id), quantity = state.quantities.get(id) || 0;
+      if (button.classList.contains("review-plus") && quantity >= quantityLimit(id)) return;
       const nextQuantity = quantity + (button.classList.contains("review-plus") ? 1 : -1);
       if (nextQuantity > 0) state.quantities.set(id, nextQuantity); else state.quantities.delete(id);
       state.requestId = null; saveDraft(); renderCart(); renderReview();
@@ -1032,6 +1075,7 @@
   }
 
   async function submit() {
+    if (exceedsStock() || !availabilityFresh) { state.step = 2; render(); return showError("Проверьте доступность оборудования на выбранный срок."); }
     if (authorized && (cartDirty || cartSaving)) { try { await flushCart(); } catch (error) { return showError(`Не удалось сохранить подборку: ${error.message}`); } }
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
     if (!state.requestId) state.requestId = newRequestId();
@@ -1615,6 +1659,7 @@
     if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
     closeDocumentViewer();
     clearError(); state.view = "admin"; state.adminMode = mode;
+    $("catalog-import-open").hidden = mode !== "catalog" || !["manager", "admin"].includes(state.role?.staff_role);
     $("admin-queues").hidden = mode !== "orders"; $("admin-request-filter-field").hidden = mode !== "orders";
     $("admin-status-field").hidden = mode !== "orders"; $("admin-sort-field").hidden = mode !== "orders"; $("admin-pagination").hidden = true; $("admin-clear-target").hidden = mode !== "orders" || !state.adminTargetId;
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
@@ -1642,11 +1687,21 @@
       const result = await api(adminBookingsPath());
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
       adminOrdersSnapshot = workflowSnapshot(result);
-      const queues = $("admin-queues"); queues.replaceChildren(); queues.hidden = !result.queues;
+      const queues = $("admin-queues"); queues.hidden = !result.queues;
       if (result.queues) for (const [key, label] of [["all", "Все"], ["review", "Нужна проверка"], ["handover", "К выдаче"], ["return", "К возврату"]]) {
-        const button = document.createElement("button"); button.type = "button"; button.className = "button secondary compact";
-        button.textContent = key === "all" ? label : `${label} · ${result.queues[key]}`; button.setAttribute("aria-pressed", String(state.adminQueue === key));
-        button.addEventListener("click", () => { state.adminQueue = key; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all"; void showAdmin("orders"); }); queues.append(button);
+        let button = queues.querySelector(`[data-queue="${key}"]`);
+        if (!button) {
+          button = document.createElement("button"); button.type = "button"; button.className = "button secondary compact"; button.dataset.queue = key;
+          const title = document.createElement("span"); title.className = "queue-label"; title.textContent = label;
+          const count = document.createElement("span"); count.className = "queue-count"; button.append(title, count);
+          button.addEventListener("click", () => {
+            state.adminQueue = key; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all";
+            for (const control of queues.children) control.setAttribute("aria-pressed", String(control === button));
+            void showAdmin("orders");
+          }); queues.append(button);
+        }
+        button.querySelector(".queue-count").textContent = key === "all" ? "" : ` · ${result.queues[key]}`;
+        button.setAttribute("aria-pressed", String(state.adminQueue === key));
       }
       const pages = Math.max(1, Math.ceil((result.total ?? result.items.length) / (result.page_size || 20)));
       if (state.adminPage >= pages) { state.adminPage = pages - 1; return showAdmin("orders"); }
@@ -2280,6 +2335,26 @@
     } catch (error) { if (sequence === catalogView.sequence) showError(`Не удалось загрузить каталог: ${error.message}`); }
   }
 
+  $("catalog-import-open").addEventListener("click", async () => {
+    if (state.adminMode !== "catalog" || !["manager", "admin"].includes(state.role?.staff_role)) return;
+    let imported;
+    const data = await workflowDialog("Импорт CSV", `<p>Скачайте шаблон и замените два учебных примера своими данными. Одна строка — один экземпляр оборудования.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><p class="csv-download-error" role="alert"></p><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><details class="csv-help"><summary>Формат CSV и правила импорта</summary><p>Шаблон содержит два учебных примера: замените их своими данными перед импортом. Одна строка — один экземпляр оборудования; для экземпляров одной модели укажите одинаковый SKU и одинаковые поля модели. Поддерживаются технический CSV в UTF-8 с разделителем «;» (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) с полями модели <code>kind</code> (вид), <code>brand</code> (бренд), <code>key_spec</code> (основная характеристика) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Состояние <code>condition</code>: <code>available</code> — доступен, <code>maintenance</code> — на ремонте, <code>retired</code> — выведен из эксплуатации. Файл импортируется целиком или не импортируется вовсе.</p></details>`, "Добавить из CSV", dialog => {
+      const heading = dialog.querySelector("h2"); heading.tabIndex = -1; heading.dataset.initialFocus = "";
+      dialog.querySelector(".catalog-template-download").addEventListener("click", async event => {
+        const button = event.currentTarget; button.disabled = true;
+        try { await downloadCatalogTemplate(); }
+        catch(error) { const message = dialog.querySelector(".csv-download-error"); message.textContent = error.message; }
+        finally { button.disabled = false; }
+      });
+    }, async form => { imported = await api("/api/miniapp/admin/catalog/import-csv", {method:"POST", body:form}); });
+    if (!data) return;
+    await showAdmin("catalog");
+    const notice = document.createElement("p"); notice.className = "notice"; notice.setAttribute("role", "status");
+    notice.textContent = `Добавлено моделей: ${imported.articles_created}; экземпляров: ${imported.equipment_created}.`;
+    $("admin-content").prepend(notice);
+    window.PolyRentalDialogs?.restoreFocus($("catalog-import-open"));
+  });
+
   function renderAdminCatalog(result, editor = null) {
     setCategories(result.categories || []);
     $("admin-panel").classList.toggle("catalog-editing", Boolean(editor));
@@ -2292,8 +2367,8 @@
       return;
     }
     const canManageItems = ["manager", "admin"].includes(state.role?.staff_role);
-    const operations = document.createElement("details"); operations.className = "catalog-operations"; operations.hidden = !canManageItems;
-    const operationsTitle = document.createElement("summary"); operationsTitle.textContent = "Импорт CSV и состав комплектов";
+    const operations = document.createElement("section"); operations.className = "catalog-operations"; operations.hidden = !canManageItems;
+    const operationsTitle = document.createElement("h3"); operationsTitle.textContent = "Состав комплектов";
     operations.append(operationsTitle);
     const dependencyNote = document.createElement("p");
     dependencyNote.textContent = "Зависимости комплектов хранятся справочно. Автоматическое добавление отключено: клиент выбирает каждую позицию отдельно. Аренда бесплатная.";
@@ -2319,28 +2394,10 @@
     });
     status.addEventListener("change", () => { catalogView.status = status.value; if (result.page != null) { catalogView.page = 0; clearTimeout(catalogView.timer); void reloadCatalogPage(); } else renderAdminCatalog(result, editor); });
     content.prepend(controls);
-    const importer = document.createElement("details"); importer.className = "catalog-import";
-    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>Шаблон содержит два учебных примера: замените их своими данными перед импортом. Одна строка — один экземпляр оборудования; для экземпляров одной модели укажите одинаковый SKU и одинаковые поля модели. Поддерживаются технический CSV в UTF-8 с разделителем «;» (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) с полями модели <code>kind</code> (вид), <code>brand</code> (бренд), <code>key_spec</code> (основная характеристика) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Состояние <code>condition</code>: <code>available</code> — доступен, <code>maintenance</code> — на ремонте, <code>retired</code> — выведен из эксплуатации. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
-    importer.querySelector(".catalog-template-download").addEventListener("click", async (event) => {
-      const button = event.currentTarget; button.disabled = true;
-      try { await downloadCatalogTemplate(); } catch (error) { showError(error.message); } finally { button.disabled = false; }
-    });
-    importer.querySelector("form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget; const button = form.querySelector('[type="submit"]'); button.disabled = true;
-      try {
-        const result = await api("/api/miniapp/admin/catalog/import-csv", { method: "POST", body: new FormData(form) });
-        await showAdmin("catalog");
-        const notice = document.createElement("p"); notice.className = "notice"; notice.setAttribute("role", "status");
-        notice.textContent = `Добавлено моделей: ${result.articles_created}; экземпляров: ${result.equipment_created}.`;
-        $("admin-content").prepend(notice);
-      } catch (error) { showError(error.message); button.disabled = false; }
-    });
-    operations.append(importer);
 
     if (result.dependencies.length) {
       const dependencies = document.createElement("article"); dependencies.className = "admin-card";
-      dependencies.innerHTML = `<h3>Состав комплектов</h3><div class="dependency-list"></div>`;
+      dependencies.innerHTML = `<div class="dependency-list"></div>`;
       const list = dependencies.querySelector(".dependency-list");
       for (const item of result.dependencies) {
         const parent = result.articles.find((article) => article.id === item.parent_article_id);
@@ -2507,7 +2564,7 @@
       }
       articleGrid.append(card);
     }
-    content.append(operations);
+    if (result.dependencies.length) content.append(operations);
     if (result.page != null) {
       const pages = Math.max(1, Math.ceil(result.total / (result.page_size || 20)));
       if (pages > 1 && !categoryIndex) {
@@ -2820,7 +2877,9 @@
       });
       document.body.append(dialog); window.PolyRentalDialogs?.refresh(); if (setup) setup(dialog);
       registerStaffForm(dialog.querySelector("form"));
-      (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus();
+      const initial = dialog.querySelector("[data-initial-focus]");
+      if (initial) { initial.focus({preventScroll:true}); dialog.querySelector(".dialog-card").scrollTop = 0; }
+      else (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus();
     });
   }
 

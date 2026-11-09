@@ -14,6 +14,7 @@ const {fixture, base} = require('./completion-ui.cjs');
   await page.route('**/api/miniapp/admin/catalog/articles/1/hide', route => { hidden=true; return route.fulfill({json:{ok:true}}); });
   await page.locator('[data-mode="catalog"]').click();
   assert.equal(await page.getByRole('button',{name:'Настроить состав комплекта',exact:true}).isVisible(),false);
+  assert.equal(await page.getByRole('button',{name:'Импорт CSV',exact:true}).isVisible(),false);
   assert.equal(await page.getByText('Скрытые тестовые').count(),0);
   assert.equal(await page.getByRole('button',{name:'Создать категорию'}).count(),0);
   await page.getByRole('button',{name:'Редактировать категории'}).click();

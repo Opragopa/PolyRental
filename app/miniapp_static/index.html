@@ -238,6 +238,7 @@
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
           <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button>
         </div>
+        <div class="admin-tools">
         <details id="admin-settings" class="admin-settings"><summary>Настройки</summary>
         <details id="operator-notification-settings" class="calendar-sync"><summary>Тихие часы уведомлений</summary><p>Обязательные уведомления будут доставлены после тихих часов. Пустые поля означают доставку в рабочее время.</p><form id="operator-quiet-form" class="form-grid"><label class="field"><span>Начало</span><input name="quiet_start" type="time"></label><label class="field"><span>Конец</span><input name="quiet_end" type="time"></label><button class="button secondary" type="submit">Сохранить</button><p id="operator-quiet-status" role="status"></p></form></details>
         <details class="calendar-sync">
@@ -248,6 +249,8 @@
           <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
         </details>
         </details>
+        <button id="catalog-import-open" class="button secondary compact" type="button" hidden>Импорт CSV</button>
+        </div>
         <div id="admin-queues" class="admin-queues" role="group" aria-label="Следующие действия" hidden></div><label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без ответственного</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><label id="admin-status-field" class="field"><span>Статус заявки</span><select id="admin-status"><option value="all">Все статусы</option><option value="pending">Ожидает проверки</option><option value="needs_changes">Нужно исправить</option><option value="confirmed">Подтверждена</option><option value="preparing">Комплектуется</option><option value="ready">Готова</option><option value="issued">В аренде</option><option value="return_inspection">Проверяется</option><option value="returned">Завершена</option><option value="cancelled">Отменена</option><option value="expired">Удержание истекло</option></select></label><label id="admin-sort-field" class="field"><span>Сортировка</span><select id="admin-sort"><option value="date">По дате создания</option><option value="status">По статусу</option></select></label><button id="admin-clear-target" type="button" class="button ghost compact" hidden>Показать все заявки</button><div id="admin-content" role="status"></div><div id="admin-pagination" class="action-row" hidden><button id="admin-prev" class="button secondary" type="button">Назад</button><span id="admin-page"></span><button id="admin-next" class="button secondary" type="button">Далее</button></div>
       </section>
     </main>
