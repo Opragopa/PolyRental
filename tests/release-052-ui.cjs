@@ -62,7 +62,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    assert.ok(calendarCalls>0);assert.ok(await page.locator('.calendar-availability-partial').count());assert.ok(await page.locator('.calendar-availability-none').count());
    color='partial';await page.locator('#start-time').fill('10:00');await page.clock.runFor(300);await page.locator('[data-date="2026-10-30"][data-availability="partial"]').waitFor();
    color='none';await page.locator('#end-time').fill('18:00');await page.clock.runFor(300);await page.locator('[data-date="2026-10-30"][data-availability="none"]').waitFor();
-   assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el=>getComputedStyle(el,'::before').backgroundColor),'rgb(251, 220, 222)');
+   assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el=>getComputedStyle(el,'::before').backgroundColor),'rgb(141, 35, 48)');
    assert.equal(await page.locator('[data-date="2026-11-02"]').getAttribute('data-availability'),'all','a red selected interval must not recolor individually free days');
    const delays=await page.locator('#range-calendar .calendar-day').evaluateAll(nodes=>Object.fromEntries(nodes.filter(el=>el.dataset.availability).map(el=>[el.dataset.date,parseFloat(el.style.getPropertyValue('--availability-reveal-delay'))])));
    assert.ok(delays['2026-10-31']>delays['2026-10-30'] && delays['2026-11-06']>delays['2026-10-30'],'daily colors reveal diagonally from top left');

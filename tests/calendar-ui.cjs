@@ -135,6 +135,21 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     const after=await cell.boundingBox();assert.equal(before.width,after.width);assert.equal(before.height,after.height);
     await hover.emulateMedia({reducedMotion:'reduce'});
     assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
+    for (const status of ['all','partial','none']) {
+      await hover.evaluate(status=>{
+        window.selectionTest=new PolyRentalCalendar.RangeCalendar(document.querySelector('#range-calendar'),{minimum:'2026-10-30',start:'2026-11-02',end:'2026-11-06',dayState:()=>status});
+      },status);
+      const shade=selector=>hover.locator(selector).evaluate(el=>({fill:getComputedStyle(el,'::before').backgroundColor,color:getComputedStyle(el).color,status:el.dataset.availability}));
+      const outside=await shade('[data-date="2026-11-09"]');
+      const inside=await shade('[data-date="2026-11-04"]');
+      const endpoint=await shade('[data-date="2026-11-02"]');
+      assert.notEqual(inside.fill,outside.fill,`${status}: selected interval must darken`);
+      assert.notEqual(endpoint.fill,inside.fill,`${status}: endpoints must have stronger fill`);
+      assert.equal(endpoint.color,'rgb(255, 255, 255)');
+      assert.equal(inside.status,status,'selection must preserve availability');
+      await hover.evaluate(()=>selectionTest.setRange('2026-11-09','2026-11-11'));
+      assert.equal((await shade('[data-date="2026-11-04"]')).fill,outside.fill,'old range must lose shading');
+    }
     await hover.close();
     // Signed launch uses the server's role, including the optional client mode.
     const page=await browser.newPage({viewport:{width:390,height:844}});
