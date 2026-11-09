@@ -54,6 +54,8 @@ await page.locator('#availability-edit-cart').click();await page.locator('#cart-
 await page.locator('#cart-items .plus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'2');
 await page.locator('#top-back-button').click();await card(3).waitFor();
 assert.equal(await card(3).locator('.quantity-value').innerText(),'2');
+assert.match(await card(3).innerText(),/Всего для аренды: 2/);
+assert.doesNotMatch(await card(3).innerText(),/Свободно на выбранный срок|Выберите другой срок|Занято/);
 await card(3).locator('.minus').click();assert.equal(await card(3).locator('.plus').isEnabled(),true,'catalog includes busy equipment on selected dates');
 await card(3).locator('.plus').click();await card(3).locator('.plus').dispatchEvent('click');
 assert.equal(await card(3).locator('.quantity-value').innerText(),'2');

@@ -28,7 +28,8 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
     if(url.pathname==='/api/miniapp/catalog')return route.fulfill({json:{items:[item],selected_items:[item],total:1,page:0,page_size:20}});
     if(url.pathname==='/api/miniapp/availability/calendar'){
      calendarCalls++;const request=route.request().postDataJSON(),first=new Date(request.first_day+'T12:00:00Z');
-     return route.fulfill({json:{selected:color,days:Object.fromEntries(Array.from({length:42},(_,i)=>{const date=new Date(first);date.setUTCDate(date.getUTCDate()+i);return [date.toISOString().slice(0,10),['all','partial','none'][i%3]];}))}});
+     const daily=Object.fromEntries(Array.from({length:42},(_,i)=>{const date=new Date(first);date.setUTCDate(date.getUTCDate()+i);const day=date.toISOString().slice(0,10);return [day,day==='2026-10-30'?color:day==='2026-11-02'?'all':['all','partial','none'][i%3]];}));
+     return route.fulfill({json:{selected:color,days:daily,daily}});
     }
     if(url.pathname.startsWith('/api/'))return route.fulfill({json:{items:[]}});
     return route.fulfill({contentType:'text/html',body:html});
@@ -51,6 +52,9 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    await page.locator('#cart-items .plus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'2');
    await page.locator('#cart-items .minus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'1');
    await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');await page.locator('#main-button').click();
+   await page.clock.runFor(300);
+   await page.locator('#range-calendar [data-availability]').first().waitFor();
+   assert.equal(await page.locator('#start-date').inputValue(),'','daily colors are available before choosing dates');
    await page.locator('[data-date="2026-10-30"]').click();await page.locator('[data-date="2026-11-02"]').click();
    assert.equal(await page.locator('#start-time').inputValue(),'');assert.equal(await page.locator('#end-time').inputValue(),'');
    await page.locator('#main-button').click();assert.equal(await page.locator('#start-time').getAttribute('aria-invalid'),'true');
@@ -58,7 +62,10 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    assert.ok(calendarCalls>0);assert.ok(await page.locator('.calendar-availability-partial').count());assert.ok(await page.locator('.calendar-availability-none').count());
    color='partial';await page.locator('#start-time').fill('10:00');await page.clock.runFor(300);await page.locator('[data-date="2026-10-30"][data-availability="partial"]').waitFor();
    color='none';await page.locator('#end-time').fill('18:00');await page.clock.runFor(300);await page.locator('[data-date="2026-10-30"][data-availability="none"]').waitFor();
-   assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el=>getComputedStyle(el,'::before').backgroundColor),'rgba(0, 0, 0, 0)');
+   assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el=>getComputedStyle(el,'::before').backgroundColor),'rgb(251, 220, 222)');
+   assert.equal(await page.locator('[data-date="2026-11-02"]').getAttribute('data-availability'),'all','a red selected interval must not recolor individually free days');
+   const delays=await page.locator('#range-calendar .calendar-day').evaluateAll(nodes=>Object.fromEntries(nodes.filter(el=>el.dataset.availability).map(el=>[el.dataset.date,parseFloat(el.style.getPropertyValue('--availability-reveal-delay'))])));
+   assert.ok(delays['2026-10-31']>delays['2026-10-30'] && delays['2026-11-06']>delays['2026-10-30'],'daily colors reveal diagonally from top left');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    await page.screenshot({path:`artifacts/release-052/calendar-${width}.png`,fullPage:true});
    await page.locator('#top-back-button').click();await page.locator('#top-back-button').click();

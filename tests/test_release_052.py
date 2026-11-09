@@ -53,3 +53,29 @@ def test_public_composition_and_calendar_api_validation(monkeypatch):
         assert result.status_code == 200 and result.json()["selected"] == "none"
         assert client.post("/api/miniapp/availability/calendar", json={**body, "end": body["start"]}, headers=headers).status_code == 422
         assert client.post("/api/miniapp/availability/calendar", json={**body, "lines": []}, headers=headers).status_code == 422
+
+
+def test_daily_colors_do_not_repeat_the_whole_rental_interval(monkeypatch):
+    from app.db import Article, Booking, BookingLine
+    from zoneinfo import ZoneInfo
+    configure(monkeypatch)
+    camera = article_with_assets("DAILY-CAMERA", 2)
+    start = (now().astimezone(ZoneInfo("Europe/Moscow")) + timedelta(days=4)).replace(hour=0, minute=0, second=0, microsecond=0)
+    with Session.begin() as session:
+        session.get(Article, camera).buffer_hours = 0
+        booking = Booking(customer_id=42, customer_name="QA", customer_contact="@qa", status="confirmed",
+                          starts_at=start, ends_at=start + timedelta(days=2))
+        session.add(booking); session.flush()
+        session.add(BookingLine(booking_id=booking.id, article_id=camera, quantity=1, hourly_rate=0))
+    result = calendar_availability(start, start + timedelta(days=10), [{"article_id":camera,"quantity":2}], start.date())
+    assert result['selected'] == 'partial'
+    assert len(result['daily']) == 42
+    assert result['daily'][start.date().isoformat()] == 'partial'
+    assert result['daily'][(start + timedelta(days=2)).date().isoformat()] == 'all'
+    assert result['daily'][(start + timedelta(days=20)).date().isoformat()] == 'all'
+    with Session.begin() as session:
+        session.scalar(select(BookingLine).where(BookingLine.article_id == camera)).quantity = 2
+    result = calendar_availability(start, start + timedelta(days=10), [{"article_id":camera,"quantity":1}], start.date())
+    assert result['selected'] == 'none'
+    assert result['daily'][start.date().isoformat()] == 'none'
+    assert result['daily'][(start + timedelta(days=2)).date().isoformat()] == 'all'

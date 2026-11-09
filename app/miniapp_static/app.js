@@ -656,7 +656,7 @@
 
   function render() {
     if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
-      availabilityCheck = null; availabilitySequence++; stockLoading = false; state.busy = false;
+      availabilityCheck = null; availabilitySequence++; state.busy = false;
     }
     if (state.view !== "orders") {
       profileIdentitySequence++; profileIdentityData = null;
@@ -722,26 +722,17 @@
   }
 
   const quantityStocks = new Map();
-  let stockLoading = false;
-  function stockPeriod() { return $("start").value && $("end").value ? `${$("start").value}|${$("end").value}` : ""; }
   function quantityLimit(id) {
     const capacity = quantityStocks.get(id)?.capacity;
     return Number.isInteger(capacity) ? Math.max(0, Math.min(30, capacity)) : 0;
   }
   function stockLabel(id) {
-    const stock = quantityStocks.get(id);
-    if (!Number.isInteger(stock?.capacity)) return "Проверяем общее количество…";
-    const total = `Всего для аренды: ${stock.capacity}`;
-    if (!stockPeriod()) return total;
-    if (stockLoading || stock.period !== stockPeriod() || !Number.isInteger(stock.available)) return `${total}. Доступность на срок ещё не проверена.`;
-    return `${total}. Свободно на выбранный срок: ${stock.available}`;
+    const capacity = quantityStocks.get(id)?.capacity;
+    return Number.isInteger(capacity) ? `Всего для аренды: ${capacity}` : "Проверяем общее количество…";
   }
   function exceedsStock() { return [...state.quantities].some(([id, quantity]) => quantity > quantityLimit(id)); }
   function stockWarning(id, quantity) {
-    const stock = quantityStocks.get(id);
-    if (quantity > quantityLimit(id)) return `${stockLabel(id)}. Уменьшите количество или удалите позицию.`;
-    if (stockPeriod() && stock?.period === stockPeriod() && Number.isInteger(stock.available) && quantity > stock.available) return `${stockLabel(id)}. Выберите другой срок или уменьшите количество.`;
-    return stockLabel(id);
+    return quantity > quantityLimit(id) ? `${stockLabel(id)}. Уменьшите количество или удалите позицию.` : stockLabel(id);
   }
   function availabilityPath(start, end) {
     const params = new URLSearchParams({start:toIso(start), end:toIso(end), page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:$("client-catalog-search").value.trim()});
@@ -767,9 +758,7 @@
   }
   async function loadItems(checkAvailability = false) {
     if (typeof checkAvailability !== "boolean") checkAvailability = false;
-    if (stockPeriod() && toIso($("start").value) && toIso($("end").value) && $("start").value < $("end").value) checkAvailability = true;
     if (checkAvailability) availabilityFresh = false;
-    stockLoading = true;
     const sequence = ++availabilitySequence;
     const periodStart = $("start").value, periodEnd = $("end").value;
     const requestedPage = clientCatalog.page, requestedQuery = $("client-catalog-search").value.trim(), requestedCategory = clientCatalog.category;
@@ -791,9 +780,8 @@
       for (const item of state.items) {
         const old = quantityStocks.get(item.id) || {};
         const capacity = Number.isInteger(item.capacity) ? item.capacity : (old.capacity ?? (Number.isInteger(item.available_quantity) ? item.available_quantity : null));
-        quantityStocks.set(item.id, {capacity: capacity ?? old.capacity, period: checkAvailability ? stockPeriod() : "", available: checkAvailability ? (item.available_quantity ?? 0) : null});
+        quantityStocks.set(item.id, {capacity: capacity ?? old.capacity});
       }
-      stockLoading = false;
       availabilityFresh=checkAvailability;
       if (state.view === "flow" && state.step === 1) renderCart();
       if (state.view === "flow" && state.step === 3) renderReview();
@@ -819,7 +807,7 @@
       renderItems(); return true;
     } catch (error) {
       if (sequence !== availabilitySequence) return false;
-      stockLoading = false; if (!checkAvailability) quantityStocks.clear();
+      if (!checkAvailability) quantityStocks.clear();
       if (state.view === "flow" && state.step === 1) renderCart();
       if (state.view === "flow" && state.step === 3) renderReview();
       updateCartCounters();
@@ -920,7 +908,6 @@
       details.append(summary, composition); notes.append(details);
       if (item.name && item.name !== catalogTitle(item)) { const full = document.createElement("p"); full.textContent = item.name; notes.append(full); }
       if (item.owners?.length) { const owner = document.createElement("p"); owner.textContent=`Владелец: ${item.owners.join(", ")}`; notes.append(owner); }
-      for (const block of item.unavailability || []) { const note=document.createElement("p"); note.textContent=`Занято вне сервиса: ${block.reason}, до ${dateText(block.end)} МСК`; notes.append(note); }
       $("items-grid").append(card);
     }
     const pages = Math.max(1, Math.ceil(clientCatalog.total / clientCatalog.pageSize));
@@ -932,34 +919,38 @@
     if (nearestProposal && nearestProposal.key !== nearestSelectionKey()) { nearestProposal = null; $("nearest-status").textContent = ""; $("nearest-apply").hidden = true; }
   }
   function nearestSelectionKey() { return JSON.stringify([$("start").value, $("end").value, [...state.quantities].sort((a,b) => a[0] - b[0])]); }
-  let calendarAvailability = null, calendarSequence = 0, calendarTimer = null;
+  let calendarAvailability = null, calendarAvailabilityKey = "", calendarSequence = 0, calendarTimer = null;
   const availabilityLabels = {all:"Всё оборудование доступно", partial:"Доступна часть оборудования", none:"Нет доступного оборудования"};
   function calendarDayState(day) {
-    if (!calendarAvailability) return "";
-    if (day >= $("start-date").value && day <= $("end-date").value) return calendarAvailability.selected;
-    return calendarAvailability.days?.[day] || "";
+    if (!calendarAvailability || day < minimumBookingDate()) return "";
+    return (calendarAvailability.daily || calendarAvailability.days)?.[day] || "";
   }
   function queueCalendarAvailability() {
     const sequence = ++calendarSequence;
-    clearTimeout(calendarTimer); calendarAvailability = null; rangeCalendar?.render();
+    clearTimeout(calendarTimer);
+    const dailyKey = JSON.stringify([rangeCalendar?.month, [...state.quantities].sort((a,b) => a[0] - b[0])]);
+    if (dailyKey !== calendarAvailabilityKey) calendarAvailability = null;
+    rangeCalendar?.render();
     let status = $("calendar-availability-status");
     if (!status) { status = document.createElement("p"); status.id = "calendar-availability-status"; status.className = "supporting"; status.setAttribute("role", "status"); $("range-calendar").after(status); }
     status.textContent = "";
     const startDate = $("start-date").value, endDate = $("end-date").value;
-    if (!rangeCalendar || !startDate || !endDate || !state.quantities.size) return;
+    if (!rangeCalendar || !state.quantities.size) return;
     if (["start", "end"].some(id => $(`${id}-time`).value && !bookingTimeValue(id))) { status.textContent = "Введите корректное время, чтобы проверить доступность."; return; }
     status.textContent = "Проверяем доступность…";
     calendarTimer = setTimeout(async () => {
       // Until time is entered, check the whole selected days conservatively.
-      const start = `${startDate}T${bookingTimeValue("start") || "00:00"}`;
-      const end = bookingTimeValue("end") ? `${endDate}T${bookingTimeValue("end")}` : `${addIsoDays(endDate, 1)}T00:00`;
+      const anchor = startDate || minimumBookingDate();
+      const start = `${anchor}T${bookingTimeValue("start") || "00:00"}`;
+      const end = endDate && bookingTimeValue("end") ? `${endDate}T${bookingTimeValue("end")}` : `${addIsoDays(endDate || anchor, 1)}T00:00`;
       if (end <= start) { status.textContent = "Возврат должен быть позже получения."; return; }
       const first = addIsoDays(rangeCalendar.month, -((new Date(`${rangeCalendar.month}T12:00:00Z`).getUTCDay() + 6) % 7));
       try {
         const data = preview ? {selected:"all", days:Object.fromEntries(Array.from({length:42}, (_, i) => [addIsoDays(first, i), "all"]))} : await api("/api/miniapp/availability/calendar", {method:"POST", body:JSON.stringify({start:toIso(start), end:toIso(end), first_day:first, lines:[...state.quantities].map(([article_id, quantity]) => ({article_id, quantity}))})});
         if (sequence !== calendarSequence) return;
-        calendarAvailability = data; rangeCalendar.render();
-        status.textContent = `${availabilityLabels[data.selected] || ""}. Зелёный — всё, жёлтый — часть, красный — ничего. Другие даты — начало аренды той же длительности.${!$("start-time").value || !$("end-time").value ? " Пока время не выбрано, проверяем полные дни." : ""}`;
+        calendarAvailability = data; calendarAvailabilityKey = dailyKey; rangeCalendar.render();
+        const selected = startDate && endDate && bookingTimeValue("start") && bookingTimeValue("end") ? `${availabilityLabels[data.selected] || ""} на выбранный срок. ` : "";
+        status.textContent = `${selected}Зелёный — хватает всего, жёлтый — хватает части, красный — нет свободных экземпляров. Цвет каждой ячейки относится только к этому полному дню; выбранные даты и время проверяются отдельно.`;
       } catch (_) { if (sequence === calendarSequence) status.textContent = "Не удалось подсветить даты. Нажмите «Проверить заявку», чтобы повторить проверку."; }
     }, 250);
   }
@@ -987,7 +978,7 @@
       const item = state.items.find((row) => row.id === id) || {id, name:"Позиция недоступна", available_quantity:0};
       const row = document.createElement("article"); row.className = "order-card cart-item";
       row.innerHTML = `${catalogMedia(item, "cart")}<div class="cart-item-main"><h3>${escapeHtml(catalogTitle(item))}</h3></div>`;
-      if (quantity > quantityLimit(id) || (availabilityFresh && quantity > (item.available_quantity ?? 0))) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = stockWarning(id, quantity); row.querySelector(".cart-item-main").append(warning); }
+      if (quantity > quantityLimit(id)) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = stockWarning(id, quantity); row.querySelector(".cart-item-main").append(warning); }
       const stockNote = document.createElement("p"); stockNote.className = "supporting stock-note"; stockNote.textContent = stockLabel(id); row.querySelector(".cart-item-main").append(stockNote);
       const controls = document.createElement("div"); controls.className = "quantity-control";
       controls.innerHTML = `<button type="button" class="button ghost minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary plus" aria-label="Увеличить количество" ${quantity >= quantityLimit(id) ? "disabled" : ""}>+</button>`;
@@ -1009,7 +1000,7 @@
         controls.querySelector("strong").textContent = String(next);
         controls.querySelector(".plus").disabled = next >= quantityLimit(id);
         const warning = row.querySelector('[role="status"]');
-        if (warning) { if (next <= quantityLimit(id) && (!availabilityFresh || next <= (item.available_quantity ?? 0))) warning.remove(); else warning.textContent = stockWarning(id, next); }
+        if (warning) { if (next <= quantityLimit(id)) warning.remove(); else warning.textContent = stockWarning(id, next); }
         const total = [...state.quantities.values()].reduce((sum, count) => sum + count, 0);
         $("cart-total").textContent = `Всего: ${total} шт.`;
         updateCartCounters(); saveDraft();

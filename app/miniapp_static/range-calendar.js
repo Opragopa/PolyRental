@@ -48,7 +48,8 @@
       const buttons = [...this.element.querySelectorAll(".calendar-day")];
       const range = buttons.filter(button => this.range.start && this.range.end && button.dataset.date >= this.range.start && button.dataset.date <= this.range.end);
       const formatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
-      for (const button of buttons) {
+      for (const [index, button] of buttons.entries()) {
+        const previousAvailability = button.dataset.availability;
         const day = button.dataset.date, selected = day === this.range.start || day === this.range.end;
         const note = this.dayNote(day), availability = this.dayState(day);
         button.disabled = day < this.minimum || this.isDisabled(day);
@@ -57,6 +58,13 @@
         for (const state of ["all", "partial", "none"]) button.classList.toggle(`calendar-availability-${state}`, availability === state);
         if (["all", "partial", "none"].includes(availability)) button.dataset.availability = availability;
         else delete button.dataset.availability;
+        if (previousAvailability !== availability) {
+          button.classList.remove("calendar-status-reveal");
+          if (["all", "partial", "none"].includes(availability)) {
+            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 18}ms`);
+            button.classList.add("calendar-status-reveal");
+          }
+        }
         button.classList.toggle("calendar-day-busy", Boolean(note));
         button.title = note;
         button.setAttribute("aria-pressed", String(selected));
@@ -122,6 +130,8 @@
         if (["all", "partial", "none"].includes(availability)) {
           button.classList.add(`calendar-availability-${availability}`);
           button.dataset.availability = availability;
+          button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 18}ms`);
+          button.classList.add("calendar-status-reveal");
         }
         button.classList.toggle("calendar-day-busy", Boolean(note));
         if (note) button.title = note;
@@ -145,7 +155,7 @@
           if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); this.onMonthChange(); }
           else grid.querySelector(`[data-date="${next}"]`).focus();
         });
-        button.addEventListener("animationend", () => button.classList.remove("calendar-day-pop", "calendar-day-reveal"));
+        button.addEventListener("animationend", () => button.classList.remove("calendar-day-pop", "calendar-day-reveal", "calendar-status-reveal"));
         grid.append(button);
       }
       this.element.append(header, weekdays, grid);

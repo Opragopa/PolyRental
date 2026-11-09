@@ -1757,13 +1757,13 @@ details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { s
 .avatar-placeholder { box-shadow:inset 0 0 0 1px var(--line); }
 .avatar-loading::after { content:""; position:absolute; inset:0; background:linear-gradient(100deg,transparent 20%,color-mix(in srgb,var(--text) 12%,transparent) 50%,transparent 80%); transform:translateX(-100%); animation:avatar-light-sweep 1.3s ease-in-out infinite; }
 @keyframes avatar-light-sweep { to { transform:translateX(100%); } }
-#range-calendar .calendar-availability-all { background:#d7f1e2; color:#145c35; }
-#range-calendar .calendar-availability-partial { background:#fff0bd; color:#735000; }
-#range-calendar .calendar-availability-none { background:#fbdcde; color:#8d2330; }
+#range-calendar .calendar-availability-all { --day-status-bg:#d7f1e2; --day-status-ink:#145c35; color:var(--day-status-ink); background:transparent; }
+#range-calendar .calendar-availability-partial { --day-status-bg:#fff0bd; --day-status-ink:#735000; color:var(--day-status-ink); background:transparent; }
+#range-calendar .calendar-availability-none { --day-status-bg:#fbdcde; --day-status-ink:#8d2330; color:var(--day-status-ink); background:transparent; }
 #range-calendar .calendar-day[data-availability].selected { outline:2px solid currentColor; outline-offset:-2px; }
 #range-calendar .calendar-day[data-availability].in-range { box-shadow:inset 0 -3px currentColor; }
-#range-calendar .calendar-day[data-availability]::after { display:none; }
-#range-calendar .calendar-day[data-availability]::before { background:transparent; }
+#range-calendar .calendar-day[data-availability]::after { display:block; content:""; position:absolute; inset:0; width:auto; height:auto; border-radius:inherit; background:color-mix(in srgb, var(--day-status-ink) 16%, transparent); opacity:0; pointer-events:none; transform:none; }
+#range-calendar .calendar-day[data-availability]::before { background:var(--day-status-bg); }
 @media (prefers-reduced-motion:reduce) { .article-collapse, .catalog-media > img { transition:none; } .avatar-loading::after, .client-item-details[open] > p { animation:none; } }
 
 .dates-view .date-grid .keyboard-time { width:100%; max-width:220px; font-variant-numeric:tabular-nums; }
@@ -1952,3 +1952,20 @@ h1, h2, h3 { text-wrap: balance; }
 #admin-queues .queue-count { flex-shrink:0; min-width:5ch; white-space:nowrap; font-variant-numeric:tabular-nums; }
 #admin-queues [data-queue="all"] .queue-count { display:none; }
 @media(max-width:600px) { #admin-queues { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Availability paint moves diagonally; cell geometry stays fixed. */
+@media (prefers-reduced-motion:no-preference) {
+  #range-calendar .calendar-status-reveal::before { animation:calendar-status-wipe 200ms ease-out both; animation-delay:var(--availability-reveal-delay,0ms); }
+  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after { opacity:1; animation:calendar-status-wipe 180ms ease-out both; }
+  @keyframes calendar-status-wipe { from { clip-path:polygon(0 0,0 0,0 0); } to { clip-path:polygon(0 0,200% 0,0 200%); } }
+}
+@media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
+  #range-calendar .calendar-day[data-availability]:not(:disabled):hover::after,
+  #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:calendar-status-wipe 180ms ease-out both; }
+}
+#range-calendar .calendar-day[data-availability]:focus-visible { outline:2px solid var(--day-status-ink); outline-offset:2px; }
+@media (prefers-reduced-motion:reduce) {
+  #range-calendar .calendar-status-reveal::before { animation:none; clip-path:none; }
+  #range-calendar .calendar-day[data-availability]:hover::after,
+  #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:none; }
+}

@@ -53,7 +53,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         assert.equal(await page.locator("#start-time").isDisabled(),true);
         await page.locator('[data-date="2026-11-02"]').click();
         assert.equal(await page.locator(".calendar-day.in-range").count(),2);
-        assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "calendar-day-reveal");
+        assert.ok(["calendar-day-reveal", "calendar-status-wipe"].includes(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName)));
         await page.emulateMedia({reducedMotion:"reduce"});
         assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "none");
         await page.emulateMedia({reducedMotion:"no-preference"});
@@ -122,6 +122,20 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         await page.close();
       }
     }
+    // Status hover paints diagonally without changing the cell's geometry.
+    const hover=await browser.newPage({viewport:{width:1024,height:768}});
+    await hover.route('**/*',route=>route.fulfill({body:''}));
+    await hover.setContent('<div id="range-calendar" class="range-calendar"></div>');
+    for(const name of ['style.css','design.css','motion.css']) await hover.addStyleTag({content:fs.readFileSync(path.join(assets,name),'utf8')});
+    await hover.addScriptTag({content:fs.readFileSync(path.join(assets,'range-calendar.js'),'utf8')});
+    await hover.evaluate(()=>new PolyRentalCalendar.RangeCalendar(document.querySelector('#range-calendar'),{minimum:'2026-10-30',dayState:day=>day>='2026-10-30'?'all':''}));
+    const cell=hover.locator('[data-date="2026-10-30"]');const before=await cell.boundingBox();
+    await cell.hover();
+    assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'calendar-status-wipe');
+    const after=await cell.boundingBox();assert.equal(before.width,after.width);assert.equal(before.height,after.height);
+    await hover.emulateMedia({reducedMotion:'reduce'});
+    assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
+    await hover.close();
     // Signed launch uses the server's role, including the optional client mode.
     const page=await browser.newPage({viewport:{width:390,height:844}});
     const errors=[]; page.on("pageerror",error=>errors.push(error.message));

@@ -540,7 +540,7 @@ def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(
 
 
 def calendar_availability(start, end, requested, first_day):
-    """Evaluate a visible calendar in one snapshot; each day starts an equal-length rental."""
+    """Return per-day occupancy plus the selected interval and legacy start-date states."""
     from zoneinfo import ZoneInfo
     local = ZoneInfo("Europe/Moscow")
     if start.tzinfo is None or end.tzinfo is None or start >= end or end - start > timedelta(days=366):
@@ -552,19 +552,23 @@ def calendar_availability(start, end, requested, first_day):
         raise ValueError("Укажите не более 30 позиций и 30 единиц каждой позиции")
     start, end = start.astimezone(local), end.astimezone(local)
     first = datetime.combine(first_day, start.timetz())
+    midnight = datetime.combine(first_day, datetime.min.time(), tzinfo=local)
     duration = end - start
     with Session() as session:
         active = set(session.scalars(select(Article.id).where(Article.id.in_(quantities),
             Article.is_active.is_(True), Article.archived_at.is_(None))))
-        snapshot = AvailabilitySnapshot(session, list(active), min(first, start), max(first + timedelta(days=42) + duration, end))
-        def state_at(left):
-            counts = [max(0, snapshot.capacities[aid] - snapshot.peak(aid, left, left + duration))
+        snapshot = AvailabilitySnapshot(session, list(active), min(midnight, first, start), max(first + timedelta(days=42) + duration, midnight + timedelta(days=42), end))
+        def state_at(left, right=None):
+            right = right or left + duration
+            counts = [max(0, snapshot.capacities[aid] - snapshot.peak(aid, left, right))
                       if aid in active else 0 for aid in quantities]
             if all(count >= quantity for count, quantity in zip(counts, quantities.values())):
                 return "all"
             return "partial" if any(counts) else "none"
         return {"selected": state_at(start), "days": {
-            (first + timedelta(days=i)).date().isoformat(): state_at(first + timedelta(days=i)) for i in range(42)}}
+            (first + timedelta(days=i)).date().isoformat(): state_at(first + timedelta(days=i)) for i in range(42)},
+            "daily": {(midnight + timedelta(days=i)).date().isoformat():
+                      state_at(midnight + timedelta(days=i), midnight + timedelta(days=i + 1)) for i in range(42)}}
 
 
 def nearest_available_period(start, end, requested, horizon_days=90):
