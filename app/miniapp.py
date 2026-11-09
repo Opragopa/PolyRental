@@ -1373,14 +1373,14 @@ async def admin_catalog_options(page: int = Query(default=0, ge=0, le=100000), p
 
 @router.put("/api/miniapp/admin/catalog/articles/{article_id}/photo")
 async def admin_catalog_photo(article_id: int, photo: UploadFile = File(...), user=Depends(require_catalog_manager)):
-    from .catalog_images import MAX_UPLOAD, save_image
+    from .catalog_images import MAX_UPLOAD, save_image, preview_data
     raw = await photo.read(MAX_UPLOAD + 1)
     await photo.close()
     try:
-        await asyncio.to_thread(save_image, article_id, raw, user["id"])
+        preview = await asyncio.to_thread(save_image, article_id, raw, user["id"])
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return {"ok": True}
+    return {"ok": True, "image_data": preview_data(preview)}
 
 
 @router.delete("/api/miniapp/admin/catalog/articles/{article_id}/photo")

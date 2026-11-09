@@ -170,7 +170,9 @@ def test_transparent_catalog_photo_survives_upload_storage_and_public_api(monkey
         response=client.put(f'/api/miniapp/admin/catalog/articles/{article_id}/photo',
             headers=headers,files={'photo':('transparent.png',source.getvalue(),'image/png')})
         assert response.status_code==200,response.text
+        assert response.json()['image_data'].startswith('data:image/webp;base64,')
         item=next(item for item in client.get('/api/miniapp/catalog').json()['items'] if item['id']==article_id)
+        assert response.json()['image_data'] == item['image_data']
         data=base64.b64decode(item['image_data'].split(',',1)[1])
         with Session() as session:assert session.get(ArticleImage,article_id).webp==data
         with Image.open(io.BytesIO(data)) as result:

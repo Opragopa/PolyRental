@@ -1972,3 +1972,19 @@ h1, h2, h3 { text-wrap: balance; }
   #range-calendar .calendar-day[data-availability]:hover::after,
   #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:none; }
 }
+
+/* Product photos retain an explicit loading or error state. */
+.photo-spinner { display:inline-block; flex:none; width:22px; height:22px; border:3px solid color-mix(in srgb,var(--accent) 22%,transparent); border-top-color:var(--accent); border-radius:50%; animation:photo-spin .8s linear infinite; }
+@keyframes photo-spin { to { transform:rotate(360deg); } }
+.catalog-photo-progress { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--surface); }
+.catalog-photo-retry { position:absolute; inset:0; width:100%; height:100%; min-width:44px; min-height:44px; display:none; flex-direction:column; align-items:center; justify-content:center; gap:3px; border:1px solid var(--line); border-radius:inherit; background:var(--surface); color:var(--muted); cursor:pointer; font:inherit; }
+.catalog-photo-retry > span { font-size:24px; line-height:1; }
+.catalog-photo-retry small { font-size:10px; }
+.catalog-media[data-photo-state="loaded"] > .catalog-photo-placeholder,
+.catalog-media[data-photo-state="error"] > .catalog-photo-placeholder,
+.catalog-media:not([data-photo-state="loading"]) > .catalog-photo-progress { display:none; }
+.catalog-media[data-photo-state="error"] > .catalog-photo-retry { display:flex; }
+.catalog-media[data-photo-state="loaded"] > img { opacity:1; }
+.catalog-photo-dialog .photo-save-status { display:none; align-items:center; gap:10px; margin:0; color:var(--muted); font-size:14px; }
+.catalog-photo-dialog form[aria-busy="true"] .photo-save-status { display:flex; }
+@media(prefers-reduced-motion:reduce) { .photo-spinner { animation:none; } }

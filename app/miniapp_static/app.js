@@ -181,10 +181,30 @@
   function catalogMedia(item, className) {
     const meta = categoryMeta[item.category] || categoryMeta.generic || ["Оборудование", "equipment"];
     const src = /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(item.image_data || "") ? item.image_data : /^https:\/\//i.test(item.image_url || "") ? item.image_url : "";
-    return `<div class="catalog-media ${className}-media"><div class="${className}-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><small>${escapeHtml(meta[0])}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy">` : ""}</div>`;
+    return `<div class="catalog-media ${className}-media" data-photo-state="${src ? "loading" : "empty"}" aria-busy="${Boolean(src)}"><div class="${className}-placeholder catalog-photo-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><small>${escapeHtml(meta[0])}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy"><span class="catalog-photo-progress" role="status" aria-label="Загрузка фото"><span class="photo-spinner" aria-hidden="true"></span></span><button class="catalog-photo-retry" type="button" aria-label="Повторить загрузку фото: ${escapeHtml(item.name)}"><span aria-hidden="true">↻</span><small>Повторить</small></button>` : ""}</div>`;
   }
-  document.addEventListener("load", event => { if (event.target.matches?.(".catalog-loading")) event.target.classList.remove("catalog-loading"); }, true);
-  document.addEventListener("error", event => { if (event.target.matches?.(".catalog-loading")) event.target.hidden = true; }, true);
+  function photoState(image, state) {
+    const media = image.closest(".catalog-media"); if (!media) return;
+    media.dataset.photoState = state; media.setAttribute("aria-busy", String(state === "loading"));
+    image.hidden = state === "error"; image.classList.toggle("catalog-loading", state === "loading");
+  }
+  function inspectPhoto(image) {
+    if (image.complete) photoState(image, image.naturalWidth ? "loaded" : "error");
+    else photoState(image, "loading");
+  }
+  const photoImages = node => node.nodeType === 1 ? [...(node.matches(".catalog-media > img") ? [node] : []), ...node.querySelectorAll(".catalog-media > img")] : [];
+  new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) for (const image of photoImages(node)) inspectPhoto(image);
+    }
+  }).observe(document.body, {childList:true, subtree:true});
+  document.addEventListener("load", event => { if (event.target.matches?.(".catalog-media > img")) photoState(event.target, "loaded"); }, true);
+  document.addEventListener("error", event => { if (event.target.matches?.(".catalog-media > img")) photoState(event.target, "error"); }, true);
+  document.addEventListener("click", event => {
+    const button = event.target.closest?.(".catalog-photo-retry"); if (!button) return;
+    const image = button.closest(".catalog-media").querySelector("img");
+    photoState(image, "loading"); const src = image.getAttribute("src"); image.removeAttribute("src"); image.src = src;
+  });
   function conditionLabel(condition) { return ({ available: "Доступен", maintenance: "На ремонте", retired: "Выведен из эксплуатации" })[condition] || condition; }
   function toIso(value) {
     const text = String(value || "").trim();
@@ -2494,7 +2514,9 @@
       const addAsset = document.createElement("button"); addAsset.type = "button"; addAsset.className = "button secondary compact"; addAsset.textContent = "Добавить экземпляр";
       addAsset.addEventListener("click", () => renderAdminCatalog(result, { type: "equipment", value: { article_id: article.id, condition: "available" } }));
       const photo=plainButton(article.image_data ? "Заменить фото модели" : "Загрузить фото модели",async()=>{
-        const data=await workflowDialog("Фото модели оборудования",'<label class="field"><span>Выберите изображение с устройства</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label><img class="catalog-upload-preview" alt="Предпросмотр выбранного фото" hidden><p class="supporting">JPEG, PNG или WebP. Изображение будет уменьшено перед загрузкой.</p>',"Сохранить", dialog => {
+        let savedPhoto;
+        const data=await workflowDialog("Фото модели оборудования",'<label class="field"><span>Выберите изображение с устройства</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label><img class="catalog-upload-preview" alt="Предпросмотр выбранного фото" hidden><p class="supporting">JPEG, PNG или WebP. Изображение будет уменьшено и сохранено в WebP.</p><p class="photo-save-status" role="status"><span class="photo-spinner" aria-hidden="true"></span>Подготовка и загрузка фото…</p>',"Сохранить", dialog => {
+          dialog.classList.add("catalog-photo-dialog");
           const input = dialog.querySelector('input[name="photo"]'), preview = dialog.querySelector('.catalog-upload-preview');
           input.addEventListener('change', () => { if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url); const file = input.files?.[0]; preview.hidden = !file; if (file) { preview.dataset.url = URL.createObjectURL(file); preview.src = preview.dataset.url; } });
         }, async data => {
@@ -2509,10 +2531,14 @@
             const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .88));
             if (!blob) throw new Error('Не удалось подготовить изображение.');
             const upload = new FormData(); upload.set('photo', new File([blob], `photo.${({'image/webp':'webp','image/png':'png','image/jpeg':'jpg'})[blob.type] || 'png'}`, {type:blob.type}));
-            await api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`, {method:'PUT', body:upload});
+            savedPhoto = await api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`, {method:'PUT', body:upload});
           } finally { bitmap.close(); }
         });
-        if(data)await showAdmin("catalog");
+        if(data) {
+          if (savedPhoto?.image_data) { article.image_data = savedPhoto.image_data; renderAdminCatalog(result); }
+          else await showAdmin("catalog");
+          const notice = document.createElement("p"); notice.className = "notice"; notice.setAttribute("role","status"); notice.textContent = "Фото сохранено."; $("admin-content").prepend(notice);
+        }
       });
       if (canManageItems) { card.querySelector(".article-head-actions").append(editArticle); cardActions.append(addAsset,photo); }
       if (article.active) cardActions.append(plainButton("Скрыть от клиентов", async () => {
@@ -2867,7 +2893,7 @@
         event.preventDefault();if(pending)return;
         const form=event.currentTarget,data=new FormData(form);
         if (!onSubmit) { finish(data);return; }
-        pending=true;const buttons=[...form.querySelectorAll("button")], disabled=buttons.map(button=>button.disabled);buttons.forEach(button=>button.disabled=true);
+        pending=true;const buttons=[...form.querySelectorAll(dialog.classList.contains("catalog-photo-dialog") ? "button, input" : "button")], disabled=buttons.map(button=>button.disabled);buttons.forEach(button=>button.disabled=true);
         form.setAttribute("aria-busy", "true"); window.PolyRentalDialogs?.focus(dialog);
         try { await onSubmit(data);pending=false;finish(data); }
         catch(error) {pending=false;form.removeAttribute("aria-busy");buttons.forEach((button,index)=>button.disabled=disabled[index]);let message=form.querySelector(".workflow-error");if(!message){message=document.createElement("p");message.className="workflow-error field-error";message.setAttribute("role","alert");form.append(message);}message.textContent=error.message;window.PolyRentalDialogs?.focus(dialog);}

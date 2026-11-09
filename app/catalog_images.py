@@ -37,10 +37,14 @@ def thumbnail(raw):
     raise ValueError("Фото слишком сложное: уменьшите размер изображения")
 
 
+def preview_data(raw):
+    return "data:image/webp;base64," + base64.b64encode(raw).decode("ascii") if raw else ""
+
+
 def image_data(session, article_ids):
     if not article_ids:
         return {}
-    return {row.article_id: "data:image/webp;base64," + base64.b64encode(row.webp).decode("ascii")
+    return {row.article_id: preview_data(row.webp)
             for row in session.scalars(select(ArticleImage).where(ArticleImage.article_id.in_(article_ids)))}
 
 
@@ -59,3 +63,5 @@ def save_image(article_id, raw, actor_id):
                 row = ArticleImage(article_id=article_id)
                 session.add(row)
             row.webp, row.updated_at = preview, datetime.now(timezone.utc)
+
+    return preview
