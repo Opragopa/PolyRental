@@ -53,13 +53,11 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#end-time').fill('18:00');
     await page.locator('#main-button').click();
     await page.locator('#availability-result').getByText(/нужно 2 шт., доступно 0 шт./).waitFor();
-    await page.locator('#nearest-search').click();
     await page.locator('#nearest-status').getByText(/не найдено свободных сроков/).waitFor();
     assert.equal(await page.locator('#nearest-apply').isHidden(), true);
     availableQuantity=1; nearestFound=true;
     await page.locator('#main-button').click();
     await page.locator('#availability-result').getByText(/нужно 2 шт., доступно 1 шт./).waitFor();
-    await page.locator('#nearest-search').click();
     await page.locator('#nearest-apply').waitFor();
     assert.deepEqual(nearestPayload.lines, [{article_id:1,quantity:2}]);
     availableQuantity=2;

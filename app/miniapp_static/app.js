@@ -122,6 +122,7 @@
   let availabilitySequence = 0;
   let availabilityCheck = null;
   let nearestProposal = null;
+  let nearestSearchSequence = 0;
   let leaseRefreshTimer = null;
   let adminOrdersSnapshot = null, customerOrdersSnapshot = null, workflowRefreshBusy = false;
   let addressSuggestTimer = null;
@@ -617,7 +618,7 @@
   function updateMainAction(total) {
     const labels = [`В корзину · ${total}`, "Выбрать даты", "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
-    $("main-button").disabled = state.busy || cartLocked || (state.step === 3 && (exceedsStock() || !availabilityFresh)) || (state.step === 2 &&
+    $("main-button").disabled = state.busy || cartLocked || (state.step === 3 && (exceedsStock() || !availabilityFresh || unavailableSelection().length > 0)) || (state.step === 2 &&
       (!$("start-date").value || !$("end-date").value || ($("start-time").value && $("end-time").value && Boolean(dateValidationMessage())))) || (!authorized && !keyboardMode && !preview);
     $("clear-cart").hidden = !(state.view === "flow" && state.step === 0);
     $("clear-cart").disabled = state.busy || cartLocked || !total;
@@ -724,21 +725,23 @@
   let stockLoading = false;
   function stockPeriod() { return $("start").value && $("end").value ? `${$("start").value}|${$("end").value}` : ""; }
   function quantityLimit(id) {
-    const stock = quantityStocks.get(id);
-    if (stockLoading || !stock) return 0;
-    const period = stockPeriod();
-    const count = period ? (stock.period === period ? stock.available : null) : stock.capacity;
-    return Number.isInteger(count) ? Math.max(0, Math.min(30, count)) : 0;
+    const capacity = quantityStocks.get(id)?.capacity;
+    return Number.isInteger(capacity) ? Math.max(0, Math.min(30, capacity)) : 0;
   }
   function stockLabel(id) {
-    const stock = quantityStocks.get(id), period = stockPeriod();
-    const count = period ? (stock?.period === period ? stock.available : null) : stock?.capacity;
-    if (stockLoading || !Number.isInteger(count)) return "Проверяем доступное количество…";
-    return `${period ? "Свободно на выбранный срок" : "Всего для аренды"}: ${count}`;
+    const stock = quantityStocks.get(id);
+    if (!Number.isInteger(stock?.capacity)) return "Проверяем общее количество…";
+    const total = `Всего для аренды: ${stock.capacity}`;
+    if (!stockPeriod()) return total;
+    if (stockLoading || stock.period !== stockPeriod() || !Number.isInteger(stock.available)) return `${total}. Доступность на срок ещё не проверена.`;
+    return `${total}. Свободно на выбранный срок: ${stock.available}`;
   }
   function exceedsStock() { return [...state.quantities].some(([id, quantity]) => quantity > quantityLimit(id)); }
   function stockWarning(id, quantity) {
-    return quantity > quantityLimit(id) ? `${stockLabel(id)}. Уменьшите количество или удалите позицию.` : stockLabel(id);
+    const stock = quantityStocks.get(id);
+    if (quantity > quantityLimit(id)) return `${stockLabel(id)}. Уменьшите количество или удалите позицию.`;
+    if (stockPeriod() && stock?.period === stockPeriod() && Number.isInteger(stock.available) && quantity > stock.available) return `${stockLabel(id)}. Выберите другой срок или уменьшите количество.`;
+    return stockLabel(id);
   }
   function availabilityPath(start, end) {
     const params = new URLSearchParams({start:toIso(start), end:toIso(end), page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:$("client-catalog-search").value.trim()});
@@ -787,7 +790,7 @@
       state.items = reconcileAvailability(data, previousItems);
       for (const item of state.items) {
         const old = quantityStocks.get(item.id) || {};
-        const capacity = Number.isInteger(item.capacity) ? item.capacity : (Number.isInteger(item.available_quantity) ? item.available_quantity : null);
+        const capacity = Number.isInteger(item.capacity) ? item.capacity : (old.capacity ?? (Number.isInteger(item.available_quantity) ? item.available_quantity : null));
         quantityStocks.set(item.id, {capacity: capacity ?? old.capacity, period: checkAvailability ? stockPeriod() : "", available: checkAvailability ? (item.available_quantity ?? 0) : null});
       }
       stockLoading = false;
@@ -816,7 +819,7 @@
       renderItems(); return true;
     } catch (error) {
       if (sequence !== availabilitySequence) return false;
-      stockLoading = false; quantityStocks.clear();
+      stockLoading = false; if (!checkAvailability) quantityStocks.clear();
       if (state.view === "flow" && state.step === 1) renderCart();
       if (state.view === "flow" && state.step === 3) renderReview();
       updateCartCounters();
@@ -968,6 +971,7 @@
       line.textContent = `${catalogTitle(item || {name:"Позиция больше недоступна"})}: нужно ${quantity} шт., доступно ${item?.available_quantity ?? 0} шт.`; result.append(line);
     }
     $("availability-edit-cart").hidden = false; $("nearest-period").hidden = !authorized || preview;
+    if (authorized && !preview && !exceedsStock()) void findNearestPeriod();
   }
   function unavailableSelection() {
     return [...state.quantities].filter(([id, quantity]) => quantity > (state.items.find(item => item.id === id)?.available_quantity ?? 0));
@@ -983,7 +987,7 @@
       const item = state.items.find((row) => row.id === id) || {id, name:"Позиция недоступна", available_quantity:0};
       const row = document.createElement("article"); row.className = "order-card cart-item";
       row.innerHTML = `${catalogMedia(item, "cart")}<div class="cart-item-main"><h3>${escapeHtml(catalogTitle(item))}</h3></div>`;
-      if (quantity > quantityLimit(id)) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = stockWarning(id, quantity); row.querySelector(".cart-item-main").append(warning); }
+      if (quantity > quantityLimit(id) || (availabilityFresh && quantity > (item.available_quantity ?? 0))) { const warning = document.createElement("p"); warning.setAttribute("role", "status"); warning.textContent = stockWarning(id, quantity); row.querySelector(".cart-item-main").append(warning); }
       const stockNote = document.createElement("p"); stockNote.className = "supporting stock-note"; stockNote.textContent = stockLabel(id); row.querySelector(".cart-item-main").append(stockNote);
       const controls = document.createElement("div"); controls.className = "quantity-control";
       controls.innerHTML = `<button type="button" class="button ghost minus" aria-label="Уменьшить количество">−</button><strong>${quantity}</strong><button type="button" class="button secondary plus" aria-label="Увеличить количество" ${quantity >= quantityLimit(id) ? "disabled" : ""}>+</button>`;
@@ -1005,7 +1009,7 @@
         controls.querySelector("strong").textContent = String(next);
         controls.querySelector(".plus").disabled = next >= quantityLimit(id);
         const warning = row.querySelector('[role="status"]');
-        if (warning) { if (next <= quantityLimit(id)) warning.remove(); else warning.textContent = stockWarning(id, next); }
+        if (warning) { if (next <= quantityLimit(id) && (!availabilityFresh || next <= (item.available_quantity ?? 0))) warning.remove(); else warning.textContent = stockWarning(id, next); }
         const total = [...state.quantities.values()].reduce((sum, count) => sum + count, 0);
         $("cart-total").textContent = `Всего: ${total} шт.`;
         updateCartCounters(); saveDraft();
@@ -1027,7 +1031,9 @@
       if (button.classList.contains("review-plus") && quantity >= quantityLimit(id)) return;
       const nextQuantity = quantity + (button.classList.contains("review-plus") ? 1 : -1);
       if (nextQuantity > 0) state.quantities.set(id, nextQuantity); else state.quantities.delete(id);
-      state.requestId = null; saveDraft(); renderCart(); renderReview();
+      state.requestId = null; saveDraft(); renderCart();
+      if (unavailableSelection().length) { state.step = 2; render(); showAvailabilityShortage(unavailableSelection()); queueCalendarAvailability(); return; }
+      renderReview();
       $("review-content").querySelector(`.${button.classList.contains("review-plus") ? "review-plus" : "review-minus"}[data-id="${id}"]`)?.focus();
     }));
   }
@@ -1075,7 +1081,7 @@
   }
 
   async function submit() {
-    if (exceedsStock() || !availabilityFresh) { state.step = 2; render(); return showError("Проверьте доступность оборудования на выбранный срок."); }
+    if (exceedsStock() || !availabilityFresh || unavailableSelection().length) { state.step = 2; render(); return showError("Проверьте доступность оборудования на выбранный срок."); }
     if (authorized && (cartDirty || cartSaving)) { try { await flushCart(); } catch (error) { return showError(`Не удалось сохранить подборку: ${error.message}`); } }
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
     if (!state.requestId) state.requestId = newRequestId();
@@ -3475,19 +3481,21 @@
   $("catalog-list").addEventListener("click", () => setCatalogLayout("list"));
   $("catalog-grid").addEventListener("click", () => setCatalogLayout("grid"));
   try { catalogView.layout = localStorage.getItem("polyrental-admin-catalog-layout") === "grid" ? "grid" : "list"; setCatalogLayout(localStorage.getItem("polyrental-catalog-layout") === "grid" ? "grid" : "list"); } catch (_) { setCatalogLayout("list"); }
-  $("nearest-search").addEventListener("click", async () => {
+  async function findNearestPeriod() {
+    const sequence = ++nearestSearchSequence;
     const button = $("nearest-search"), key = nearestSelectionKey(); nearestProposal = null; $("nearest-apply").hidden = true;
     $("nearest-status").textContent = "Ищем сроки для всей подборки…"; button.disabled = true;
     try {
       const result = await api("/api/miniapp/availability/nearest", {method:"POST", body:JSON.stringify({start:toIso($("start").value), end:toIso($("end").value), lines:[...state.quantities].map(([article_id, quantity]) => ({article_id, quantity}))})});
-      if (key !== nearestSelectionKey() || state.step !== 2) return;
+      if (sequence !== nearestSearchSequence || key !== nearestSelectionKey() || state.step !== 2) return;
       if (!result.period) { $("nearest-status").textContent = `Для всей подборки не найдено свободных сроков в ближайшие ${result.horizon_days} дней.`; return; }
       nearestProposal = {key, ...result.period};
-      $("nearest-status").textContent = `Доступно: ${dateText(result.period.start)} — ${dateText(result.period.end)} МСК. Перед продолжением доступность будет проверена ещё раз.`;
+      $("nearest-status").textContent = `Вся подборка в нужном количестве доступна: ${dateText(result.period.start)} — ${dateText(result.period.end)} МСК. Перед продолжением доступность будет проверена ещё раз.`;
       $("nearest-apply").hidden = false;
-    } catch (error) { if (key === nearestSelectionKey()) $("nearest-status").textContent = `Не удалось найти сроки: ${error.message}`; }
-    finally { button.disabled = false; }
-  });
+    } catch (error) { if (sequence === nearestSearchSequence && key === nearestSelectionKey()) $("nearest-status").textContent = `Не удалось найти сроки: ${error.message}`; }
+    finally { if (sequence === nearestSearchSequence) button.disabled = false; }
+  }
+  $("nearest-search").addEventListener("click", findNearestPeriod);
   $("nearest-apply").addEventListener("click", async () => {
     if (!nearestProposal || nearestProposal.key !== nearestSelectionKey()) return;
     const proposal = nearestProposal; nearestProposal = null; $("nearest-apply").hidden = true;
