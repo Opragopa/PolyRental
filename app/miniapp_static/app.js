@@ -2167,7 +2167,7 @@
   }
 
   async function downloadCatalogTemplate() {
-    const path = "/miniapp/static/equipment-import-template.csv";
+    const path = `/miniapp/static/equipment-import-template.csv?v=${encodeURIComponent(document.querySelector('meta[name="app-version"]').content)}`;
     const filename = "equipment-import-template.csv";
     const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
     const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
@@ -2293,15 +2293,15 @@
     }
     const canManageItems = ["manager", "admin"].includes(state.role?.staff_role);
     const operations = document.createElement("details"); operations.className = "catalog-operations"; operations.hidden = !canManageItems;
-    const operationsTitle = document.createElement("summary"); operationsTitle.textContent = "Импорт и настройка комплектов";
+    const operationsTitle = document.createElement("summary"); operationsTitle.textContent = "Импорт CSV и состав комплектов";
     operations.append(operationsTitle);
     const dependencyNote = document.createElement("p");
     dependencyNote.textContent = "Зависимости комплектов хранятся справочно. Автоматическое добавление отключено: клиент выбирает каждую позицию отдельно. Аренда бесплатная.";
     operations.append(dependencyNote);
     const toolbar = document.createElement("div"); toolbar.className = "action-row catalog-toolbar";
-    for (const [label, type, className] of [["Новый артикул", "article", "primary"], ["Новый экземпляр", "equipment", "secondary"], ["Зависимость комплекта", "dependency", "ghost"]]) {
+    for (const [label, type, className] of [["Новый артикул", "article", "primary"], ["Новый экземпляр", "equipment", "secondary"], ["Настроить состав комплекта", "dependency", "secondary"]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = `button ${className}`; button.textContent = label;
-      button.addEventListener("click", () => renderAdminCatalog(result, { type })); (type === "dependency" ? operations : toolbar).append(button);
+      button.addEventListener("click", () => renderAdminCatalog(result, { type })); toolbar.append(button);
     }
     toolbar.hidden = !canManageItems;
     content.append(toolbar);
@@ -2320,7 +2320,7 @@
     status.addEventListener("change", () => { catalogView.status = status.value; if (result.page != null) { catalogView.page = 0; clearTimeout(catalogView.timer); void reloadCatalogPage(); } else renderAdminCatalog(result, editor); });
     content.prepend(controls);
     const importer = document.createElement("details"); importer.className = "catalog-import";
-    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>Поддерживаются технический CSV в UTF-8 (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
+    importer.innerHTML = `<summary>Добавить оборудование из CSV</summary><p>Шаблон содержит два учебных примера: замените их своими данными перед импортом. Одна строка — один экземпляр оборудования; для экземпляров одной модели укажите одинаковый SKU и одинаковые поля модели. Поддерживаются технический CSV в UTF-8 с разделителем «;» (<code>sku</code>, <code>name</code>, необязательные <code>serial</code> и <code>inventory_code</code>) с полями модели <code>kind</code> (вид), <code>brand</code> (бренд), <code>key_spec</code> (основная характеристика) и опись с колонками «Наименование», «Модель», «S/N», «Инвентаризационный номер/ Код ОС». Пустой или «-» S/N не создаёт значение; повторные S/N допустимы, а инвентарный код уникален. Состояние <code>condition</code>: <code>available</code> — доступен, <code>maintenance</code> — на ремонте, <code>retired</code> — выведен из эксплуатации. Файл импортируется целиком или не импортируется вовсе.</p><button class="button secondary catalog-template-download" type="button">Скачать шаблон CSV</button><form class="catalog-import-form"><label class="field"><span>CSV-файл, не больше 1 МБ и 500 экземпляров</span><input name="file" type="file" accept=".csv,text/csv" required></label><button class="button primary" type="submit">Добавить из CSV</button></form>`;
     importer.querySelector(".catalog-template-download").addEventListener("click", async (event) => {
       const button = event.currentTarget; button.disabled = true;
       try { await downloadCatalogTemplate(); } catch (error) { showError(error.message); } finally { button.disabled = false; }
@@ -2507,7 +2507,7 @@
       }
       articleGrid.append(card);
     }
-    content.append(toolbar, operations);
+    content.append(operations);
     if (result.page != null) {
       const pages = Math.max(1, Math.ceil(result.total / (result.page_size || 20)));
       if (pages > 1 && !categoryIndex) {
@@ -2630,7 +2630,7 @@
     } else if (editor.type === "equipment") {
       wrapper.innerHTML = `<h3>${value.id ? "Изменить экземпляр" : "Новый экземпляр"}</h3><form class="catalog-form form-grid"><label class="field wide"><span>Артикул</span><select name="article_id" required><option value="">Выберите артикул</option>${options}</select></label><label class="field"><span>S/N</span><input name="serial" value="${escapeHtml(value.serial || "")}" maxlength="80"></label><label class="field"><span>Инвентарный код</span><input name="inventory_code" value="${escapeHtml(value.inventory_code || "")}" maxlength="80"></label><label class="field"><span>Складская ячейка</span><input name="location" value="${escapeHtml(value.location || "")}" maxlength="120" placeholder="A-01"></label><label class="field"><span>Состояние</span><select name="condition">${selectOptions(["available", "maintenance", "retired"], value.condition || "available")}</select></label><div class="info-strip wide"><span class="info-icon">i</span><p>S/N может отсутствовать или повторяться. Инвентарный код, если указан, уникален.</p></div><div class="action-row wide"><button class="button primary" type="submit">Сохранить экземпляр</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     } else {
-      wrapper.innerHTML = `<h3>Зависимость комплекта</h3><form class="catalog-form form-grid"><label class="field"><span>Основной артикул</span><select name="parent_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Добавляемый артикул</span><select name="child_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Количество на единицу</span><input name="quantity" type="number" min="1" max="30" value="1" required></label><label class="check-row"><input name="billable" type="checkbox"><span>Оплачивается отдельно</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить зависимость</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
+      wrapper.innerHTML = `<h3>Настроить состав комплекта</h3><form class="catalog-form form-grid"><label class="field"><span>Основная модель</span><select name="parent_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Модель в составе комплекта</span><select name="child_article_id" required><option value="">Выберите</option>${options}</select></label><label class="field"><span>Количество на один комплект</span><input name="quantity" type="number" min="1" max="30" value="1" required></label><label class="check-row"><input name="billable" type="checkbox"><span>Оплачивается отдельно</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить состав</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
     }
     if (editor.type === "article") {
       const form = wrapper.querySelector("form");

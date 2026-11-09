@@ -70,16 +70,45 @@ def test_csv_import_rejects_invalid_file_without_writes(monkeypatch):
         assert not any(item["sku"] == "CSV-X" for item in catalog["articles"])
 
 
-def test_downloaded_template_is_a_valid_import_header():
-    from app.catalog_import import parse_catalog_csv
+def test_downloaded_template_can_be_imported_with_model_fields(monkeypatch):
+    from sqlalchemy import select
+    from app.db import Article, Equipment, Session
+    configure(monkeypatch)
+    admin = {"X-Telegram-Init-Data": signed_init_data(100)}
     with TestClient(app) as client:
         response = client.get('/miniapp/static/equipment-import-template.csv')
-    assert response.status_code == 200
-    header = response.content.decode('utf-8-sig').strip().split(';')
-    row = [''] * len(header)
-    row[header.index('sku')] = 'CSV-EXAMPLE'
-    row[header.index('name')] = 'Камера'
-    content = response.content.rstrip() + b'\n' + ';'.join(row).encode('utf-8') + b'\n'
-    models, assets = parse_catalog_csv(content)
-    assert models['CSV-EXAMPLE']['name'] == 'Камера'
-    assert len(assets) == 1
+        assert response.status_code == 200
+        result = _upload(client, admin, response.content)
+        assert result.status_code == 200, result.text
+        assert result.json() == {"articles_created": 1, "equipment_created": 2}
+        with Session() as session:
+            article = session.scalar(select(Article).where(Article.sku == "EXAMPLE-CAMERA"))
+            assert (article.kind, article.brand, article.key_spec) == ("camera", "Пример бренда", "Пример характеристики")
+            equipment = session.scalars(select(Equipment).where(Equipment.article_id == article.id)).all()
+            assert {item.asset_inventory_code for item in equipment} == {"EXAMPLE-INV-001", "EXAMPLE-INV-002"}
+            assert {item.serial_number for item in equipment} == {"EXAMPLE-SN-001", None}
+        # A second upload must not duplicate the inventory codes.
+        assert _upload(client, admin, response.content).status_code == 422
+
+
+def test_model_fields_validate_conflicts_and_lengths_without_partial_import(monkeypatch):
+    from sqlalchemy import select
+    from app.db import Article, Session
+    configure(monkeypatch)
+    admin = {"X-Telegram-Init-Data": signed_init_data(100)}
+    with TestClient(app) as client:
+        for field, limit in (("kind", 80), ("brand", 100), ("key_spec", 120)):
+            header = f"sku;name;{field}\n"
+            for rows in (
+                "CSV-OK;Модель;OK\nCSV-BAD;Другая модель;" + "x" * (limit + 1) + "\n",
+                "CSV-OK;Модель;First\nCSV-OK;Модель;Second\n",
+            ):
+                response = _upload(client, admin, (header + rows).encode())
+                assert response.status_code == 422, response.text
+                with Session() as session:
+                    assert session.scalar(select(Article).where(Article.sku == "CSV-OK")) is None
+        header = "sku;name;brand;inventory_code\n"
+        assert _upload(client, admin, (header + "CSV-OK;Модель;Original;NEW-1\n").encode()).status_code == 200
+        assert _upload(client, admin, (header + "CSV-OK;Модель;Changed;NEW-2\n").encode()).status_code == 422
+        with Session() as session:
+            assert session.scalar(select(Article).where(Article.sku == "CSV-OK")).brand == "Original"

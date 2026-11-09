@@ -145,10 +145,14 @@ button, summary { -webkit-tap-highlight-color: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { .theme-switch span { transition:none; } }
 
-/* Centered identity and theme control in the profile. */
-.topbar, .dates-view .topbar, .login-header { position:relative; display:flex; justify-content:center; text-align:center; }
-.topbar .brand, .login-header .brand { display:flex; flex-direction:column; justify-content:center; gap:2px; }
+/* Mini App version is centered; website headers keep it at the right. */
+.topbar, .dates-view .topbar { position:relative; display:flex; justify-content:center; text-align:center; }
+.topbar .brand { display:none; }
+.site-view .topbar, .login-header { justify-content:space-between; text-align:left; }
+.site-view .topbar { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px 16px; }
+.site-view .topbar .brand { display:flex; }
 .topbar > .button { position:absolute; right:0; top:0; min-height:36px; padding:6px 10px; }
+.site-view .topbar > .button { position:static; grid-column:2; justify-self:end; }
 .profile-theme { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:24px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
 .profile-theme-label { font-size:14px; font-weight:700; }
 

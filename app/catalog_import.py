@@ -18,10 +18,10 @@ MAX_ROWS = 500
 REQUIRED = {"sku", "name"}
 OPTIONAL = {"location", "condition", "description", "composition", "category",
             "inspection_profile", "buffer_hours", "image_url", "active", "health", "charge",
-            "serial", "inventory_code"}
+            "serial", "inventory_code", "kind", "brand", "key_spec"}
 MODEL_FIELDS = {"description", "composition", "category", "inspection_profile", "buffer_hours",
-                "image_url", "active"}
-DEFAULTS = {"description": "", "composition": "", "category": "generic",
+                "image_url", "active", "kind", "brand", "key_spec"}
+DEFAULTS = {"kind": "", "brand": "", "key_spec": "", "description": "", "composition": "", "category": "generic",
             "inspection_profile": "generic", "buffer_hours": 24, "image_url": "", "active": True}
 PROFILES = {"generic", "camera", "optics", "light", "battery"}
 CONDITIONS = {"available", "maintenance", "retired"}
@@ -110,6 +110,8 @@ def _percentage(value, label, line):
 
 
 def _model_value(field, raw, line):
+    if field in {"kind", "brand", "key_spec"}:
+        return _text(raw, field, {"kind": 80, "brand": 100, "key_spec": 120}[field], line)
     if field in {"description", "composition"}:
         return _text(raw, field, 4000, line)
     if field == "image_url":
@@ -233,6 +235,7 @@ def import_catalog_csv(data: bytes):
                 article = Article(sku=sku, name=model["name"], hourly_rate=Decimal("0"),
                                   is_test=sku.upper().startswith("TEST-"),
                                   description=fields["description"], composition=fields["composition"],
+                                  kind=fields["kind"], brand=fields["brand"], key_spec=fields["key_spec"],
                                   category=fields["category"], inspection_profile=fields["inspection_profile"],
                                   buffer_hours=fields["buffer_hours"], image_url=fields["image_url"],
                                   is_active=fields["active"])
