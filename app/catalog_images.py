@@ -23,7 +23,9 @@ def thumbnail(raw):
             with Image.open(io.BytesIO(raw)) as source:
                 if source.format not in {"JPEG", "PNG", "WEBP"} or source.width * source.height > 24_000_000:
                     raise ValueError("Используйте JPEG, PNG или WebP до 24 мегапикселей")
-                image = ImageOps.exif_transpose(source).convert("RGB")
+                oriented = ImageOps.exif_transpose(source)
+                has_alpha = "A" in oriented.getbands() or "transparency" in oriented.info
+                image = oriented.convert("RGBA" if has_alpha else "RGB")
                 image.thumbnail((640, 640), Image.Resampling.LANCZOS)
                 for quality in (85, 70, 50, 30):
                     output = io.BytesIO()

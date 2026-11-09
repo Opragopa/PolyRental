@@ -134,3 +134,45 @@ def test_staff_catalog_pagination_search_and_options(monkeypatch):
         assert options['total']==25 and len(options['items'])==10 and 'equipment' not in options['items'][0]
         assert client.get(url+'0', headers={'X-Telegram-Init-Data':signed_init_data(42)}).status_code==403
         assert len(client.get('/api/miniapp/admin/catalog', headers=headers).json()['articles'])==25
+
+
+@pytest.mark.parametrize("mode,format", [("RGBA","PNG"),("LA","PNG"),("P","PNG"),("RGBA","WEBP")])
+def test_thumbnail_preserves_transparent_and_semitransparent_pixels(mode,format):
+    from PIL import ImageDraw
+    image=Image.new("RGBA",(1280,640),(0,0,0,0))
+    draw=ImageDraw.Draw(image)
+    draw.rectangle((400,0,799,639),fill=(40,150,220,128))
+    draw.rectangle((800,0,1279,639),fill=(220,50,40,255))
+    if mode=="LA":image=image.convert("LA")
+    if mode=="P":
+        image=Image.new("P",(1280,640),0)
+        image.putpalette([0,0,0,40,150,220,220,50,40]+[0]*759)
+        image.paste(1,(400,0,800,640));image.paste(2,(800,0,1280,640))
+        image.info['transparency']=bytes([0,128,255])
+    source=io.BytesIO();image.save(source,format=format)
+    raw=thumbnail(source.getvalue())
+    assert len(raw)<=MAX_PREVIEW
+    with Image.open(io.BytesIO(raw)) as result:
+        assert result.size==(640,320)
+        assert result.convert('RGBA').getpixel((50,100))[3]==0
+        assert result.convert('RGBA').getpixel((300,100))[3]==128
+        assert result.convert('RGBA').getpixel((550,100))[3]==255
+
+
+def test_transparent_catalog_photo_survives_upload_storage_and_public_api(monkeypatch):
+    configure(monkeypatch)
+    article_id=article_with_assets('ALPHA-PHOTO',1)
+    image=Image.new('RGBA',(80,40),(0,0,0,0))
+    image.paste((255,70,20,128),(20,0,60,40))
+    source=io.BytesIO();image.save(source,format='PNG')
+    headers={'X-Telegram-Init-Data':signed_init_data(100)}
+    with TestClient(app) as client:
+        response=client.put(f'/api/miniapp/admin/catalog/articles/{article_id}/photo',
+            headers=headers,files={'photo':('transparent.png',source.getvalue(),'image/png')})
+        assert response.status_code==200,response.text
+        item=next(item for item in client.get('/api/miniapp/catalog').json()['items'] if item['id']==article_id)
+        data=base64.b64decode(item['image_data'].split(',',1)[1])
+        with Session() as session:assert session.get(ArticleImage,article_id).webp==data
+        with Image.open(io.BytesIO(data)) as result:
+            assert result.convert('RGBA').getpixel((5,5))[3]==0
+            assert result.convert('RGBA').getpixel((40,5))[3]==128

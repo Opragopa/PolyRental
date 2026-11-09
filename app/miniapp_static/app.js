@@ -2506,9 +2506,9 @@
             const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
             const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
             canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .88));
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .88));
             if (!blob) throw new Error('Не удалось подготовить изображение.');
-            const upload = new FormData(); upload.set('photo', new File([blob], 'photo.jpg', {type:'image/jpeg'}));
+            const upload = new FormData(); upload.set('photo', new File([blob], `photo.${({'image/webp':'webp','image/png':'png','image/jpeg':'jpg'})[blob.type] || 'png'}`, {type:blob.type}));
             await api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`, {method:'PUT', body:upload});
           } finally { bitmap.close(); }
         });
