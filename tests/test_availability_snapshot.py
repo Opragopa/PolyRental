@@ -26,10 +26,10 @@ def test_batched_availability_matches_reservation_rules():
         snapshot = AvailabilitySnapshot(session, [camera, lens], start, end + timedelta(days=1))
         for article_id in (camera, lens):
             assert snapshot.peak(article_id, start, end) == _reserved_quantity(session, article_id, start, end)
-        assert snapshot.peak(camera, start, end) == 2
+        assert snapshot.peak(camera, start, end) == 1
         assert snapshot.peak(lens, start, end) == 2
     result = {item['id']:item for item in availability(start, end)}
-    assert result[camera]['available_quantity'] == 1
+    assert result[camera]['available_quantity'] == 2
     assert result[lens]['available_quantity'] == 0
 
 

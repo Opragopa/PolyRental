@@ -267,7 +267,7 @@ def test_document_rotation_is_applied_before_removing_exif():
         assert not image.getexif()
 
 
-def test_overdue_unreturned_asset_cannot_be_booked_again():
+def test_overdue_unreturned_asset_can_be_booked_after_planned_end():
     from app.rental import now
     booking_id, article_id = prepared_booking(count=1)
     with Session.begin() as session:
@@ -276,10 +276,9 @@ def test_overdue_unreturned_asset_cannot_be_booked_again():
         booking.ends_at = now() - timedelta(days=1)
         booking.status = "issued"
     start, end = now_interval()
-    assert availability(start, end)[0]["available_quantity"] == 0
-    with pytest.raises(Conflict):
-        create_booking(43, "Другой клиент", "@qa", start, end,
-                       [{"article_id": article_id, "quantity": 1}])
+    assert availability(start, end)[0]["available_quantity"] == 1
+    assert create_booking(43, "Другой клиент", "@qa", start, end,
+                          [{"article_id": article_id, "quantity": 1}])
 
 
 def test_repair_close_does_not_revive_retired_equipment():

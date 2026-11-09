@@ -81,9 +81,9 @@ def external_schedule(equipment_id, session=None):
             or_(assigned, and_(article_line, ~article_assigned)))):
         overdue = booking.status in {"issued", "return_inspection"} and booking.ends_at <= current
         items.append({"id": booking.id, "kind": "booking", "start": booking.starts_at.isoformat(),
-            "end": None if overdue else booking.ends_at.isoformat(),
+            "end": booking.ends_at.isoformat(),
             "label": f"Заявка {booking.human_number or booking.id}",
-            "reason": "Оборудование ещё не возвращено" if overdue else "Бронь модели; экземпляр ещё не назначен" if not is_assigned else "Экземпляр назначен на заявку"})
+            "reason": "Плановый возврат просрочен; проверьте возврат" if overdue else "Бронь модели; экземпляр ещё не назначен" if not is_assigned else "Экземпляр назначен на заявку"})
     return sorted(items, key=lambda item: item["start"])
 
 def save_staff_section(actor_id, section):

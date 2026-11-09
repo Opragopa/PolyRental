@@ -73,6 +73,6 @@ def test_assigned_overdue_asset_warns_until_returned_without_marking_other_units
         session.add(line);session.flush()
         session.add(BookingAsset(booking_id=booking.id,equipment_id=assets[0],booking_line_id=line.id))
     occupied=external_schedule(assets[0])
-    assert len(occupied)==1 and occupied[0]['end'] is None
-    assert occupied[0]['reason']=='Оборудование ещё не возвращено'
+    assert len(occupied)==1 and occupied[0]['end'] is not None
+    assert occupied[0]['reason']=='Плановый возврат просрочен; проверьте возврат'
     assert external_schedule(assets[1])==[]

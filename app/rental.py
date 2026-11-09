@@ -288,8 +288,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
         BookingLine, Booking.id == BookingLine.booking_id).where(
         BookingLine.article_id == article_id, BookingLine.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
-        or_(scheduled, and_(Booking.status.in_({"issued", "return_inspection"}),
-                            Booking.ends_at <= now())),
+        scheduled,
     )
     if exclude_booking_id:
         query = query.where(Booking.id != exclude_booking_id)
@@ -305,8 +304,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
         reservations[booking.id] = (booking, previous + max(0, quantity))
     replacements = select(Booking, BookingHandover).join(BookingHandover, BookingHandover.booking_id == Booking.id).where(
         Booking.status.in_(RESERVING_STATUSES), or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
-        or_(and_(Booking.starts_at < end, Booking.ends_at > start),
-            and_(Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= now())))
+        Booking.starts_at < end, Booking.ends_at > start)
     if exclude_booking_id:
         replacements = replacements.where(Booking.id != exclude_booking_id)
     for booking, handover in session.execute(replacements):
@@ -317,10 +315,7 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
                     reservations[booking.id] = (booking, reservations.get(booking.id, (booking, 0))[1] + 1)
     events = []
     for booking, quantity in reservations.values():
-        occupied_end = booking.ends_at
-        if booking.status in {"issued", "return_inspection"} and booking.ends_at <= now():
-            occupied_end = datetime.max.replace(tzinfo=timezone.utc)
-        left, right = max(start, booking.starts_at), min(end, occupied_end)
+        left, right = max(start, booking.starts_at), min(end, booking.ends_at)
         if left < right:
             events.extend(((left, quantity), (right, -quantity)))
     from .db import EquipmentBlock
@@ -347,8 +342,7 @@ def _nearest_free_start(session, article, start, end, capacity):
         BookingLine.article_id == article.id, BookingLine.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
         Booking.status.in_(RESERVING_STATUSES), Booking.ends_at >= start)).all()
-    candidates = {booking.ends_at for booking in rows
-                  if not (booking.status in {"issued", "return_inspection"} and booking.ends_at <= now())}
+    candidates = {booking.ends_at for booking in rows}
     from .db import EquipmentBlock
     candidates.update(session.scalars(select(EquipmentBlock.ends_at).join(Equipment, Equipment.id==EquipmentBlock.equipment_id).where(
         Equipment.article_id==article.id,EquipmentBlock.released_at.is_(None),EquipmentBlock.ends_at>=start)))
@@ -369,7 +363,6 @@ class AvailabilitySnapshot:
         self.owners = defaultdict(set)
         self.reservations = defaultdict(list)
         self.blocks = defaultdict(list)
-        self.reference_time = now()
         if not article_ids:
             return
         equipment_rows = session.execute(select(Equipment.article_id, Equipment.condition, EquipmentOwner.name)
@@ -387,7 +380,7 @@ class AvailabilitySnapshot:
             self.blocks[article_id].append(block)
         booking_conditions = (Booking.status.in_(RESERVING_STATUSES),
             or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"), Booking.starts_at < end,
-            or_(Booking.ends_at > start, and_(Booking.status.in_({"issued", "return_inspection"}), Booking.ends_at <= self.reference_time)))
+            Booking.ends_at > start)
         bookings = session.execute(select(Booking.id, Booking.status, Booking.starts_at, Booking.ends_at, BookingHandover.data)
             .outerjoin(BookingHandover, BookingHandover.booking_id == Booking.id).where(*booking_conditions)).all()
         if not bookings:
@@ -421,12 +414,9 @@ class AvailabilitySnapshot:
                 line = lines_by_id.get(exception.get("line_id"))
                 if replacement in requested and line and line.article_id != replacement:
                     quantities[replacement] += 1
-            occupied_end = booking.ends_at
-            if booking.status in {"issued", "return_inspection"} and booking.ends_at <= self.reference_time:
-                occupied_end = datetime.max.replace(tzinfo=timezone.utc)
             for article_id, quantity in quantities.items():
                 if quantity:
-                    self.reservations[article_id].append((booking.starts_at, occupied_end, quantity))
+                    self.reservations[article_id].append((booking.starts_at, booking.ends_at, quantity))
 
     def peak(self, article_id, start, end):
         events = []
@@ -1203,8 +1193,7 @@ def _asset_conflicts(session, booking, equipment_id):
         BookingAsset.equipment_id == equipment_id, BookingAsset.deleted_at.is_(None),
         or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
         Booking.id != booking.id,
-        or_(scheduled, and_(Booking.status.in_({"issued", "return_inspection"}),
-                            Booking.ends_at <= now())),
+        scheduled,
     )) > 0
     from .db import EquipmentBlock
     return occupied or session.scalar(select(EquipmentBlock.id).where(EquipmentBlock.equipment_id==equipment_id,
