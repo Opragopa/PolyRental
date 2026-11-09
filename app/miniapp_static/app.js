@@ -1757,7 +1757,7 @@
         for (const line of order.lines) {
           if (pendingDeletion?.bookingId === order.id && pendingDeletion.lineId === line.id) continue;
           const row = document.createElement("div"); row.className = "request-equipment-row"; row.dataset.lineId = String(line.id); row.dataset.articleId = String(line.article_id);
-          const article = state.items.find((item) => item.id === line.article_id);
+          const article = order.article_media?.[line.article_id] || state.items.find((item) => item.id === line.article_id);
           const mediaItem = {
             name: line.title || line.name || article?.name || "",
             category: line.category || article?.category || (/объектив|lens/i.test(line.name || "") ? "optics" : /камера|camera|fx/i.test(line.name || "") ? "camera" : "generic"),
@@ -1991,7 +1991,7 @@
       const saved = inspectionFor(order, asset, stage);
       const row = document.createElement("div"); row.className = "inspection-row is-expandable"; row.dataset.equipmentId = String(asset.id);
       row.tabIndex = 0; row.setAttribute("aria-expanded", "false");
-      const article = state.items.find((item) => item.id === asset.article_id);
+      const article = order.article_media?.[asset.article_id] || state.items.find((item) => item.id === asset.article_id);
       const mediaItem = {
         name: asset.name || article?.name || "",
         category: asset.category || article?.category || (/объектив|lens/i.test(asset.name || "") ? "optics" : /камера|camera|fx/i.test(asset.name || "") ? "camera" : "generic"),

@@ -71,7 +71,7 @@ def settled(channel_id, version):
 
 async def publish(bot, target):
     release = current_release()
-    if release is None:
+    if release is None or release.get("channel_announcement", True) is False:
         return "skipped"
     if str(target).lstrip('-').isdigit() and await asyncio.to_thread(settled, int(target), release["version"]):
         return "unchanged"

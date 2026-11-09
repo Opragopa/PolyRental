@@ -45,7 +45,7 @@ from .notification_outbox import notify, notify_actionable
 from .operator_preferences import preferences as operator_preferences, save_preferences as save_operator_preferences
 from . import __version__
 from .roles import configured_ids, is_staff, role_for, audit_admin_access, staff_allows, staff_subrole
-from .db import BookingDocument, Inspection, ReceiptArchive, Session, SupportMessage, SupportThread
+from .db import Article, BookingDocument, Inspection, ReceiptArchive, Session, SupportMessage, SupportThread
 from .receipt_archive import ReceiptExpired, customer_receipt_pdf
 from .pii import (DOCUMENT_KINDS, IdentityFieldError, _master_key, block_identity, consent_text, delete_identity,
                   identity_document, identity_status, masked_identity, pii_admin_ids,
@@ -219,6 +219,18 @@ def require_reviewer(user=Depends(require_customer)):
     return user
 
 
+def booking_article_media(session, article_ids):
+    from .catalog_images import image_data
+    if not article_ids:
+        return {}
+    previews = image_data(session, article_ids)
+    return {article.id: {"name": article.name,
+                         "title": catalog_title(article.name, article.kind, article.brand, article.key_spec),
+                         "description": article.description, "category": article.category,
+                         "image_url": article.image_url, "image_data": previews.get(article.id, "")}
+            for article in session.scalars(select(Article).where(Article.id.in_(article_ids)))}
+
+
 def booking_view(booking):
     from .handover import handover_state
     handover = handover_state(booking.id)
@@ -228,12 +240,14 @@ def booking_view(booking):
         "exceptions": [{**row, "replacement_name": row.get("replacement_name","") if row.get("component") else row.get("replacement_title", "")} for row in handover.get("exceptions", [])]}
     from .db import BookingChange
     with Session() as session:
+        article_media = booking_article_media(session, {line.article_id for line in booking.lines})
         change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id).order_by(BookingChange.id.desc()).limit(1))
         from .db import BookingRework
         rework=session.scalar(select(BookingRework).where(BookingRework.booking_id==booking.id).order_by(BookingRework.id.desc()).limit(1))
         from .customer_changes import can_request, latest_request, summary
         client_request = latest_request(session, booking.id)
     return {
+        "article_media": article_media,
         "can_request_changes": can_request(booking, client_request),
         "customer_change_request": summary(client_request),
         "rework_available":bool(rework and rework.to_status==booking.status),
@@ -1011,6 +1025,8 @@ def admin_booking_view(booking):
     with Session() as session:
         from .user_names import user_name
         result["assignee_name"] = user_name(session, booking.assignee_id) if booking.assignee_id else ""
+        missing_media = {row.equipment.article_id for row in booking.assets if row.equipment.article_id} - result["article_media"].keys()
+        result["article_media"].update(booking_article_media(session, missing_media))
     result["sla"] = request_sla(booking)
     ordered_assets = sorted(booking.assets, key=lambda row: (
         row.equipment.storage_location or "", row.equipment.article.name if row.equipment.article else row.equipment.name,

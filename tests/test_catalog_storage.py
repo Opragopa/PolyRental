@@ -178,3 +178,33 @@ def test_transparent_catalog_photo_survives_upload_storage_and_public_api(monkey
         with Image.open(io.BytesIO(data)) as result:
             assert result.convert('RGBA').getpixel((5,5))[3]==0
             assert result.convert('RGBA').getpixel((40,5))[3]==128
+
+
+def test_booking_photos_do_not_depend_on_opening_catalog_and_follow_replacement(monkeypatch):
+    from tests.test_completion_workflows import ready_booking
+    from app.rental import get_booking
+    booking_id = ready_booking(monkeypatch)
+    article_id = get_booking(booking_id).lines[0].article_id
+    image = Image.new('RGBA', (80, 40), (30, 150, 90, 128))
+    source = io.BytesIO(); image.save(source, format='PNG')
+    save_image(article_id, source.getvalue(), 100)
+    with TestClient(app) as client:
+        admin = {'X-Telegram-Init-Data': signed_init_data(100)}
+        customer = {'X-Telegram-Init-Data': signed_init_data(42)}
+        def photo(headers, path):
+            response = client.get(path, headers=headers)
+            assert response.status_code == 200, response.text
+            booking = next(item for item in response.json()['items'] if item['id'] == booking_id)
+            return booking['article_media'][str(article_id)]['image_data']
+        # No catalogue fetch is needed for either staff or the customer.
+        original = photo(admin, '/api/miniapp/admin/bookings')
+        assert original.startswith('data:image/webp;base64,')
+        assert photo(customer, '/api/miniapp/bookings') == original
+        image = Image.new('RGB', (40, 80), 'blue')
+        source = io.BytesIO(); image.save(source, format='JPEG')
+        save_image(article_id, source.getvalue(), 100)
+        replacement = photo(admin, '/api/miniapp/admin/bookings')
+        assert replacement != original
+        assert photo(customer, '/api/miniapp/profile/history?category=all') == replacement
+        save_image(article_id, None, 100)
+        assert photo(admin, '/api/miniapp/admin/bookings') == ''

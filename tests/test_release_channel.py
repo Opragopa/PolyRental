@@ -77,3 +77,12 @@ def test_renderer_uses_all_audiences_and_escapes_telegram_html():
     assert channel.render_post(release).startswith('<b>0.5.0 → 0.5.1</b>\nЧто изменилось:')
     assert channel.render_post(release,html=False).startswith('# 0.5.0 → 0.5.1\nЧто изменилось:')
     assert '**Добавлен <товар>.** A & B' in channel.render_post(release,html=False)
+
+
+def test_in_app_release_can_skip_channel_publication(monkeypatch):
+    release = {**channel.current_release(), 'channel_announcement': False}
+    monkeypatch.setattr(channel, 'current_release', lambda: release)
+    # The release remains available in the app; no Telegram method is needed.
+    assert asyncio.run(channel.publish(object(), '-100123')) == 'skipped'
+    with Session() as session:
+        assert session.get(ReleasePublication, (-100123, release['version'])) is None
