@@ -2,7 +2,7 @@
 
 Telegram-бот, Mini App и сайт для бесплатной аренды оборудования медиацентра «Полимер».
 
-Текущая версия — **0.5.8**, схема БД — **20261110_44**. Номер приложения берётся из [VERSION](VERSION), показывается в профиле и `/health`, входит в URL статических ресурсов. Изменения: [CHANGELOG](CHANGELOG.md), [релиз](docs/releases/v0.5.8.md). Состояние и проверки: [docs/current-state.md](docs/current-state.md).
+Кандидат **0.5.9 — Animation update** проходит проверку; production — **0.5.8**, схема БД — **20261110_44**. Номер приложения берётся из [VERSION](VERSION), показывается в профиле и `/health`, входит в URL статических ресурсов. Изменения: [CHANGELOG](CHANGELOG.md), [релиз](docs/releases/v0.5.8.md). Состояние и проверки: [docs/current-state.md](docs/current-state.md).
 
 ## Возможности
 

@@ -173,6 +173,7 @@ if(require.main===module)(async()=>{
       await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
       await operator.page.clock.runFor(5100);
       await operator.page.locator('.handover-progress li').filter({hasText:'Клиент отметил сдачу оборудования'}).getByText('Готово', {exact:true}).waitFor();
+      assert.equal(await operator.page.locator('.handover-progress input[type=checkbox]').count(),0,'return progress must not contain checkboxes');
       assert.ok(await operator.page.getByRole('button',{name:'Завершить заявку',exact:true}).isDisabled());
       assert.ok(await operator.page.getByRole('button',{name:'Все исправны',exact:true}).isEnabled());
       order.inspections=[{equipment_id:21,stage:'check_in',result:'pass'}];

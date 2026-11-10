@@ -87,7 +87,13 @@
     setDisclosureOpen(details, opening, opening);
   });
 
+  function changeHeading(element, text) {
+    if (window.PolyRentalMotion?.morphText) window.PolyRentalMotion.morphText(element, text); else element.textContent = text;
+  }
   const tg = window.Telegram?.WebApp;
+  function calendarImpact() {
+    try { tg?.HapticFeedback?.impactOccurred?.("light"); } catch (_) { /* Older clients may not support haptics. */ }
+  }
   window.polyRentalApplyTheme?.();
   tg?.onEvent?.("themeChanged", () => window.polyRentalApplyTheme?.());
   const preview = new URLSearchParams(location.search).get("preview") === "1";
@@ -690,12 +696,13 @@
     render();
   }
 
-  let renderedMainView = null;
+  let renderedMainView = null, mainViewAnimation = null;
   let cachedCatalogKey = null, cachedCatalogData = null, renderedCatalogQuantities = null, cachedProfileKey = null, cachedProfileData = null;
   function render() {
     const oldMainView = renderedMainView;
     const mainViews = ["admin", "flow", "orders"];
     const animateMainView = mainViews.includes(state.view) && mainViews.includes(oldMainView) && state.view !== oldMainView;
+    if (oldMainView !== null && state.view !== oldMainView) window.PolyRentalMotion?.cancelTransient();
     renderedMainView = state.view;
     if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
       availabilityCheck = null; availabilitySequence++; state.busy = false;
@@ -719,8 +726,8 @@
     $("admin-panel").hidden = state.view !== "admin";
     if (animateMainView && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       const panel = $(({admin:"admin-panel", flow:"booking-flow", orders:"orders-panel"})[state.view]);
-      const direction = mainViews.indexOf(state.view) > mainViews.indexOf(oldMainView) ? 1 : -1;
-      panel.animate([{transform:`translateX(${direction * 8}px)`, opacity:.75}, {transform:"translateX(0)", opacity:1}], {duration:220, easing:"ease-out"});
+      mainViewAnimation?.cancel();
+      mainViewAnimation = panel.animate([{opacity:.72}, {opacity:1}], {duration:300, easing:"cubic-bezier(.22, 1, .36, 1)"});
     }
     $("tab-new").classList.toggle("active", state.view === "flow");
     $("tab-orders").classList.toggle("active", state.view === "orders");
@@ -732,7 +739,7 @@
     if (preview) {
       try { localStorage.setItem("polyrental-preview-view", state.view); } catch (_) {}
     }
-    $("page-title").textContent = state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки";
+    changeHeading($("page-title"), state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки");
     $("page-intro").textContent = state.view === "admin" ? "Комплектация, проверки, возврат, каталог и ремонт." : state.view === "identity" ? "Защищённая передача данных напрямую в ПолиРентал." : state.view === "orders" ? "Здесь можно следить за статусом и отменить активную заявку." : done ? "Менеджер получил запрос и скоро ответит." : "Выберите оборудование, затем укажите сроки аренды.";
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
@@ -803,7 +810,7 @@
     clientCatalog.pageItems = pageItems;
     return [...merged.values()];
   }
-  async function loadItems(checkAvailability = false) {
+  async function loadItems(checkAvailability = false, preservePosition = false) {
     if (typeof checkAvailability !== "boolean") checkAvailability = false;
     if (checkAvailability) availabilityFresh = false;
     const sequence = ++availabilitySequence;
@@ -843,7 +850,10 @@
         if (unchangedCatalog) return true;
         $("items-status").hidden = Boolean(clientCatalog.pageItems.length);
         $("items-status").textContent = requestedQuery ? "По вашему запросу ничего не найдено." : "В каталоге пока нет оборудования.";
-        renderItems(); return true;
+        const scroll = preservePosition ? {x:window.scrollX, y:window.scrollY} : null;
+        renderItems();
+        if (scroll) window.scrollTo(scroll.x, scroll.y);
+        return true;
       }
       if (clientCatalog.pageItems.length) {
         $("items-status").textContent = data.unavailable_count ? `${data.unavailable_count} позиций недоступно в выбранный период.` : "Все показанные экземпляры свободны на выбранный срок.";
@@ -885,14 +895,53 @@
     return false;
   }
   const categoryTransitions = {client: 0, admin: 0};
-  async function navigateClientCategory(code) {
+  const categoryHeightLocks = new WeakMap();
+  function holdCategoryHeight(panel) {
+    if (!panel || reducedMotion?.matches) return;
+    const old = categoryHeightLocks.get(panel);
+    const rect = panel.getBoundingClientRect();
+    const floor = Math.max(window.innerHeight, window.innerHeight - rect.top + 24);
+    panel.style.setProperty("--category-scroll-floor", `${floor}px`);
+    panel.classList.add("catalog-scroll-stable");
+    const minimum = Math.max(rect.height, panel.scrollHeight);
+    const state = {previous:old?.previous ?? panel.style.minHeight, timer:null};
+    if (old) clearTimeout(old.timer);
+    panel.style.minHeight = `${minimum}px`;
+    state.timer = setTimeout(() => { if (categoryHeightLocks.get(panel) === state) { panel.style.minHeight = state.previous; categoryHeightLocks.delete(panel); } }, 800);
+    categoryHeightLocks.set(panel, state);
+  }
+  let previousCategoryScroll = window.scrollY;
+  let categoryScrollFrame = 0;
+  window.addEventListener("scroll", () => {
+    const current = window.scrollY, movingUp = current < previousCategoryScroll; previousCategoryScroll = current;
+    if (!movingUp || categoryScrollFrame) return;
+    categoryScrollFrame = requestAnimationFrame(() => {
+      categoryScrollFrame = 0;
+      const panel = state.view === "flow" && state.step === 0 ? $("step-items") : state.view === "admin" && state.adminMode === "catalog" ? $("admin-content") : null;
+      if (!panel?.classList.contains("catalog-scroll-stable")) return;
+      const floor = Math.max(window.innerHeight, window.innerHeight - panel.getBoundingClientRect().top + 24);
+      const previous = parseFloat(panel.style.getPropertyValue("--category-scroll-floor")) || 0;
+      if (floor < previous) panel.style.setProperty("--category-scroll-floor", `${floor}px`);
+    });
+  }, {passive:true});
+  async function navigateClientCategory(code, origin = null) {
+    const initialScroll = {x:window.scrollX, y:window.scrollY};
+    const previousCategory = clientCatalog.category;
+    const snapshot = window.PolyRentalMotion?.captureCategory(origin || $("catalog-page-title"));
+    window.PolyRentalMotion?.cancelReflow([$("client-categories"), $("items-grid")]);
+    holdCategoryHeight($("step-items"));
     const direction = code === categoryParent(clientCatalog.category) ? -1 : 1;
     const token = ++categoryTransitions.client;
     ++availabilitySequence;
     clientCatalog.category = code; clientCatalog.page = 0;
-    syncCatalogBackButton(); render();
-    const heading = $("catalog-page-title"); heading.focus({preventScroll:true}); heading.scrollIntoView({block:"start", behavior:"auto"});
-    await loadItems();
+    syncCatalogBackButton(); render(); renderItems();
+    window.scrollTo(initialScroll.x, initialScroll.y);
+    const heading = $("catalog-page-title"); heading.focus({preventScroll:true});
+    const destination = direction < 0 ? [...$("client-categories").querySelectorAll("[data-category-code]")].find(node => node.dataset.categoryCode === previousCategory) : heading;
+    window.PolyRentalMotion?.categoryMorph(snapshot, destination || heading);
+    const loading = loadItems(false, true);
+    window.scrollTo(initialScroll.x, initialScroll.y);
+    await loading;
     if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
     window.PolyRentalMotion?.enter($("items-grid").hidden ? $("client-categories") : $("items-grid"), direction);
   }
@@ -904,13 +953,32 @@
     return false;
   }
   tg?.BackButton?.onClick?.(() => { if (!catalogBack()) back(); });
+  function categoryEmptyOverlay(host, onBack) {
+    const overlay = document.createElement("section"); overlay.className = "category-empty-overlay"; overlay.setAttribute("role", "region"); overlay.setAttribute("aria-label", "Пустая категория");
+    const message = document.createElement("p"); message.textContent = "Тут ещё ничего нет :(";
+    const back = document.createElement("button"); back.type = "button"; back.className = "button secondary"; back.textContent = "Назад"; back.addEventListener("click", onBack);
+    overlay.append(message, back); host.append(overlay);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => position()) : null;
+    const position = () => {
+      if (!overlay.isConnected) { window.removeEventListener("scroll", position); window.removeEventListener("resize", position); observer?.disconnect(); return; }
+      const area = host.getBoundingClientRect(), bottom = Math.min(window.innerHeight - 80, area.bottom), top = Math.max(0, area.top);
+      overlay.hidden = bottom - top < 56;
+      overlay.style.left = `${Math.max(0, area.left)}px`; overlay.style.width = `${Math.max(0, area.width)}px`;
+      overlay.style.top = `${top}px`; overlay.style.height = `${Math.max(0, bottom - top)}px`;
+    };
+    window.addEventListener("scroll", position, {passive:true}); window.addEventListener("resize", position, {passive:true});
+    observer?.observe(host);
+    position(); requestAnimationFrame(position);
+  }
   function renderItems() {
+    $("step-items").classList.toggle("catalog-category-screen", Boolean(clientCatalog.category));
+    $("step-items").querySelector(".category-empty-overlay")?.remove();
     renderedCatalogQuantities = JSON.stringify([...state.quantities]);
     $("items-grid").replaceChildren();
     const categoryHost = $("client-categories"); categoryHost.replaceChildren();
     const queryText = $("client-catalog-search").value.trim();
     const parent = clientCatalog.categories.find(c => c.code === clientCatalog.category);
-    $("catalog-page-title").textContent = parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования");
+    changeHeading($("catalog-page-title"), parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования"));
     $("client-catalog-search-label").textContent = parent ? `Поиск: ${parent.name}` : "Поиск по всему каталогу";
     syncCatalogBackButton();
     if (parent) {
@@ -921,7 +989,8 @@
     if (!queryText) for (const category of children) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
-      button.addEventListener("click", () => { void navigateClientCategory(category.code); }); categoryHost.append(button);
+      button.dataset.categoryCode = category.code;
+      button.addEventListener("click", () => { void navigateClientCategory(category.code, button); }); categoryHost.append(button);
     }
     const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;
     $("items-grid").hidden = Boolean(showCategoryIndex);
@@ -950,6 +1019,7 @@
         card.querySelector(".minus").disabled = next === 0;
         card.querySelector(".plus").disabled = next >= quantityLimit(item.id);
         card.querySelector(".available-badge").textContent = stockWarning(item.id, next);
+        if (delta > 0 && next > current) window.PolyRentalMotion?.flyToCart(card, $("main-button"));
         renderedCatalogQuantities = JSON.stringify([...state.quantities]);
         updateCartCounters(); saveDraft();
       };
@@ -964,6 +1034,10 @@
       if (item.name && item.name !== catalogTitle(item)) { const full = document.createElement("p"); full.textContent = item.name; notes.append(full); }
       if (item.owners?.length) { const owner = document.createElement("p"); owner.textContent=`Владелец: ${item.owners.join(", ")}`; notes.append(owner); }
       $("items-grid").append(card);
+    }
+    if (clientCatalog.category && !queryText && !$("items-grid").querySelector(".item-card")) {
+      $("items-status").hidden = Boolean(children.length);
+      if (!children.length) { $("items-status").hidden = true; categoryEmptyOverlay($("items-grid"), () => { void navigateClientCategory(categoryParent(clientCatalog.category)); }); }
     }
     const pages = Math.max(1, Math.ceil(clientCatalog.total / clientCatalog.pageSize));
     $("client-catalog-pagination").hidden = showCategoryIndex || !clientCatalog.paged || pages <= 1;
@@ -1683,6 +1757,8 @@
 
   async function showAdmin(mode = "orders") {
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
+    const changingAdminTab = state.view === "admin" && state.adminMode !== mode;
+    if (changingAdminTab) window.PolyRentalMotion?.cancelTransient();
     const returningToOrders = state.view !== "admin" && state.adminMode === "orders" && mode === "orders";
     $("admin-panel").classList.remove("catalog-editing");
     $("admin-settings").hidden = Boolean(state.role?.pii_only);
@@ -1716,15 +1792,17 @@
     if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
     closeDocumentViewer();
     clearError(); state.view = "admin"; state.adminMode = mode;
+    if (mode !== "catalog") $("admin-content").classList.remove("catalog-category-screen");
     $("catalog-import-open").hidden = mode !== "catalog" || !["manager", "admin"].includes(state.role?.staff_role);
     $("admin-order-controls").hidden = mode !== "orders"; $("admin-queues").hidden = mode !== "orders"; $("admin-request-filter-field").hidden = mode !== "orders";
     $("admin-status-field").hidden = mode !== "orders"; $("admin-sort-field").hidden = mode !== "orders"; $("admin-pagination").hidden = true; $("admin-clear-target").hidden = mode !== "orders" || !state.adminTargetId;
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
     if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
     render();
-    $("admin-panel").querySelector("h2").textContent = ({orders:"Заявки",catalog:"Управление · Каталог",repairs:"Ремонт",support:"Обращения"})[mode] || "Управление";
+    changeHeading($("admin-panel").querySelector("h2"), ({orders:"Заявки",catalog:"Управление · Каталог",repairs:"Ремонт",support:"Обращения"})[mode] || "Управление");
     document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
+    if (changingAdminTab) window.PolyRentalMotion?.enter(content);
     const previousScrollY = window.scrollY;
     content.style.minHeight = mode === "orders" && previousCard ? `${content.offsetHeight}px` : "";
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
@@ -2364,25 +2442,38 @@
     documentViewerReturnFocus = null;
   }
 
-  async function navigateAdminCategory(code, staticResult = null) {
+  async function navigateAdminCategory(code, staticResult = null, origin = null) {
+    const initialScroll = {x:window.scrollX, y:window.scrollY};
+    const previousCategory = catalogView.category;
+    const backwards = code === categoryParent(previousCategory);
+    const snapshot = window.PolyRentalMotion?.captureCategory(origin || $("admin-catalog-heading"));
+    window.PolyRentalMotion?.cancelReflow([document.querySelector(".admin-categories"), document.querySelector(".admin-catalog-items")]);
+    holdCategoryHeight($("admin-content"));
     const token = ++categoryTransitions.admin;
     ++catalogView.sequence;
     catalogView.category = code; catalogView.page = 0;
+    $("admin-content").classList.toggle("catalog-category-screen", Boolean(code));
+    $("admin-content").querySelector(".category-empty-overlay")?.remove();
     clearTimeout(catalogView.timer); syncCatalogBackButton();
-    if (staticResult) renderAdminCatalog(staticResult);
+    const pendingHeading = $("admin-catalog-heading"); if (pendingHeading) changeHeading(pendingHeading, clientCatalog.categories.find(category => category.code === code)?.name || "Каталог оборудования");
+    if (!backwards) window.PolyRentalMotion?.categoryMorph(snapshot, $("admin-catalog-heading"));
+    if (staticResult) { renderAdminCatalog(staticResult); window.scrollTo(initialScroll.x, initialScroll.y); }
     else {
       const content = $("admin-content");
       content.querySelector(".admin-categories")?.replaceChildren();
       const items = content.querySelector(".admin-catalog-items"); if (items) showLoading(items, "Загружаем…");
-      await reloadCatalogPage();
+      window.scrollTo(initialScroll.x, initialScroll.y);
+      await reloadCatalogPage(false, true);
     }
     if (token !== categoryTransitions.admin || state.view !== "admin" || state.adminMode !== "catalog" || catalogView.category !== code) return;
-    const heading = $("admin-catalog-heading"); heading?.focus({preventScroll:true}); heading?.scrollIntoView({block:"start", behavior:"auto"});
+    const heading = $("admin-catalog-heading"); heading?.focus({preventScroll:true});
+    const destination = backwards ? [...document.querySelectorAll(".admin-categories [data-category-code]")].find(node => node.dataset.categoryCode === previousCategory) : heading;
+    if (backwards) window.PolyRentalMotion?.categoryMorph(snapshot, destination || heading);
   }
   function catalogPagePath() {
     return `/api/miniapp/admin/catalog?${new URLSearchParams({page:String(catalogView.page), page_size:"20", q:catalogView.query, condition:catalogView.status, category:catalogView.category})}`;
   }
-  async function reloadCatalogPage(preserveSearch = false) {
+  async function reloadCatalogPage(preserveSearch = false, preservePosition = false) {
     const sequence = ++catalogView.sequence, query = catalogView.query, condition = catalogView.status, page = catalogView.page, category = catalogView.category;
     const current = $("admin-content").querySelector(".catalog-controls input");
     const selection = preserveSearch && current && current === document.activeElement ? [current.selectionStart, current.selectionEnd, current.selectionDirection] : null;
@@ -2390,7 +2481,9 @@
       const result = await api(catalogPagePath());
       if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog" || $("admin-panel").classList.contains("catalog-editing") || query !== catalogView.query || condition !== catalogView.status || category !== catalogView.category || page !== catalogView.page) return;
       if (page > 0 && page * (result.page_size || 20) >= result.total) { catalogView.page = Math.max(0, Math.ceil(result.total / (result.page_size || 20)) - 1); return reloadCatalogPage(preserveSearch); }
+      const scroll = preservePosition ? {x:window.scrollX, y:window.scrollY} : null;
       renderAdminCatalog(result);
+      if (scroll) window.scrollTo(scroll.x, scroll.y);
       if (selection) { const search = $("admin-content").querySelector(".catalog-controls input"); search?.focus({preventScroll:true}); if (selection[0] != null && selection[1] != null) search?.setSelectionRange(selection[0], selection[1], selection[2] || "none"); }
     } catch (error) { if (sequence === catalogView.sequence) showError(`Не удалось загрузить каталог: ${error.message}`); }
   }
@@ -2418,7 +2511,7 @@
   function renderAdminCatalog(result, editor = null) {
     setCategories(result.categories || []);
     $("admin-panel").classList.toggle("catalog-editing", Boolean(editor));
-    const content = $("admin-content"); content.replaceChildren();
+    const content = $("admin-content"); content.classList.toggle("catalog-category-screen", Boolean(catalogView.category) && !editor); content.replaceChildren();
     if (editor) {
       const form = catalogEditor(result, editor);
       content.append(form);
@@ -2445,6 +2538,7 @@
     const [search, status] = controls.querySelectorAll("input, select"); status.value = catalogView.status;
     controls.querySelector(".admin-search-hide-keyboard").addEventListener("click", () => search.blur());
     search.addEventListener("input", () => {
+      content.querySelector(".category-empty-overlay")?.remove();
       const selection = { start: search.selectionStart, end: search.selectionEnd, direction: search.selectionDirection };
       catalogView.query = search.value;
       if (result.page != null) { catalogView.page = 0; catalogView.sequence++; clearTimeout(catalogView.timer); catalogView.timer = setTimeout(() => { void reloadCatalogPage(true); }, 300); return; }
@@ -2474,7 +2568,7 @@
 
     const categoryHost = document.createElement("div"); categoryHost.className = "client-categories admin-categories";
     const currentCategory = clientCatalog.categories.find(c => c.code === catalogView.category);
-    const selectCategory = code => { void navigateAdminCategory(code, result.page != null ? null : result); };
+    const selectCategory = (code, origin = null) => { void navigateAdminCategory(code, result.page != null ? null : result, origin); };
     if (currentCategory) {
       const back = document.createElement("button"); back.type = "button"; back.className = "button ghost"; back.textContent = "← " + (currentCategory.parent_code ? "Назад" : "Все категории");
       back.addEventListener("click", () => selectCategory(currentCategory.parent_code || "")); categoryHost.append(back);
@@ -2482,7 +2576,8 @@
     if (!catalogView.query.trim()) for (const category of clientCatalog.categories.filter(c => (c.parent_code || "") === catalogView.category)) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
-      button.addEventListener("click", () => selectCategory(category.code));
+      button.dataset.categoryCode = category.code;
+      button.addEventListener("click", () => selectCategory(category.code, button));
       if (!catalogView.editingCategories) { categoryHost.append(button); continue; }
       const tile = document.createElement("div"); tile.className = "category-edit-tile"; tile.append(button);
       const edit = document.createElement("button"); edit.type = "button"; edit.className = "category-edit";
@@ -2536,11 +2631,13 @@
     for (const [layout, title, icon] of [["list", "Список", "list"], ["grid", "Плитка", "grid"]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = "button ghost catalog-layout-icon";
       button.setAttribute("aria-label", title); button.title = title; button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`;
-      button.addEventListener("click", () => { catalogView.layout = layout; articleGrid.classList.toggle("tiles", layout === "grid"); categoryHost.classList.toggle("categories-list", layout === "list"); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
+      button.addEventListener("click", () => { catalogView.layout = layout; const change = () => { articleGrid.classList.toggle("tiles", layout === "grid"); categoryHost.classList.toggle("categories-list", layout === "list"); }; if (window.PolyRentalMotion) window.PolyRentalMotion.reflow([categoryHost, articleGrid], change); else change(); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
       button.setAttribute("aria-pressed", String(catalogView.layout === layout)); layoutControls.append(button);
     }
     articleGrid.classList.toggle("tiles", catalogView.layout === "grid"); categoryHost.classList.toggle("categories-list", catalogView.layout === "list"); content.insertBefore(layoutControls, categoryHost);
-    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary, articleGrid);
+    const emptyCategory = Boolean(catalogView.category && !query && !visibleArticles.length && !clientCatalog.categories.some(category => category.parent_code === catalogView.category));
+    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex || emptyCategory); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary, articleGrid);
+    if (emptyCategory && !catalogView.editingCategories) categoryEmptyOverlay(articleGrid, () => selectCategory(categoryParent(catalogView.category)));
     for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
@@ -2872,7 +2969,7 @@
         warning.textContent = !loaded ? 'Занятость ещё не загружена. Отметку можно сохранить.' : !start.value || !end.value ? 'Выберите начало и конец периода.' : matches.length ? `Есть пересечения: ${matches.length}. ${[...new Set(matches.map(item=>item.kind === 'booking' ? `${item.label} — ${item.reason}` : 'Занятость вне сервиса'))].join('; ')}. Отметку можно сохранить.` : 'Пересечений с известной занятостью нет.';
       };
       const calendar = new window.PolyRentalCalendar.RangeCalendar(dialog.querySelector('.external-calendar'), {
-        minimum:'', start:initialStart.slice(0,10), end:initialEnd.slice(0,10), onChange:update,
+        minimum:'', start:initialStart.slice(0,10), end:initialEnd.slice(0,10), onChange:update, onSelect:calendarImpact,
         dayNote: day => {
           const left = Date.parse(`${day}T00:00:00+03:00`), right = Date.parse(`${addIsoDays(day,1)}T00:00:00+03:00`);
           return schedule.some(item=>overlaps(left,right,item)) ? 'Уже есть занятость; выбор разрешён' : '';
@@ -2980,7 +3077,7 @@
       }
       steps.push([isDone, "Сотрудник завершил возврат"]);
     }
-    for (const [done, label] of steps) { const li = document.createElement("li"); if (status !== "ready") { const box = document.createElement("input"); box.type = "checkbox"; box.checked = done; box.disabled = true; box.setAttribute("aria-label", label); li.append(box); } const text = document.createElement("span"); text.textContent = label; const badge = document.createElement("span"); badge.className = `handover-badge ${done ? "done" : "waiting"}`; badge.textContent = done ? "Готово" : "Ожидается"; li.append(text, badge); list.append(li); }
+    for (const [done, label] of steps) { const li = document.createElement("li"); const text = document.createElement("span"); text.textContent = label; const badge = document.createElement("span"); badge.className = `handover-badge ${done ? "done" : "waiting"}`; badge.textContent = done ? "Готово" : "Ожидается"; li.append(text, badge); list.append(li); }
     section.append(list); parent.append(section);
   }
 
@@ -3559,21 +3656,22 @@
   });
   $("client-search-hide-keyboard").addEventListener("click", () => $("client-catalog-search").blur());
   $("client-catalog-search").addEventListener("input", () => {
+    $("step-items").querySelector(".category-empty-overlay")?.remove();
     if (clientCatalog.paged === false || preview) { renderItems(); return; }
     clientCatalog.page = 0; availabilitySequence++; clearTimeout(clientCatalog.timer);
     clientCatalog.timer = setTimeout(() => { if (state.view === "flow" && state.step === 0) void loadItems(); }, 300);
   });
   $("client-catalog-prev").addEventListener("click", () => { if (clientCatalog.page > 0) { clientCatalog.page--; void loadItems(); } });
   $("client-catalog-next").addEventListener("click", () => { if ((clientCatalog.page + 1) * clientCatalog.pageSize < clientCatalog.total) { clientCatalog.page++; void loadItems(); } });
-  function setCatalogLayout(layout) {
-    $("items-grid").classList.toggle("items-grid-tiles", layout === "grid");
-    $("client-categories").classList.toggle("categories-list", layout === "list");
+  function setCatalogLayout(layout, animate = false) {
+    const change = () => { $("items-grid").classList.toggle("items-grid-tiles", layout === "grid"); $("client-categories").classList.toggle("categories-list", layout === "list"); };
+    if (animate && window.PolyRentalMotion) window.PolyRentalMotion.reflow([$("client-categories"), $("items-grid")], change); else change();
     $("catalog-list").setAttribute("aria-pressed", String(layout === "list"));
     $("catalog-grid").setAttribute("aria-pressed", String(layout === "grid"));
     try { localStorage.setItem("polyrental-catalog-layout", layout); } catch (_) { /* Preference is optional. */ }
   }
-  $("catalog-list").addEventListener("click", () => setCatalogLayout("list"));
-  $("catalog-grid").addEventListener("click", () => setCatalogLayout("grid"));
+  $("catalog-list").addEventListener("click", () => setCatalogLayout("list", true));
+  $("catalog-grid").addEventListener("click", () => setCatalogLayout("grid", true));
   try { catalogView.layout = localStorage.getItem("polyrental-admin-catalog-layout") === "grid" ? "grid" : "list"; setCatalogLayout(localStorage.getItem("polyrental-catalog-layout") === "grid" ? "grid" : "list"); } catch (_) { setCatalogLayout("list"); }
   async function findNearestPeriod() {
     const sequence = ++nearestSearchSequence;
@@ -3936,6 +4034,7 @@
     dayState: calendarDayState,
     dayNote: day => availabilityLabels[calendarDayState(day)] || "",
     onMonthChange: queueCalendarAvailability,
+    onSelect: calendarImpact,
     onChange: ({start, end}) => { $("start-date").value = start; $("end-date").value = end; periodChanged(); },
   });
   if (!preview) void api("/api/miniapp/schedule").then((policy)=>{ if (!policy.enforced) return; schedulePolicy=policy; rangeCalendar.render(); applyBookingDateLimits(); render(); }).catch(()=>{});

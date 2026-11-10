@@ -7,6 +7,7 @@ const {fixture,base} = require('./completion-ui.cjs');
  try {
   for(const width of [320,390]) {
    const {page,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending'),width});
+   await page.evaluate(()=>{window.__externalImpacts=[];window.Telegram.WebApp.HapticFeedback={impactOccurred:style=>window.__externalImpacts.push(style)};});
    const busy={id:4,kind:'booking',start:'2026-10-30T10:00:00+03:00',end:'2026-10-30T13:00:00+03:00',label:'Заявка ТС260004',reason:'Экземпляр назначен на заявку'};
    const writes=[]; let failSchedule=false;
    await page.route(/\/api\/miniapp\/admin\/catalog(?:\?|$)/,route=>route.fulfill({json:{categories:[{code:'camera',name:'Камера'}],articles:[{id:1,name:'Камера Sony',sku:'CAM',category:'camera',active:true,equipment:[{id:21,asset_code:'CAM-1',condition:'available',location:'A1'}]}],dependencies:[],total:1,page:0,page_size:20}}));
@@ -29,6 +30,7 @@ const {fixture,base} = require('./completion-ui.cjs');
    assert.equal(await dialog.locator('[type="datetime-local"]').count(),0);
    assert.equal(await dialog.locator('[data-date="2026-10-30"]').isDisabled(),false);
    await dialog.locator('[data-date="2026-10-30"]').click();await dialog.locator('[data-date="2026-10-30"]').click();
+   assert.deepEqual(await page.evaluate(()=>window.__externalImpacts),['light','light'],'external calendar triggers one impact per date');
    await dialog.locator('.external-start-time').fill('11:00');await dialog.locator('.external-end-time').fill('12:00');
    await dialog.locator('.external-warning.has-overlap').waitFor();
    await dialog.locator('[name="reason"]').fill('Работа вне сервиса');

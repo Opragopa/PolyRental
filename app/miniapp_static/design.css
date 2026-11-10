@@ -2039,3 +2039,49 @@ h1, h2, h3 { text-wrap: balance; }
 .catalog-media { border:1px solid color-mix(in srgb, var(--text) 18%, transparent); }
 .catalog-media > img, .category-card-photo { background:#fff; }
 .category-card-photo { border:1px solid color-mix(in srgb, var(--text) 18%, transparent); border-radius:inherit; }
+
+/* Keep the queue in place while filters expand below the same toolbar. */
+.admin-order-controls { display:grid; grid-template-columns:minmax(0, 1fr) 100px; align-items:start; position:relative; }
+.admin-order-controls .admin-queues { grid-area:1 / 1; align-self:start; }
+.admin-order-controls .admin-filters, .admin-order-controls .admin-filters[open] { grid-area:1 / 1 / 2 / 3; min-width:0; pointer-events:none; }
+.admin-order-controls .admin-filters summary { width:max-content; margin-left:auto; pointer-events:auto; }
+.admin-order-controls .admin-filter-fields { pointer-events:auto; }
+
+/* Transient motion must not widen the viewport. */
+html, body { overflow-x:clip; }
+html { scrollbar-gutter:stable; }
+html:has(#step-items.catalog-scroll-stable:not([hidden])),
+html:has(#admin-panel:not([hidden]) #admin-content.catalog-scroll-stable) { overflow-anchor:none; }
+
+/* Short category screens retain enough scroll range for the heading transition. */
+#step-items.catalog-category-screen, #admin-content.catalog-category-screen,
+#step-items.catalog-scroll-stable, #admin-content.catalog-scroll-stable { min-height:max(100dvh, var(--category-scroll-floor, 0px)); }
+.catalog-empty { color:var(--muted); padding:16px 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #range-calendar .calendar-status-reveal::before { animation-duration:300ms; }
+  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after,
+  #range-calendar .calendar-day[data-availability]:focus-visible::after { animation-duration:240ms; }
+}
+
+.category-empty-overlay { position:fixed; z-index:20; inset:0 0 calc(120px + env(safe-area-inset-bottom)) 0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; pointer-events:none; }
+.category-empty-overlay p { margin:0; padding:8px 14px; border-radius:12px; background:var(--bg); color:var(--text); font-weight:600; }
+.category-empty-overlay button { pointer-events:auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #range-calendar .calendar-day.calendar-day-reveal::before { animation:calendar-day-reveal 400ms cubic-bezier(.22,1,.36,1) both; animation-delay:var(--range-reveal-delay,0ms); }
+}
+
+/* Keep the empty state tied to the viewport during tab and card animations. */
+#booking-flow:has(.category-empty-overlay), #admin-panel:has(.category-empty-overlay) { transform:none !important; animation:none !important; }
+.category-empty-overlay { transform:none; }
+
+@media (prefers-reduced-motion:no-preference) {
+  #range-calendar .calendar-day.calendar-day-reveal { background:var(--range-base, var(--surface)); }
+}
+.category-empty-overlay .button { min-width:180px; min-height:56px; padding:16px 28px; font-size:16px; }
+
+/* Empty content stays inside the product area; sticky positioning keeps it reachable when the category was opened from below. */
+.category-empty-overlay { position:fixed; inset:auto; z-index:1; min-height:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+.category-empty-overlay[hidden] { display:none; }
+.items-grid:has(> .category-empty-overlay), .admin-catalog-items:has(> .category-empty-overlay) { display:block; min-height:max(55dvh, var(--category-scroll-floor, 0px)); }

@@ -30,6 +30,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
           if (url.hostname === "telegram.org") return route.fulfill({body:"",contentType:"text/javascript"});
           return route.fulfill({body:html, contentType:"text/html"});
         });
+        await page.addInitScript(() => { window.__calendarImpacts=[]; window.Telegram={WebApp:{HapticFeedback:{impactOccurred:style=>window.__calendarImpacts.push(style)}}}; });
         await page.clock.install({time:new Date("2026-10-26T10:00:00Z")});
         await page.goto("http://polyrental.test/miniapp?preview=1");
         if (dark) await page.evaluate(() => {
@@ -47,13 +48,25 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         assert.equal(await page.locator("#app-version").innerText(), `v${version}`);
         assert.equal(await page.locator("#app-version").isVisible(), true);
         await page.locator('[data-date="2026-10-30"]').click();
+        assert.deepEqual(await page.evaluate(()=>window.__calendarImpacts),['light'],'choosing a date produces one light impact');
+        await page.locator('[data-date="2026-10-25"]').evaluate(el=>el.click());
+        assert.deepEqual(await page.evaluate(()=>window.__calendarImpacts),['light'],'disabled days must not produce haptics');
         assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
         assert.ok(await page.locator('[data-date="2026-10-30"]').evaluate(el => el.getAnimations().some(animation =>
-          animation.effect.getTiming().duration === 180 && animation.effect.getKeyframes().some(frame => frame.transform === "scale(1.08)"))), "selected day animates briefly without replacing its button");
+          animation.effect.getTiming().duration === 280 && animation.effect.getKeyframes().some(frame => frame.transform === "scale(1.08)"))), "selected day animates briefly without replacing its button");
         assert.equal(await page.locator("#start-time").isDisabled(),true);
         await page.locator('[data-date="2026-11-02"]').click();
         assert.equal(await page.locator(".calendar-day.in-range").count(),2);
-        assert.ok(["calendar-day-reveal", "calendar-status-wipe"].includes(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName)));
+        const periodMotion = await page.locator('.calendar-day.calendar-day-reveal').evaluateAll(nodes => nodes.map(node => ({delay:parseFloat(node.style.getPropertyValue('--range-reveal-delay')) || 0, duration:parseFloat(getComputedStyle(node,'::before').animationDuration)})));
+        assert(periodMotion.length >= 3 && Math.max(...periodMotion.map(item=>item.delay)) >= 80, 'period reveal must proceed slowly across selected days');
+        assert(periodMotion.every(item=>item.duration >= .39), 'period reveal must use a slower fade');
+        const lastReveal = page.locator('.calendar-day.calendar-day-reveal').last();
+        await lastReveal.evaluate(el=>el.dispatchEvent(new AnimationEvent('animationend',{animationName:'calendar-tap'})));
+        assert(await lastReveal.evaluate(el=>el.classList.contains('calendar-day-reveal')), 'unrelated animations must not cancel the range reveal');
+        const paintedBase = await page.locator('.calendar-day.calendar-day-reveal[data-availability="all"]').first().evaluate(el=>({base:getComputedStyle(el).backgroundColor,status:getComputedStyle(el).getPropertyValue('--day-status-bg').trim()}));
+        assert.notEqual(paintedBase.base,'rgba(0, 0, 0, 0)','availability fill must remain visible during the range reveal');
+        assert.notEqual(paintedBase.base,'rgb(255, 255, 255)','availability fill must not flash white');
+        assert.ok(["none", "calendar-day-reveal", "calendar-status-wipe"].includes(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName)));
         await page.emulateMedia({reducedMotion:"reduce"});
         assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "none");
         await page.emulateMedia({reducedMotion:"no-preference"});

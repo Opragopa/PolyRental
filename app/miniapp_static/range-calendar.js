@@ -27,8 +27,8 @@
     return "";
   }
   class RangeCalendar {
-    constructor(element, { minimum, start = "", end = "", onChange = () => {}, onMonthChange = () => {}, isDisabled = () => false, dayNote = () => "", dayState = () => "" }) {
-      this.element = element; this.minimum = minimum; this.range = { start, end }; this.onChange = onChange;
+    constructor(element, { minimum, start = "", end = "", onChange = () => {}, onSelect = () => {}, onMonthChange = () => {}, isDisabled = () => false, dayNote = () => "", dayState = () => "" }) {
+      this.element = element; this.minimum = minimum; this.range = { start, end }; this.onChange = onChange; this.onSelect = onSelect;
       this.isDisabled = isDisabled;
       this.dayNote = dayNote;
       this.dayState = dayState; this.onMonthChange = onMonthChange;
@@ -61,7 +61,7 @@
         if (previousAvailability !== availability) {
           button.classList.remove("calendar-status-reveal");
           if (["all", "partial", "none"].includes(availability)) {
-            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 18}ms`);
+            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
             button.classList.add("calendar-status-reveal");
           }
         }
@@ -73,10 +73,11 @@
           button.classList.remove("calendar-day-pop", "calendar-day-reveal");
           if (day === motion.clickedDay && !this.element.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches) {
             button.getAnimations().forEach(animation => animation.cancel());
-            button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)"});
+            button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"});
           }
           if (motion.revealRange && range.includes(button)) {
-            button.style.setProperty("--range-reveal-delay", `${range.indexOf(button) * Math.min(20, 100 / Math.max(1, range.length - 1))}ms`);
+            button.style.setProperty("--range-base", previousAvailability ? "var(--day-status-bg)" : "var(--surface)");
+            button.style.setProperty("--range-reveal-delay", `${range.indexOf(button) * Math.min(80, 600 / Math.max(1, range.length - 1))}ms`);
             button.classList.add("calendar-day-reveal");
           }
         }
@@ -114,7 +115,7 @@
           if (day >= this.range.start && day <= this.range.end) revealDays.push(day);
         }
       }
-      const revealStep = revealDays.length > 1 ? Math.min(20, 100 / (revealDays.length - 1)) : 0;
+      const revealStep = revealDays.length > 1 ? Math.min(80, 600 / (revealDays.length - 1)) : 0;
       const revealPositions = new Map(revealDays.map((day, index) => [day, index]));
       const dayFormatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
       for (let index = 0; index < 42; index += 1) {
@@ -130,7 +131,7 @@
         if (["all", "partial", "none"].includes(availability)) {
           button.classList.add(`calendar-availability-${availability}`);
           button.dataset.availability = availability;
-          button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 18}ms`);
+          button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
           button.classList.add("calendar-status-reveal");
         }
         button.classList.toggle("calendar-day-busy", Boolean(note));
@@ -138,11 +139,13 @@
         button.classList.toggle("calendar-day-pop", day === motion.clickedDay);
         if (revealPositions.has(day)) {
           button.classList.add("calendar-day-reveal");
+          button.style.setProperty("--range-base", availability ? "var(--day-status-bg)" : "var(--surface)");
           button.style.setProperty("--range-reveal-delay", `${Math.round(revealPositions.get(day) * revealStep)}ms`);
         }
         button.setAttribute("aria-pressed", String(selected));
         button.setAttribute("aria-label", dayFormatter.format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
         button.addEventListener("click", () => {
+          this.onSelect(day);
           this.range = selectRange(this.range, day, this.minimum);
           this.onChange(this.range);
           this.render(day, { clickedDay: day, revealRange: Boolean(this.range.start && this.range.end) });
@@ -155,12 +158,17 @@
           if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); this.onMonthChange(); }
           else grid.querySelector(`[data-date="${next}"]`).focus();
         });
-        button.addEventListener("animationend", () => button.classList.remove("calendar-day-pop", "calendar-day-reveal", "calendar-status-reveal"));
+        button.addEventListener("animationend", event => {
+          if (event.target !== button) return;
+          if (event.animationName === "calendar-day-reveal" && event.pseudoElement === "::before") button.classList.remove("calendar-day-reveal");
+          else if (event.animationName === "calendar-status-wipe" && event.pseudoElement === "::before") button.classList.remove("calendar-status-reveal");
+          else if (["calendar-tap", "calendar-day-pop"].includes(event.animationName) && !event.pseudoElement) button.classList.remove("calendar-day-pop");
+        });
         grid.append(button);
       }
       this.element.append(header, weekdays, grid);
       if (changingMonth && !doc.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof grid.animate === "function") {
-        grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)"});
+        grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"});
       }
       if (focusDay) grid.querySelector(`[data-date="${focusDay}"]`)?.focus({ preventScroll: true });
     }
