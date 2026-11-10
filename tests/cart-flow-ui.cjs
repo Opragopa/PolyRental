@@ -38,6 +38,13 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
     await page.locator('#main-button').click();
     assert.equal(await page.locator('#step-contact').isVisible(), true);
+    await page.locator('#cart-items .minus').click();
+    await page.locator('#cart-items .minus').click();
+    await page.locator('#top-back-button').click();
+    await page.locator('#items-grid .quantity-value').getByText('0',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
+    await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
+    await page.locator('#main-button').click();
     await page.locator('#customer-name').fill('Анна');
     await page.locator('#customer-contact').fill('@anna_user');
     await page.locator('#main-button').click();

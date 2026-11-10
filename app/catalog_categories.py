@@ -27,8 +27,9 @@ def seed_categories(connection):
 
 
 def list_categories():
+    from .catalog_images import preview_data
     with Session() as session:
-        return [{"code": row.code, "name": row.name, "parent_code": row.parent_code, "icon": row.icon} for row in session.scalars(select(CatalogCategory).order_by(CatalogCategory.name))]
+        return [{"code": row.code, "name": row.name, "parent_code": row.parent_code, "icon": row.icon, "image_data": preview_data(row.image_webp)} for row in session.scalars(select(CatalogCategory).order_by(CatalogCategory.name))]
 
 
 def category_exists(code):
@@ -69,6 +70,61 @@ def create_category(name, actor_id, parent_code=None, icon="equipment"):
                 raise ValueError("Родительская категория не найдена")
             row = CatalogCategory(code=f"custom_{uuid4().hex}", name=name, normalized_name=normalize_name(name), parent_code=parent_code or None, icon=icon)
             session.add(row)
-        return {"code": row.code, "name": row.name, "parent_code": row.parent_code, "icon": row.icon}
+        return {"code": row.code, "name": row.name, "parent_code": row.parent_code, "icon": row.icon, "image_data": ""}
+    except IntegrityError as exc:
+        raise ValueError("Категория с таким названием уже существует") from exc
+
+
+def valid_category_name(name):
+    name = " ".join(unicodedata.normalize("NFKC", name).split())
+    if not name or len(name) > 100 or any(unicodedata.category(char).startswith("C") for char in name):
+        raise ValueError("Укажите название категории от 1 до 100 символов")
+    return name
+
+
+def update_category(code, name, actor_id):
+    from .inventory import require_role
+    require_role(actor_id, "operator")
+    name = valid_category_name(name)
+    try:
+        with Session.begin() as session:
+            row = session.get(CatalogCategory, code, with_for_update=True)
+            if not row:
+                raise ValueError("Категория не найдена")
+            row.name, row.normalized_name = name, normalize_name(name)
+    except IntegrityError as exc:
+        raise ValueError("Категория с таким названием уже существует") from exc
+
+
+def save_category_image(code, raw, actor_id):
+    from .inventory import require_role
+    from .catalog_images import thumbnail
+    require_role(actor_id, "operator")
+    preview = thumbnail(raw) if raw is not None else None
+    with Session.begin() as session:
+        row = session.get(CatalogCategory, code, with_for_update=True)
+        if not row:
+            raise ValueError("Категория не найдена")
+        row.image_webp = preview
+    return preview
+
+
+def edit_category(code, name, raw, remove_photo, actor_id):
+    """Change name and optional preview together, or leave both untouched."""
+    from .inventory import require_role
+    from .catalog_images import thumbnail
+    require_role(actor_id, "operator")
+    name = valid_category_name(name)
+    if raw is not None and remove_photo:
+        raise ValueError("Выберите новое фото или удалите текущее")
+    preview = thumbnail(raw) if raw is not None else None
+    try:
+        with Session.begin() as session:
+            row = session.get(CatalogCategory, code, with_for_update=True)
+            if not row:
+                raise ValueError("Категория не найдена")
+            row.name, row.normalized_name = name, normalize_name(name)
+            if raw is not None or remove_photo:
+                row.image_webp = preview
     except IntegrityError as exc:
         raise ValueError("Категория с таким названием уже существует") from exc

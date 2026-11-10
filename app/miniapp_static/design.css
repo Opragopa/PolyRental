@@ -1988,3 +1988,54 @@ h1, h2, h3 { text-wrap: balance; }
 .catalog-photo-dialog .photo-save-status { display:none; align-items:center; gap:10px; margin:0; color:var(--muted); font-size:14px; }
 .catalog-photo-dialog form[aria-busy="true"] .photo-save-status { display:flex; }
 @media(prefers-reduced-motion:reduce) { .photo-spinner { animation:none; } }
+
+/* Catalog controls and contrasting equipment images. */
+.catalog-search-input { display:flex; align-items:center; position:relative; }
+.catalog-search-input input { width:100%; padding-right:48px; }
+.catalog-search-input button { position:absolute; right:4px; width:40px; height:40px; display:grid; place-items:center; border:0; background:transparent; color:var(--muted); cursor:pointer; }
+.catalog-search-input button svg { width:22px; height:22px; }
+.client-categories.categories-list { grid-template-columns:1fr; }
+.catalog-media > img { background:#f5f7fa; }
+.catalog-media { background:color-mix(in srgb, var(--surface) 85%, var(--text)); }
+.category-card-icon { background:color-mix(in srgb, var(--surface) 82%, var(--accent)); }
+.icon-action { display:inline-grid; place-items:center; }
+
+.category-card-icon { overflow:hidden; }
+.category-card-photo { width:100%; height:100%; object-fit:contain; background:#f5f7fa; }
+.category-edit { position:absolute; right:8px; bottom:8px; z-index:1; width:36px; height:36px; display:grid; place-items:center; border:1px solid var(--border); border-radius:50%; background:var(--surface); color:var(--text); cursor:pointer; }
+.category-edit .icon { width:19px; height:19px; }
+.category-edit-tile .category-card { padding-right:50px; }
+
+.admin-order-controls { display:flex; align-items:flex-start; gap:12px; margin:12px 0; }
+.admin-order-controls[hidden] { display:none; }
+.admin-order-controls .admin-queues { display:block; flex:1; min-width:0; margin:0; }
+.admin-order-controls .admin-queues select { width:100%; }
+.admin-filters { flex:none; position:relative; }
+.admin-filters summary { min-height:44px; display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none; }
+.admin-filters summary::-webkit-details-marker { display:none; }
+.admin-filters summary svg { width:21px; height:21px; }
+.admin-filters[open] { flex:1; }
+.admin-filter-fields { display:grid; gap:10px; padding:12px 0; }
+.admin-filter-fields .field { margin:0; }
+@media (max-width:420px) { .admin-order-controls:has(.admin-filters[open]) { flex-wrap:wrap; } .admin-filters[open] { flex-basis:100%; } }
+
+.request-particles { position:fixed; z-index:1000; pointer-events:none; overflow:visible; }
+.request-particles i { position:absolute; width:5px; height:5px; border-radius:2px; animation:request-particle 650ms ease-out var(--delay) both; }
+@keyframes request-particle { from { opacity:.8; transform:translate(0,0) scale(1); } to { opacity:0; transform:translate(var(--dx),var(--dy)) scale(.15); } }
+
+/* Category tiles have a distinct layout even on narrow screens. */
+.client-categories:not(.categories-list) { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+.client-categories:not(.categories-list) > .button { grid-column:1 / -1; }
+.client-categories:not(.categories-list) .category-card:not(.category-add) { min-height:132px; flex-direction:column; align-items:flex-start; justify-content:center; }
+.client-categories:not(.categories-list) .category-card-icon { width:56px; height:56px; flex-basis:56px; }
+.client-categories:not(.categories-list) .category-card-name { flex:none; }
+.client-categories:not(.categories-list) .category-card-arrow { display:none; }
+.client-categories:not(.categories-list) .category-edit-tile .category-card { height:100%; padding-right:42px; }
+
+.request-disintegrating-copy { position:absolute !important; box-sizing:border-box; inset:0; width:100%; height:100%; margin:0 !important; overflow:hidden; pointer-events:none; animation:request-disintegrate 600ms ease-in both; }
+@keyframes request-disintegrate { 0% { clip-path:inset(0 0 0 0); opacity:1; } 65% { opacity:.8; } 100% { clip-path:inset(0 0 0 100%); opacity:0; } }
+
+/* A thin frame keeps pale product images distinct on light cards too. */
+.catalog-media { border:1px solid color-mix(in srgb, var(--text) 18%, transparent); }
+.catalog-media > img, .category-card-photo { background:#fff; }
+.category-card-photo { border:1px solid color-mix(in srgb, var(--text) 18%, transparent); border-radius:inherit; }

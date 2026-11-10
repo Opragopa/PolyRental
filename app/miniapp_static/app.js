@@ -125,6 +125,7 @@
   let nearestSearchSequence = 0;
   let leaseRefreshTimer = null;
   let adminOrdersSnapshot = null, customerOrdersSnapshot = null, workflowRefreshBusy = false;
+  let renderedAdminOrdersPath = null, renderedAdminOrdersData = null;
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
@@ -170,6 +171,21 @@
     if (!data) return null;
     setCategories([...clientCatalog.categories, created]);
     return created;
+  }
+  function categoryVisual(category) {
+    return category.image_data ? `<img class="category-card-photo" src="${escapeHtml(category.image_data)}" alt="" loading="lazy">` : `<svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg>`;
+  }
+  async function editCategoryDialog(category) {
+    const path = `/api/miniapp/admin/catalog/categories/${encodeURIComponent(category.code)}`;
+    const data = await workflowDialog("Изменить категорию", `<label class="field"><span>Название категории</span><input name="name" maxlength="100" value="${escapeHtml(category.name)}" required></label><label class="field"><span>Новое фото категории</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>${category.image_data ? '<label class="check-row"><input name="remove_photo" type="checkbox"><span>Удалить текущее фото</span></label>' : ''}<p class="supporting">JPEG, PNG или WebP, не более 8 МБ.</p>`, "Сохранить", null, async values => {
+      const file = values.get("photo");
+      if (file instanceof File && file.size && values.get("remove_photo")) throw new Error("Выберите новое фото или удалите текущее.");
+      const upload = new FormData(); upload.set("name", values.get("name"));
+      if (file instanceof File && file.size) upload.set("photo", file);
+      if (values.get("remove_photo")) upload.set("remove_photo", "true");
+      await api(`${path}/edit`, {method:"POST", body:upload});
+    });
+    if (data) await showAdmin("catalog");
   }
   function categoryLabel(category) { return categoryMeta[category]?.[0] || categoryMeta.generic?.[0] || "Оборудование"; }
   function catalogType(item) {
@@ -674,7 +690,13 @@
     render();
   }
 
+  let renderedMainView = null;
+  let cachedCatalogKey = null, cachedCatalogData = null, renderedCatalogQuantities = null, cachedProfileKey = null, cachedProfileData = null;
   function render() {
+    const oldMainView = renderedMainView;
+    const mainViews = ["admin", "flow", "orders"];
+    const animateMainView = mainViews.includes(state.view) && mainViews.includes(oldMainView) && state.view !== oldMainView;
+    renderedMainView = state.view;
     if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
       availabilityCheck = null; availabilitySequence++; state.busy = false;
     }
@@ -695,6 +717,11 @@
     $("orders-panel").hidden = state.view !== "orders";
     $("identity-panel").hidden = state.view !== "identity";
     $("admin-panel").hidden = state.view !== "admin";
+    if (animateMainView && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const panel = $(({admin:"admin-panel", flow:"booking-flow", orders:"orders-panel"})[state.view]);
+      const direction = mainViews.indexOf(state.view) > mainViews.indexOf(oldMainView) ? 1 : -1;
+      panel.animate([{transform:`translateX(${direction * 8}px)`, opacity:.75}, {transform:"translateX(0)", opacity:1}], {duration:220, easing:"ease-out"});
+    }
     $("tab-new").classList.toggle("active", state.view === "flow");
     $("tab-orders").classList.toggle("active", state.view === "orders");
     $("tab-admin").classList.toggle("active", state.view === "admin");
@@ -783,8 +810,11 @@
     const periodStart = $("start").value, periodEnd = $("end").value;
     const requestedPage = clientCatalog.page, requestedQuery = $("client-catalog-search").value.trim(), requestedCategory = clientCatalog.category;
     const previousItems = state.items;
-    showLoading($("items-grid"), "", 3);
-    $("items-status").hidden = false; $("items-status").textContent = checkAvailability ? "Проверяем доступность оборудования…" : "Загружаем каталог…";
+    const requestKey = JSON.stringify([requestedPage, requestedQuery, requestedCategory, periodStart, periodEnd, [...state.quantities]]);
+    const retainCatalog = !checkAvailability && cachedCatalogKey === requestKey;
+    if (retainCatalog && renderedCatalogQuantities !== JSON.stringify([...state.quantities])) renderItems();
+    if (!retainCatalog) { $("items-grid").hidden = false; showLoading($("items-grid"), "", 3); }
+    if (!retainCatalog) { $("items-status").hidden = false; $("items-status").textContent = checkAvailability ? "Проверяем доступность оборудования…" : "Загружаем каталог…"; }
     $("retry-items").hidden = true;
     const startIso = toIso($("start").value), endIso = toIso($("end").value);
     $("period-label").innerHTML = startIso && endIso
@@ -796,7 +826,10 @@
       const data = preview ? { items: exampleItems, unavailable_count: 0, unavailable: [] } : await api(checkAvailability ? availabilityPath(periodStart, periodEnd) : `/api/miniapp/catalog?${catalogParams}`);
       if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedCategory !== clientCatalog.category || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
       if (Number.isInteger(data.page) && data.page > 0 && data.page * data.page_size >= data.total) { clientCatalog.page = Math.max(0, Math.ceil(data.total / data.page_size) - 1); return loadItems(checkAvailability); }
+      const catalogData = JSON.stringify([data, clientCatalog.categories]);
+      const unchangedCatalog = retainCatalog && cachedCatalogData === catalogData;
       state.items = reconcileAvailability(data, previousItems);
+      if (!checkAvailability) { cachedCatalogKey = requestKey; cachedCatalogData = catalogData; }
       for (const item of state.items) {
         const old = quantityStocks.get(item.id) || {};
         const capacity = Number.isInteger(item.capacity) ? item.capacity : (old.capacity ?? (Number.isInteger(item.available_quantity) ? item.available_quantity : null));
@@ -807,6 +840,7 @@
       if (state.view === "flow" && state.step === 3) renderReview();
       updateCartCounters();
       if (!checkAvailability) {
+        if (unchangedCatalog) return true;
         $("items-status").hidden = Boolean(clientCatalog.pageItems.length);
         $("items-status").textContent = requestedQuery ? "По вашему запросу ничего не найдено." : "В каталоге пока нет оборудования.";
         renderItems(); return true;
@@ -827,12 +861,12 @@
       renderItems(); return true;
     } catch (error) {
       if (sequence !== availabilitySequence) return false;
-      if (!checkAvailability) quantityStocks.clear();
+      if (!checkAvailability && !retainCatalog) { quantityStocks.clear(); cachedCatalogKey = null; cachedCatalogData = null; }
       if (state.view === "flow" && state.step === 1) renderCart();
       if (state.view === "flow" && state.step === 3) renderReview();
       updateCartCounters();
-      $("items-grid").replaceChildren();
-      $("items-status").textContent = `Не удалось загрузить оборудование: ${error.message}`;
+      if (!retainCatalog) $("items-grid").replaceChildren();
+      $("items-status").hidden = false; $("items-status").textContent = `Не удалось загрузить оборудование: ${error.message}`;
       $("retry-items").hidden = false;
       showError(error.message);
       return false;
@@ -856,7 +890,6 @@
     const token = ++categoryTransitions.client;
     ++availabilitySequence;
     clientCatalog.category = code; clientCatalog.page = 0;
-    $("client-catalog-search").value = "";
     syncCatalogBackButton(); render();
     const heading = $("catalog-page-title"); heading.focus({preventScroll:true}); heading.scrollIntoView({block:"start", behavior:"auto"});
     await loadItems();
@@ -872,6 +905,7 @@
   }
   tg?.BackButton?.onClick?.(() => { if (!catalogBack()) back(); });
   function renderItems() {
+    renderedCatalogQuantities = JSON.stringify([...state.quantities]);
     $("items-grid").replaceChildren();
     const categoryHost = $("client-categories"); categoryHost.replaceChildren();
     const queryText = $("client-catalog-search").value.trim();
@@ -886,12 +920,12 @@
     const children = clientCatalog.categories.filter(c => (c.parent_code || "") === clientCatalog.category);
     if (!queryText) for (const category of children) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
-      button.innerHTML = `<span class="category-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg></span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
+      button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
       button.addEventListener("click", () => { void navigateClientCategory(category.code); }); categoryHost.append(button);
     }
     const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;
     $("items-grid").hidden = Boolean(showCategoryIndex);
-    document.querySelector(".catalog-layout").hidden = Boolean(showCategoryIndex);
+    document.querySelector(".catalog-layout").hidden = false;
     if (showCategoryIndex) $("items-status").hidden = true;
     const query = $("client-catalog-search").value.trim().toLocaleLowerCase("ru-RU");
     for (const item of (showCategoryIndex ? [] : (clientCatalog.paged ? clientCatalog.pageItems : state.items))) {
@@ -916,6 +950,7 @@
         card.querySelector(".minus").disabled = next === 0;
         card.querySelector(".plus").disabled = next >= quantityLimit(item.id);
         card.querySelector(".available-badge").textContent = stockWarning(item.id, next);
+        renderedCatalogQuantities = JSON.stringify([...state.quantities]);
         updateCartCounters(); saveDraft();
       };
       card.querySelector(".minus").addEventListener("click", () => changeQuantity(-1));
@@ -1172,7 +1207,8 @@
     $("reminders-enabled").checked = state.profile?.reminders_enabled !== false;
     $("reminders-enabled").disabled = !authorized || !state.profile || typeof state.profile.reminders_enabled !== "boolean";
     $("profile-since").textContent = state.profile?.member_since ? `С нами с ${new Date(state.profile.member_since).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" })}` : "";
-    showLoading($("orders-content"), "Загружаем заявки…");
+    const profileKey = JSON.stringify([state.profileFilter, state.profileSort, state.profilePage, state.profileNumber, state.profileTargetId]);
+    if (cachedProfileKey !== profileKey) showLoading($("orders-content"), "Загружаем заявки…");
     if (authorized) void loadProfileSupportThreads(0, sequence);
     if (keyboardMode) { $("orders-content").textContent = "Вернитесь в чат с ботом и нажмите «Мои заявки». Там же можно узнать статус и связаться с менеджером."; return; }
     if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
@@ -1180,6 +1216,9 @@
     try {
       const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&sort=${encodeURIComponent(state.profileSort)}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}`);
       if (sequence !== profileLoadSequence || state.view !== "orders") return;
+      const profileData = JSON.stringify(result);
+      if (cachedProfileKey === profileKey && cachedProfileData === profileData) return;
+      cachedProfileKey = profileKey; cachedProfileData = profileData;
       $("orders-content").replaceChildren();
       customerOrdersSnapshot = workflowSnapshot(result);
       const filtered = result.items;
@@ -1249,7 +1288,7 @@
           if (opening) showStageNotice(order);
         });
       }
-    } catch (error) { if (sequence === profileLoadSequence && state.view === "orders") { $("orders-content").textContent = "Не удалось загрузить заявки. "; $("orders-content").append(plainButton("Повторить", () => showOrders(), "secondary")); showError(error.message); } }
+    } catch (error) { if (sequence === profileLoadSequence && state.view === "orders") { cachedProfileKey = null; cachedProfileData = null; $("orders-content").textContent = "Не удалось загрузить заявки. "; $("orders-content").append(plainButton("Повторить", () => showOrders(), "secondary")); showError(error.message); } }
   }
 
   function renderUniversityOptions() {
@@ -1644,6 +1683,7 @@
 
   async function showAdmin(mode = "orders") {
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
+    const returningToOrders = state.view !== "admin" && state.adminMode === "orders" && mode === "orders";
     $("admin-panel").classList.remove("catalog-editing");
     $("admin-settings").hidden = Boolean(state.role?.pii_only);
     if (state.role?.pii_only) {mode = "orders";document.querySelectorAll("#admin-panel .calendar-sync").forEach(node=>node.hidden=true);}
@@ -1677,7 +1717,7 @@
     closeDocumentViewer();
     clearError(); state.view = "admin"; state.adminMode = mode;
     $("catalog-import-open").hidden = mode !== "catalog" || !["manager", "admin"].includes(state.role?.staff_role);
-    $("admin-queues").hidden = mode !== "orders"; $("admin-request-filter-field").hidden = mode !== "orders";
+    $("admin-order-controls").hidden = mode !== "orders"; $("admin-queues").hidden = mode !== "orders"; $("admin-request-filter-field").hidden = mode !== "orders";
     $("admin-status-field").hidden = mode !== "orders"; $("admin-sort-field").hidden = mode !== "orders"; $("admin-pagination").hidden = true; $("admin-clear-target").hidden = mode !== "orders" || !state.adminTargetId;
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
     if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
@@ -1701,24 +1741,27 @@
         if (mode === "catalog" && result.page != null && catalogView.page > 0 && catalogView.page * (result.page_size || 20) >= result.total) { catalogView.page = Math.max(0, Math.ceil(result.total / (result.page_size || 20)) - 1); return showAdmin("catalog"); }
         return mode === "catalog" ? renderAdminCatalog(result) : renderRepairs(result);
       }
-      const result = await api(adminBookingsPath());
+      const ordersPath = adminBookingsPath();
+      const result = await api(ordersPath);
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
+      const ordersData = JSON.stringify(result);
+      if (returningToOrders && !pendingDeletion && content.querySelector(".request-card") && ordersPath === renderedAdminOrdersPath && ordersData === renderedAdminOrdersData) {
+        content.style.minHeight = "";
+        leaseRefreshTimer = setInterval(() => {
+          if (state.view !== "admin" || state.adminMode !== "orders") { clearInterval(leaseRefreshTimer); return; }
+          content.querySelectorAll(".request-card").forEach(card => updateRequestLease(card.requestOrder, card));
+        }, 1000);
+        return;
+      }
+      renderedAdminOrdersPath = ordersPath; renderedAdminOrdersData = ordersData;
       adminOrdersSnapshot = workflowSnapshot(result);
       const queues = $("admin-queues"); queues.hidden = !result.queues;
-      if (result.queues) for (const [key, label] of [["all", "Все"], ["review", "Нужна проверка"], ["handover", "К выдаче"], ["return", "К возврату"]]) {
-        let button = queues.querySelector(`[data-queue="${key}"]`);
-        if (!button) {
-          button = document.createElement("button"); button.type = "button"; button.className = "button secondary compact"; button.dataset.queue = key;
-          const title = document.createElement("span"); title.className = "queue-label"; title.textContent = label;
-          const count = document.createElement("span"); count.className = "queue-count"; button.append(title, count);
-          button.addEventListener("click", () => {
-            state.adminQueue = key; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all";
-            for (const control of queues.children) control.setAttribute("aria-pressed", String(control === button));
-            void showAdmin("orders");
-          }); queues.append(button);
-        }
-        button.querySelector(".queue-count").textContent = key === "all" ? "" : ` · ${result.queues[key]}`;
-        button.setAttribute("aria-pressed", String(state.adminQueue === key));
+      if (result.queues) {
+        const select = $("admin-queue");
+        select.replaceChildren(...[["all", "Все заявки"], ["review", "Нужна проверка"], ["handover", "К выдаче"], ["return", "К возврату"]].map(([key, label]) => {
+          const option = document.createElement("option"); option.value = key; option.textContent = key === "all" ? label : `${label} · ${result.queues[key]}`; return option;
+        }));
+        select.value = state.adminQueue;
       }
       const pages = Math.max(1, Math.ceil((result.total ?? result.items.length) / (result.page_size || 20)));
       if (state.adminPage >= pages) { state.adminPage = pages - 1; return showAdmin("orders"); }
@@ -2324,7 +2367,7 @@
   async function navigateAdminCategory(code, staticResult = null) {
     const token = ++categoryTransitions.admin;
     ++catalogView.sequence;
-    catalogView.category = code; catalogView.page = 0; catalogView.query = "";
+    catalogView.category = code; catalogView.page = 0;
     clearTimeout(catalogView.timer); syncCatalogBackButton();
     if (staticResult) renderAdminCatalog(staticResult);
     else {
@@ -2342,7 +2385,7 @@
   async function reloadCatalogPage(preserveSearch = false) {
     const sequence = ++catalogView.sequence, query = catalogView.query, condition = catalogView.status, page = catalogView.page, category = catalogView.category;
     const current = $("admin-content").querySelector(".catalog-controls input");
-    const selection = preserveSearch && current ? [current.selectionStart, current.selectionEnd, current.selectionDirection] : null;
+    const selection = preserveSearch && current && current === document.activeElement ? [current.selectionStart, current.selectionEnd, current.selectionDirection] : null;
     try {
       const result = await api(catalogPagePath());
       if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog" || $("admin-panel").classList.contains("catalog-editing") || query !== catalogView.query || condition !== catalogView.status || category !== catalogView.category || page !== catalogView.page) return;
@@ -2398,8 +2441,9 @@
     toolbar.hidden = !canManageItems;
     content.append(toolbar);
     const controls = document.createElement("div"); controls.className = "catalog-controls";
-    controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
+    controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><span class="catalog-search-input"><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"><button class="admin-search-hide-keyboard" type="button" aria-label="Скрыть клавиатуру" title="Скрыть клавиатуру"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M5 8h1m2 0h1m2 0h1m2 0h1m2 0h1M5 11h1m2 0h1m2 0h1m2 0h1m2 0h1M7 14h10m-7 5 2 2 2-2"/></svg></button></span></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
     const [search, status] = controls.querySelectorAll("input, select"); status.value = catalogView.status;
+    controls.querySelector(".admin-search-hide-keyboard").addEventListener("click", () => search.blur());
     search.addEventListener("input", () => {
       const selection = { start: search.selectionStart, end: search.selectionEnd, direction: search.selectionDirection };
       catalogView.query = search.value;
@@ -2437,10 +2481,14 @@
     }
     if (!catalogView.query.trim()) for (const category of clientCatalog.categories.filter(c => (c.parent_code || "") === catalogView.category)) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
-      button.innerHTML = `<span class="category-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg></span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
+      button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
       button.addEventListener("click", () => selectCategory(category.code));
       if (!catalogView.editingCategories) { categoryHost.append(button); continue; }
       const tile = document.createElement("div"); tile.className = "category-edit-tile"; tile.append(button);
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "category-edit";
+      edit.setAttribute("aria-label", `Изменить категорию: ${category.name}`); edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-pencil"></use></svg>';
+      edit.addEventListener("click", async () => { clearError(); try { await editCategoryDialog(category); } catch (error) { showError(error.message); } });
+      tile.append(edit);
       if (category.code !== "generic") {
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "category-delete";
         remove.setAttribute("aria-label", `Удалить категорию: ${category.name}`); remove.textContent = "×";
@@ -2482,16 +2530,16 @@
       const searchText = [article.title, article.name, article.kind, article.brand, article.key_spec, article.description, article.sku, ...article.equipment.flatMap((asset) => [asset.serial, asset.inventory_code, asset.asset_code, asset.location])].join(" ").toLocaleLowerCase("ru-RU");
       return (!catalogView.category || categoryMatches(article.category)) && (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
     });
-    const layoutControls = document.createElement("div"); layoutControls.className = "catalog-layout admin-catalog-layout"; layoutControls.hidden = Boolean(categoryIndex);
+    const layoutControls = document.createElement("div"); layoutControls.className = "catalog-layout admin-catalog-layout"; layoutControls.hidden = false;
     layoutControls.setAttribute("role", "group"); layoutControls.setAttribute("aria-label", "Вид каталога управления");
     const articleGrid = document.createElement("div"); articleGrid.className = "admin-catalog-items";
     for (const [layout, title, icon] of [["list", "Список", "list"], ["grid", "Плитка", "grid"]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = "button ghost catalog-layout-icon";
       button.setAttribute("aria-label", title); button.title = title; button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`;
-      button.addEventListener("click", () => { catalogView.layout = layout; articleGrid.classList.toggle("tiles", layout === "grid"); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
+      button.addEventListener("click", () => { catalogView.layout = layout; articleGrid.classList.toggle("tiles", layout === "grid"); categoryHost.classList.toggle("categories-list", layout === "list"); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
       button.setAttribute("aria-pressed", String(catalogView.layout === layout)); layoutControls.append(button);
     }
-    articleGrid.classList.toggle("tiles", catalogView.layout === "grid"); content.append(layoutControls);
+    articleGrid.classList.toggle("tiles", catalogView.layout === "grid"); categoryHost.classList.toggle("categories-list", catalogView.layout === "list"); content.insertBefore(layoutControls, categoryHost);
     const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary, articleGrid);
     for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
@@ -2506,7 +2554,7 @@
         if (expanded) catalogView.expanded.add(article.id); else catalogView.expanded.delete(article.id);
       };
       setExpanded(catalogView.expanded.has(article.id));
-      toggle.addEventListener("click", () => setExpanded(!catalogView.expanded.has(article.id)));
+      toggle.addEventListener("click", () => { const opening = !catalogView.expanded.has(article.id); setExpanded(opening); if (opening) card.scrollIntoView({block:"center", behavior:window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); });
       const cardActions = document.createElement("div"); cardActions.className = "action-row";
       const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact icon-action"; editArticle.textContent = "✎"; editArticle.setAttribute("aria-label", `Изменить артикул: ${article.name}`); editArticle.title = "Изменить артикул";
       editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
@@ -3395,9 +3443,34 @@
     const row = document.querySelector(`.request-card[data-booking-id="${deletion.bookingId}"] .request-equipment-row[data-line-id="${deletion.line.id}"]`);
     if (row) { row.querySelector("span").textContent = `${deletion.line.title || deletion.line.name} × ${deletion.line.quantity}`; row.style.visibility = deletion.line.quantity ? "" : "hidden"; row.inert = !deletion.line.quantity; updateEquipmentEmpty(row.parentElement); }
   }
+  function animateRequestRemoval(card) {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const rect = card.getBoundingClientRect();
+    if (!reduced && rect.width && rect.height) {
+      const layer = document.createElement("div"); layer.className = "request-particles";
+      layer.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
+      layer.setAttribute("aria-hidden", "true"); layer.inert = true;
+      const fragment = card.cloneNode(true); fragment.classList.add("request-disintegrating-copy");
+      fragment.removeAttribute("id"); fragment.removeAttribute("data-booking-id"); fragment.querySelectorAll("[id], [data-booking-id]").forEach(node => { node.removeAttribute("id"); node.removeAttribute("data-booking-id"); });
+      layer.append(fragment);
+      const colors = [getComputedStyle(card).backgroundColor, getComputedStyle(card).color, getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()];
+      for (let i = 0; i < 72; i++) {
+        const particle = document.createElement("i"); const x = Math.random() * rect.width, y = Math.random() * rect.height;
+        particle.style.cssText = `left:${x}px;top:${y}px;background:${colors[i % colors.length]};--dx:${Math.round(25 + Math.random() * 100)}px;--dy:${Math.round(-45 + Math.random() * 90)}px;--delay:${Math.round(x / rect.width * 160)}ms`; layer.append(particle);
+      }
+      document.body.append(layer); card.removalParticles = layer; setTimeout(() => layer.remove(), 1000);
+    }
+    const siblings = [...card.parentElement.children].filter(node => node !== card);
+    const before = new Map(siblings.map(node => [node, node.getBoundingClientRect().top]));
+    card.hidden = true;
+    if (!reduced) for (const node of siblings) {
+      const distance = before.get(node) - node.getBoundingClientRect().top;
+      if (distance) node.animate([{transform:`translateY(${distance}px)`}, {transform:"translateY(0)"}], {duration:320, easing:"ease-out"});
+    }
+  }
   function revealDeletedCard(deletion) {
     if (deletion.assetAdjusted) { adjustAssetLine(deletion, 1); deletion.assetAdjusted = false; }
-    if (deletion.card?.isConnected) { deletion.card.style.visibility = ""; deletion.card.inert = false; deletion.card.removeAttribute("aria-hidden"); updateEquipmentEmpty(deletion.card.parentElement); }
+    if (deletion.card?.isConnected) { deletion.card.removalParticles?.remove(); deletion.card.hidden = false; deletion.card.style.visibility = ""; deletion.card.inert = false; deletion.card.removeAttribute("aria-hidden"); updateEquipmentEmpty(deletion.card.parentElement); }
   }
   function prepareDeletionIntent(deletion) {
     const targetType = deletion.assetId ? "asset" : deletion.lineId ? "line" : "request";
@@ -3432,7 +3505,9 @@
   }
   function beginRequestDeletion(order, card, lineId = null, assetId = null) {
     const offset = window.scrollY;
-    card.style.visibility = "hidden"; card.inert = true; card.setAttribute("aria-hidden", "true"); updateEquipmentEmpty(card.parentElement);
+    card.inert = true; card.setAttribute("aria-hidden", "true");
+    if (!lineId && !assetId) animateRequestRemoval(card); else card.style.visibility = "hidden";
+    updateEquipmentEmpty(card.parentElement);
     window.scrollTo(window.scrollX, offset);
     const previous = pendingDeletion && !pendingDeletion.cancelRequested ? pendingDeletion : null;
     const deletion = { bookingId: order.id, lineId, assetId, card, intentId:newRequestId(), deadline: Date.now() + deleteUndoSeconds * 1000, timer: null, failed: false };
@@ -3482,6 +3557,7 @@
     state.quantities.clear(); state.requestId = null; availabilityFresh = false; nearestProposal = null;
     queueCalendarAvailability(); renderItems(); renderCart(); saveDraft(); render();
   });
+  $("client-search-hide-keyboard").addEventListener("click", () => $("client-catalog-search").blur());
   $("client-catalog-search").addEventListener("input", () => {
     if (clientCatalog.paged === false || preview) { renderItems(); return; }
     clientCatalog.page = 0; availabilitySequence++; clearTimeout(clientCatalog.timer);
@@ -3491,6 +3567,7 @@
   $("client-catalog-next").addEventListener("click", () => { if ((clientCatalog.page + 1) * clientCatalog.pageSize < clientCatalog.total) { clientCatalog.page++; void loadItems(); } });
   function setCatalogLayout(layout) {
     $("items-grid").classList.toggle("items-grid-tiles", layout === "grid");
+    $("client-categories").classList.toggle("categories-list", layout === "list");
     $("catalog-list").setAttribute("aria-pressed", String(layout === "list"));
     $("catalog-grid").setAttribute("aria-pressed", String(layout === "grid"));
     try { localStorage.setItem("polyrental-catalog-layout", layout); } catch (_) { /* Preference is optional. */ }
@@ -3826,6 +3903,7 @@
       for (const button of adminTabsBar.querySelectorAll(".admin-mode")) button.style.removeProperty("--tab-scale");
     });
   }
+  $("admin-queue").addEventListener("change", event => { state.adminQueue = event.target.value; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all"; void showAdmin("orders"); });
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-status").addEventListener("change", (event) => { state.adminStatus = event.target.value; state.adminQueue = "all"; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-sort").addEventListener("change", (event) => { state.adminSort = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });

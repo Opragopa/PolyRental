@@ -74,3 +74,39 @@ def test_catalog_capacity_excludes_unusable_assets_and_refreshes_selected_models
         data = response.json()
         assert next(item for item in data['items'] if item['id'] == empty_id)['capacity'] == 0
         assert next(item for item in data['selected_items'] if item['id'] == article_id)['capacity'] == 2
+
+
+def test_category_rename_and_photo(monkeypatch):
+    import io
+    from PIL import Image
+    configure(monkeypatch)
+    with TestClient(app) as client:
+        operator = headers(200)
+        created = client.post('/api/miniapp/admin/catalog/categories', headers=operator, json={'name':'Тест аудио категории'}).json()
+        code = created['code']
+        path = f'/api/miniapp/admin/catalog/categories/{code}'
+        assert client.patch(path, headers=headers(42), json={'name':'Чужая'}).status_code == 403
+        assert client.patch(path, headers=operator, json={'name':'  Аудио  техника '}).status_code == 200
+        assert client.post('/api/miniapp/admin/catalog/categories', headers=operator, json={'name':'Дубликат категории'}).status_code == 200
+        assert client.patch(path, headers=operator, json={'name':'Дубликат категории'}).status_code == 422
+        image = io.BytesIO()
+        Image.new('RGB', (8, 8), 'white').save(image, 'PNG')
+        response = client.put(path + '/photo', headers=operator, files={'photo':('photo.png', image.getvalue(), 'image/png')})
+        assert response.status_code == 200 and response.json()['image_data'].startswith('data:image/webp;base64,')
+        row = next(item for item in client.get('/api/miniapp/catalog/categories').json()['items'] if item['code'] == code)
+        assert row['name'] == 'Аудио техника' and row['image_data'] == response.json()['image_data']
+        assert client.put(path + '/photo', headers=operator, files={'photo':('bad.png', b'bad', 'image/png')}).status_code == 422
+        assert client.delete(path + '/photo', headers=operator).status_code == 200
+        assert next(item for item in client.get('/api/miniapp/catalog/categories').json()['items'] if item['code'] == code)['image_data'] == ''
+        edit = path + '/edit'
+        assert client.post(edit, headers=headers(42), data={'name':'Нет доступа'}).status_code == 403
+        assert client.post(edit, headers=operator, data={'name':'Одновременное изменение'}, files={'photo':('bad.png', b'bad', 'image/png')}).status_code == 422
+        assert client.post(edit, headers=operator, data={'name':'Дубликат категории'}, files={'photo':('photo.png', image.getvalue(), 'image/png')}).status_code == 422
+        row = next(item for item in client.get('/api/miniapp/catalog/categories').json()['items'] if item['code'] == code)
+        assert row['name'] == 'Аудио техника' and row['image_data'] == ''
+        assert client.post(edit, headers=operator, data={'name':'Микрофоны'}, files={'photo':('photo.png', image.getvalue(), 'image/png')}).status_code == 200
+        row = next(item for item in client.get('/api/miniapp/catalog/categories').json()['items'] if item['code'] == code)
+        assert row['name'] == 'Микрофоны' and row['image_data'].startswith('data:image/webp;base64,')
+        assert client.post(edit, headers=operator, data={'name':'Категория без фото', 'remove_photo':'true'}).status_code == 200
+        row = next(item for item in client.get('/api/miniapp/catalog/categories').json()['items'] if item['code'] == code)
+        assert row['name'] == 'Категория без фото' and row['image_data'] == ''

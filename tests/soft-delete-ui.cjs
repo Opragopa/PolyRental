@@ -66,6 +66,18 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await third.getByRole('button',{name:'Удалить экземпляр Камера'}).click();
     await page.getByRole('button',{name:'Отменить',exact:true}).click();
     assert.equal(await third.getByRole('button',{name:'Удалить экземпляр Камера'}).isVisible(), true);
+    await first.locator('.request-toggle').click();
+    await first.getByRole('button',{name:'Удалить заявку ТС260001'}).click();
+    assert.equal(await first.isVisible(),false,'deleted request must immediately vacate its layout slot');
+    assert.equal(await page.locator('.request-particles .request-disintegrating-copy').count(),1);
+    assert.equal(await page.locator('.request-particles i').count(),72);
+    await page.getByRole('button',{name:'Отменить',exact:true}).click();
+    assert.equal(await first.isVisible(),true,'undo must restore the card');
+    assert.equal(await page.locator('.request-particles').count(),0,'undo must remove the visual effect');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await first.getByRole('button',{name:'Удалить заявку ТС260001'}).click();
+    assert.equal(await page.locator('.request-particles').count(),0);
+    await page.getByRole('button',{name:'Отменить',exact:true}).click();
     console.log('Soft delete undo checks passed');
     await page.close();
   } finally { await browser.close(); }
