@@ -23,7 +23,7 @@ const {fixture,base} = require('./completion-ui.cjs');
     assert.equal(JSON.parse(stored[0][1]).values.category,'kits');
     await form.locator('[name="category"]').selectOption('camera');
     page.once('dialog', dialog => dialog.dismiss());
-    await page.locator('#top-back-button').click();
+    await page.locator('#tab-new').click();
     assert.equal(await form.isVisible(),true, 'back must protect unsaved staff data');
     page.once('dialog', dialog => dialog.dismiss());
     await page.locator('#tab-orders').click();

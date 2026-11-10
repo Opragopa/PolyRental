@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise, resolve}; };
 const order = id => ({id, human_number:`ТС26000${id}`, status:'confirmed', identity_status:'required', starts_at:'2026-11-15T10:00:00+03:00', ends_at:'2026-11-16T10:00:00+03:00', items:[{id:1, name:'Тестовая камера', quantity:1}], handover:{}});
 
-async function fixture(browser) {
+async function fixture(browser, orders = [order(7), order(8)]) {
   const page = await browser.newPage({viewport:{width:1024, height:900}});
   const errors = [], identityRequests = [];
   const responses = {identity:async id => ({status:'required', fields:{full_name:`Клиент ${id}`}, documents:[]}), reusable:async () => ({reusable:false}), consent:async () => ({text:'Тестовое согласие', version:'qa', text_hash:'hash'})};
@@ -23,7 +23,7 @@ async function fixture(browser) {
     if (url.pathname === '/api/miniapp/me') return route.fulfill({json:{id:42, admin:false, pii_admin:false}});
     if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA', onboarding_seen:true, client_allowed:true, start_screen:'booking'}});
     if (url.pathname === '/api/miniapp/cart') return route.fulfill({json:{version:0, start:'', end:'', lines:[]}});
-    if (url.pathname === '/api/miniapp/profile/history') return route.fulfill({json:{items:[order(7), order(8)], total:2}});
+    if (url.pathname === '/api/miniapp/profile/history') return route.fulfill({json:{items:orders, total:orders.length}});
     const identity = /^\/api\/miniapp\/bookings\/(\d+)\/identity$/.exec(url.pathname);
     if (identity) { const id = Number(identity[1]); identityRequests.push(id); return route.fulfill({json:await responses.identity(id, route.request().method())}); }
     if (/\/identity\/reusable-profile$/.test(url.pathname)) return route.fulfill({json:await responses.reusable()});
@@ -37,7 +37,7 @@ async function fixture(browser) {
   async function open(id = 7, ready = true) {
     await page.locator('#tab-orders').click();
     const card = page.locator(`.customer-order-card[data-booking-id="${id}"]`);
-    if (!await card.locator('details').evaluate(node => node.open)) await card.locator('summary').click();
+    if (!await card.locator('.customer-order-accordion').evaluate(node => node.open)) await card.locator('.customer-order-toggle').click();
     await card.getByRole('button', {name:'Заполнить документы', exact:true}).click();
     if (ready) await page.getByText('Тестовое согласие', {exact:true}).waitFor();
   }
@@ -50,6 +50,12 @@ async function fixture(browser) {
   const browser = await engine.launch({headless:true, ...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   let passed = 0;
   try {
+    {
+      const {page, errors} = await fixture(browser, [{...order(7),status:'cancelled',identity_status:'not_required'}, {...order(8),status:'cancelled',identity_status:'verified'}]);
+      await page.locator('#tab-orders').click();
+      for (const id of [7,8]) { const item=page.locator(`.customer-order-card[data-booking-id="${id}"]`); await item.locator('.customer-order-toggle').click(); assert.equal(await item.locator('.customer-identity-status').isVisible(),id === 8); }
+      assert.deepEqual(errors,[]); await page.close(); passed++;
+    }
     {
       const {page, errors, open, reveal} = await fixture(browser);
       await open(); await reveal();

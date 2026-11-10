@@ -18,6 +18,26 @@ router = APIRouter()
 COOKIE = "polyrental_site_session"
 STATE_COOKIE = "polyrental_login_state"
 SESSION_SECONDS = 86400
+LOCAL_BYPASS_USER_ID = "LOCAL_SITE_AUTH_BYPASS_USER_ID"
+
+
+def _local_bypass_user(request: Request):
+    """Return the explicitly configured local preview identity, if any.
+
+    This is deliberately constrained to a loopback Host header.  The
+    acceptance container is published only on 127.0.0.1, so it lets a local
+    design tool inspect the site without a Telegram account while keeping the
+    test domain and every externally reachable deployment on normal auth.
+    """
+    raw = os.getenv(LOCAL_BYPASS_USER_ID, "").strip()
+    if not raw:
+        return None
+    host = request.headers.get("host", "").split(":", 1)[0].lower()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    if not re.fullmatch(r"[1-9][0-9]*", raw):
+        raise HTTPException(503, f"{LOCAL_BYPASS_USER_ID} должен содержать положительный Telegram ID")
+    return {"id": int(raw), "first_name": "Локальный просмотр"}
 
 
 def _serializer():
@@ -81,7 +101,12 @@ def site_root():
 
 
 @router.get("/site/login")
-def site_login():
+def site_login(request: Request):
+    local_user = _local_bypass_user(request)
+    if local_user:
+        response = RedirectResponse("/site", status_code=303, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        _cookie(response, COOKIE, _serializer().dumps(local_user), SESSION_SECONDS)
+        return response
     signer = _serializer()
     username = os.getenv("BOT_USERNAME", "").lstrip("@")
     if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):

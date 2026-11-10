@@ -20,6 +20,7 @@ const {fixture, base} = require('./completion-ui.cjs');
         }
         return route.fulfill({json:{...order.customer_change_request,reason:'Перенесли съёмку'}});
       });
+      await client.page.locator('.customer-actions > summary').click();
       await client.page.getByRole('button',{name:'Запросить изменения',exact:true}).click();
       const dialog=client.page.locator('.workflow-dialog');
       await dialog.getByRole('button',{name:'Отправить запрос',exact:true}).click();

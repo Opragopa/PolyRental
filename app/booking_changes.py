@@ -30,6 +30,19 @@ def _snapshot(booking):
             "lines": sorted([{"article_id": row.article_id, "quantity": row.quantity,"name":row.article.name} for row in booking.lines], key=lambda row: row["article_id"])}
 
 
+def _check_change_availability(session, booking, normalized, start, end):
+    """Use the same locked availability check for proposals and responses."""
+    from sqlalchemy import text
+    from .rental import _capacity, _reserved_quantity
+    for article, quantity, *_ in sorted(normalized, key=lambda row: row[0].id):
+        session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": article.id})
+        session.refresh(article)
+        if not article.is_active or article.archived_at is not None:
+            raise Conflict("Один из артикулов больше недоступен")
+        if _capacity(session, article.id) - _reserved_quantity(session, article.id, start, end, exclude_booking_id=booking.id) < quantity:
+            raise Conflict(f"Недостаточно свободных единиц: {article.name}")
+
+
 def queue(session, booking, event, message, recipient=None, sensitive=False):
     if sensitive:
         from .notification_outbox import encrypt_message
@@ -104,6 +117,7 @@ def propose_change(booking_id, actor_id, change_type, comment, proposed=None, ex
             start, end = datetime.fromisoformat(after["start"]), datetime.fromisoformat(after["end"])
             validate_interval(start, end, enforce_booking_notice=True)
             normalized = _normalize_lines(session, after["lines"])
+            _check_change_availability(session, booking, normalized, start, end)
             after = {"start": start.isoformat(), "end": end.isoformat(),
                      "lines": [{"article_id": row[0].id, "quantity": row[1],"name":row[0].name} for row in normalized]}
         nonce = os.urandom(12)
@@ -188,15 +202,7 @@ def update_request(booking_id, customer_id, start, end, lines, change_id=None, a
             raise ValueError("Передайте исправленные даты и оборудование")
         validate_interval(start, end, enforce_booking_notice=True)
         normalized = _normalize_lines(session, lines)
-        from .rental import _capacity, _reserved_quantity
-        from sqlalchemy import text
-        for article, quantity, *_ in sorted(normalized, key=lambda row: row[0].id):
-            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id":article.id})
-            session.refresh(article)
-            if not article.is_active or article.archived_at is not None:
-                raise Conflict("Один из артикулов больше недоступен")
-            if _capacity(session,article.id) - _reserved_quantity(session,article.id,start,end,exclude_booking_id=booking.id) < quantity:
-                raise Conflict(f"Недостаточно свободных единиц: {article.name}")
+        _check_change_availability(session, booking, normalized, start, end)
         # Reuse line IDs, including hidden rows, to preserve the unique article key.
         session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking.id))
         existing = {row.article_id: row for row in session.scalars(select(BookingLine).where(BookingLine.booking_id == booking.id))}

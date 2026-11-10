@@ -110,8 +110,10 @@
   function showLoading(host, message = "Загружаем…", rows = 3) {
     host.replaceChildren();
     if (message) { const status = document.createElement("p"); status.className = "loading-label"; status.setAttribute("role", "status"); status.textContent = message; host.append(status); }
+    if (!host.matches('#items-grid, .admin-catalog-items')) { const spinner = document.createElement('span'); spinner.className = 'loading-spinner'; spinner.setAttribute('role','status'); spinner.setAttribute('aria-label','Загрузка'); host.append(spinner); return; }
     const skeleton = document.createElement("div"); skeleton.className = "loading-skeleton"; skeleton.setAttribute("aria-hidden", "true");
-    for (let index = 0; index < rows; index++) { const row = document.createElement("span"); skeleton.append(row); }
+    skeleton.classList.add('catalog-skeleton'); if (host.classList.contains('tiles') || host.classList.contains('items-grid-tiles')) skeleton.classList.add('catalog-skeleton-grid');
+    for (let index = 0; index < rows; index++) { const row = document.createElement("div"); row.className='catalog-skeleton-card'; row.innerHTML='<span class="catalog-skeleton-photo"></span><span class="catalog-skeleton-lines"><i></i><i></i><i></i></span>'; skeleton.append(row); }
     host.append(skeleton);
   }
   const sections = ["step-items", "step-contact", "step-dates", "step-review"];
@@ -700,6 +702,9 @@
   let cachedCatalogKey = null, cachedCatalogData = null, renderedCatalogQuantities = null, cachedProfileKey = null, cachedProfileData = null;
   function render() {
     const oldMainView = renderedMainView;
+    if (state.view !== 'admin' && !$('admin-settings').hidden) {
+      $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open'); $('admin-heading').textContent = 'Управление';
+    }
     const mainViews = ["admin", "flow", "orders"];
     const animateMainView = mainViews.includes(state.view) && mainViews.includes(oldMainView) && state.view !== oldMainView;
     if (oldMainView !== null && state.view !== oldMainView) window.PolyRentalMotion?.cancelTransient();
@@ -716,7 +721,9 @@
     document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 2);
     const done = state.step === 4;
     const backButton = $("top-back-button");
+    backButton.hidden = (state.view === 'flow' && state.step === 0) || state.view === 'admin';
     backButton.disabled = state.view === "flow" && state.step === 0 && !clientCatalog.category;
+    $("client-catalog-back").disabled = backButton.disabled;
     backButton.title = backButton.disabled ? "Вы на первом экране" : "Назад";
     $("booking-flow").hidden = state.view !== "flow";
     $("booking-flow").inert = cartLocked; $("cart-sync-notice").hidden = !cartLocked;
@@ -821,7 +828,7 @@
     const retainCatalog = !checkAvailability && cachedCatalogKey === requestKey;
     if (retainCatalog && renderedCatalogQuantities !== JSON.stringify([...state.quantities])) renderItems();
     if (!retainCatalog) { $("items-grid").hidden = false; showLoading($("items-grid"), "", 3); }
-    if (!retainCatalog) { $("items-status").hidden = false; $("items-status").textContent = checkAvailability ? "Проверяем доступность оборудования…" : "Загружаем каталог…"; }
+    if (!retainCatalog) { $("items-status").hidden = !checkAvailability; $("items-status").textContent = checkAvailability ? "Проверяем доступность оборудования…" : ""; }
     $("retry-items").hidden = true;
     const startIso = toIso($("start").value), endIso = toIso($("end").value);
     $("period-label").innerHTML = startIso && endIso
@@ -831,6 +838,7 @@
       const catalogParams = new URLSearchParams({page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:requestedQuery, category:requestedCategory});
       for (const [id] of state.quantities) catalogParams.append("selected", String(id));
       const data = preview ? { items: exampleItems, unavailable_count: 0, unavailable: [] } : await api(checkAvailability ? availabilityPath(periodStart, periodEnd) : `/api/miniapp/catalog?${catalogParams}`);
+      if (preservePosition) await window.PolyRentalMotion?.waitCategory();
       if (sequence !== availabilitySequence || periodStart !== $("start").value || periodEnd !== $("end").value || (Number.isInteger(data.page) && (requestedPage !== clientCatalog.page || requestedCategory !== clientCatalog.category || requestedQuery !== $("client-catalog-search").value.trim()))) return false;
       if (Number.isInteger(data.page) && data.page > 0 && data.page * data.page_size >= data.total) { clientCatalog.page = Math.max(0, Math.ceil(data.total / data.page_size) - 1); return loadItems(checkAvailability); }
       const catalogData = JSON.stringify([data, clientCatalog.categories]);
@@ -885,16 +893,69 @@
   function syncCatalogBackButton() {
     const inCategory = (state.view === "flow" && state.step === 0 && clientCatalog.category) ||
       (state.view === "admin" && state.adminMode === "catalog" && catalogView.category && !$('admin-panel').classList.contains('catalog-editing'));
-    if (inCategory && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden) tg?.BackButton?.show();
+    const settingsOpen = state.view === 'admin' && !$('admin-settings').hidden;
+    const canGoBackInAdmin = Boolean(settingsOpen || (state.view === 'admin' && state.adminMode === 'catalog' && catalogView.category && !$('admin-panel').classList.contains('catalog-editing')));
+    $('admin-back-button').disabled = !canGoBackInAdmin;
+    $('admin-back-button').title = canGoBackInAdmin ? 'Назад' : 'Вы на главном уровне управления';
+    if ((inCategory || settingsOpen) && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden) tg?.BackButton?.show();
     else tg?.BackButton?.hide();
   }
   function categoryParent(code) { return clientCatalog.categories.find(category => category.code === code)?.parent_code || ""; }
+  function categoryPath(code) {
+    const names = [], visited = new Set();
+    while (code && !visited.has(code)) { visited.add(code); const item = clientCatalog.categories.find(category => category.code === code); if (!item) break; names.unshift(item.name); code = item.parent_code; }
+    return names.length ? ["Каталог", ...names].join(" › ") : "";
+  }
+  function categoryIsLeaf(code) { return Boolean(code) && !clientCatalog.categories.some(category => category.parent_code === code); }
+  function catalogLayout(kind) { try { return localStorage.getItem(`polyrental-${kind}-product-layout`) === 'grid' ? 'grid' : 'list'; } catch (_) { return 'list'; } }
+  function layoutPicker(kind, host) {
+    const wrap = document.createElement('div'); wrap.className='catalog-layout product-layout'; wrap.setAttribute('role','group'); wrap.setAttribute('aria-label','Вид товаров');
+    for (const [layout,label,icon] of [['list','Список','list'],['grid','Плитка','grid']]) {
+      const button=document.createElement('button'); button.type='button'; button.className='button ghost catalog-layout-icon'; button.setAttribute('aria-label',label); button.innerHTML=`<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`; button.setAttribute('aria-pressed',String(catalogLayout(kind)===layout));
+      button.addEventListener('click',()=>{ try { localStorage.setItem(`polyrental-${kind}-product-layout`,layout); } catch (_) {} host.classList.toggle(kind==='client'?'items-grid-tiles':'tiles',layout==='grid'); wrap.querySelectorAll('button').forEach(node=>node.setAttribute('aria-pressed',String(node===button))); }); wrap.append(button);
+    } return wrap;
+  }
   function categoryContains(code, parent) {
     const visited = new Set();
     while (code && !visited.has(code)) { if (code === parent) return true; visited.add(code); code = categoryParent(code); }
     return false;
   }
   const categoryTransitions = {client: 0, admin: 0};
+  let preserveAdminCatalogControls = false;
+  let inboxUnread = false, inboxOffset = 0, inboxBusy = false, inboxOpener = null;
+  const categoryScrollPositions = {client: new Map(), admin: new Map()};
+  let categoryScrollAnimation = null;
+  function cancelCategoryScroll() {
+    if (!categoryScrollAnimation) return;
+    cancelAnimationFrame(categoryScrollAnimation.frame);
+    categoryScrollAnimation.resolve(); categoryScrollAnimation = null;
+  }
+  for (const event of ['wheel', 'touchstart', 'pointerdown']) window.addEventListener(event, cancelCategoryScroll, {passive:true});
+  function settleCategoryScroll(target, valid) {
+    cancelCategoryScroll();
+    const start = window.scrollY, end = Math.max(0, Math.min(target, document.documentElement.scrollHeight - innerHeight));
+    if (Math.abs(end - start) < 1) return Promise.resolve();
+    if (reducedMotion?.matches) { window.scrollTo(window.scrollX, end); return Promise.resolve(); }
+    return new Promise(resolve => {
+      const state = {frame:0, resolve}; categoryScrollAnimation = state; let started;
+      function tick(time) {
+        if (categoryScrollAnimation !== state) return;
+        if (!valid()) { cancelCategoryScroll(); return; }
+        if (started === undefined) started = time;
+        const progress = Math.min(1, (time - started) / 320), eased = 1 - Math.pow(1 - progress, 3);
+        window.scrollTo(window.scrollX, start + (end - start) * eased);
+        if (progress < 1) state.frame = requestAnimationFrame(tick);
+        else { categoryScrollAnimation = null; resolve(); }
+      }
+      state.frame = requestAnimationFrame(tick);
+    });
+  }
+  function categoryDestination(heading, backwards, savedPosition) {
+    if (backwards) return savedPosition;
+    if (!heading) return window.scrollY;
+    const rect = heading.getBoundingClientRect(), top = 120, bottom = window.innerHeight - 150;
+    return rect.top < top || rect.bottom > bottom ? window.scrollY + rect.top - top : window.scrollY;
+  }
   const categoryHeightLocks = new WeakMap();
   function holdCategoryHeight(panel) {
     if (!panel || reducedMotion?.matches) return;
@@ -925,27 +986,31 @@
     });
   }, {passive:true});
   async function navigateClientCategory(code, origin = null) {
+    cancelCategoryScroll();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
-    const previousCategory = clientCatalog.category;
-    const snapshot = window.PolyRentalMotion?.captureCategory(origin || $("catalog-page-title"));
+    const snapshot = window.PolyRentalMotion?.captureCategoryView($("client-catalog-level"));
     window.PolyRentalMotion?.cancelReflow([$("client-categories"), $("items-grid")]);
     holdCategoryHeight($("step-items"));
     const direction = code === categoryParent(clientCatalog.category) ? -1 : 1;
+    if (direction > 0) categoryScrollPositions.client.set(clientCatalog.category, initialScroll.y);
+    const targetScroll = direction < 0 ? (categoryScrollPositions.client.get(code) ?? initialScroll.y) : initialScroll.y;
     const token = ++categoryTransitions.client;
     ++availabilitySequence;
     clientCatalog.category = code; clientCatalog.page = 0;
     syncCatalogBackButton(); render(); renderItems();
     window.scrollTo(initialScroll.x, initialScroll.y);
     const heading = $("catalog-page-title"); heading.focus({preventScroll:true});
-    const destination = direction < 0 ? [...$("client-categories").querySelectorAll("[data-category-code]")].find(node => node.dataset.categoryCode === previousCategory) : heading;
-    window.PolyRentalMotion?.categoryMorph(snapshot, destination || heading);
     const loading = loadItems(false, true);
     window.scrollTo(initialScroll.x, initialScroll.y);
+    window.PolyRentalMotion?.transitionCategoryView(snapshot, $("client-catalog-level"), direction);
     await loading;
     if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
-    window.PolyRentalMotion?.enter($("items-grid").hidden ? $("client-categories") : $("items-grid"), direction);
+    await window.PolyRentalMotion?.waitCategory();
+    if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
+    await settleCategoryScroll(categoryDestination($('catalog-page-title'), direction < 0, targetScroll), () => token === categoryTransitions.client && state.view === 'flow' && state.step === 0 && clientCatalog.category === code);
   }
   function catalogBack() {
+    if (state.view === 'admin' && !$('admin-settings').hidden) { closeAdminSettings(); return true; }
     if (state.view === "flow" && state.step === 0 && clientCatalog.category) { void navigateClientCategory(categoryParent(clientCatalog.category)); return true; }
     if (state.view === "admin" && state.adminMode === "catalog" && catalogView.category && !$('admin-panel').classList.contains('catalog-editing')) {
       void navigateAdminCategory(categoryParent(catalogView.category)); return true;
@@ -953,11 +1018,10 @@
     return false;
   }
   tg?.BackButton?.onClick?.(() => { if (!catalogBack()) back(); });
-  function categoryEmptyOverlay(host, onBack) {
+  function categoryEmptyOverlay(host) {
     const overlay = document.createElement("section"); overlay.className = "category-empty-overlay"; overlay.setAttribute("role", "region"); overlay.setAttribute("aria-label", "Пустая категория");
     const message = document.createElement("p"); message.textContent = "Тут ещё ничего нет :(";
-    const back = document.createElement("button"); back.type = "button"; back.className = "button secondary"; back.textContent = "Назад"; back.addEventListener("click", onBack);
-    overlay.append(message, back); host.append(overlay);
+    overlay.append(message); host.append(overlay);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => position()) : null;
     const position = () => {
       if (!overlay.isConnected) { window.removeEventListener("scroll", position); window.removeEventListener("resize", position); observer?.disconnect(); return; }
@@ -978,14 +1042,12 @@
     const categoryHost = $("client-categories"); categoryHost.replaceChildren();
     const queryText = $("client-catalog-search").value.trim();
     const parent = clientCatalog.categories.find(c => c.code === clientCatalog.category);
-    changeHeading($("catalog-page-title"), parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования"));
+    $("catalog-page-title").textContent = parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования");
+    $("client-catalog-path").textContent = categoryPath(clientCatalog.category);
     $("client-catalog-search-label").textContent = parent ? `Поиск: ${parent.name}` : "Поиск по всему каталогу";
     syncCatalogBackButton();
-    if (parent) {
-      const back = document.createElement("button"); back.type = "button"; back.className = "button ghost"; back.textContent = "← " + (parent.parent_code ? "Назад" : "Все категории");
-      back.addEventListener("click", () => { void navigateClientCategory(parent.parent_code || ""); }); categoryHost.append(back);
-    }
     const children = clientCatalog.categories.filter(c => (c.parent_code || "") === clientCatalog.category);
+    const picker = $('client-product-layout'); picker.replaceChildren(); picker.hidden = !categoryIsLeaf(clientCatalog.category); $('items-grid').classList.toggle('items-grid-tiles', !picker.hidden && catalogLayout('client') === 'grid'); if (!picker.hidden) picker.append(layoutPicker('client',$('items-grid')));
     if (!queryText) for (const category of children) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
@@ -994,7 +1056,6 @@
     }
     const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;
     $("items-grid").hidden = Boolean(showCategoryIndex);
-    document.querySelector(".catalog-layout").hidden = false;
     if (showCategoryIndex) $("items-status").hidden = true;
     const query = $("client-catalog-search").value.trim().toLocaleLowerCase("ru-RU");
     for (const item of (showCategoryIndex ? [] : (clientCatalog.paged ? clientCatalog.pageItems : state.items))) {
@@ -1037,7 +1098,7 @@
     }
     if (clientCatalog.category && !queryText && !$("items-grid").querySelector(".item-card")) {
       $("items-status").hidden = Boolean(children.length);
-      if (!children.length) { $("items-status").hidden = true; categoryEmptyOverlay($("items-grid"), () => { void navigateClientCategory(categoryParent(clientCatalog.category)); }); }
+      if (!children.length) { $("items-status").hidden = true; categoryEmptyOverlay($("items-grid")); }
     }
     const pages = Math.max(1, Math.ceil(clientCatalog.total / clientCatalog.pageSize));
     $("client-catalog-pagination").hidden = showCategoryIndex || !clientCatalog.paged || pages <= 1;
@@ -1194,6 +1255,7 @@
     clearError();
     if (state.view === "admin" && !guardStaffNavigation()) return;
     if (catalogBack()) return;
+    if (state.view === "admin") return;
     if (state.view === "identity") { void showOrders(); return; }
     if (state.view !== "flow") { state.view = "flow"; if (state.step === 0) void loadItems(); render(); return; }
     if (state.step === 4) { void showOrders(); return; }
@@ -1354,6 +1416,25 @@
           });
           card.append(cancel);
         }
+        const statusPanel = document.createElement('section'); statusPanel.className = 'customer-status-panel request-next-overview';
+        const statusLabel = document.createElement('h4'); statusLabel.textContent = 'Статус заявки';
+        const statusTitle = document.createElement('strong'); statusTitle.textContent = ({pending:'Заявка на проверке',needs_changes:'Нужно исправить заявку',confirmed:'Заявка подтверждена',preparing:'Заказ комплектуется',ready:'Готова к выдаче',issued:'Оборудование у вас',return_inspection:'Возврат на проверке',returned:'Аренда завершена',cancelled:'Заявка отменена',expired:'Срок удержания истёк'})[order.status] || statusNames[order.status] || 'Статус заявки';
+        const statusDetail = document.createElement('p'); statusDetail.className = 'customer-status-detail';
+        statusDetail.textContent = order.status === 'pending' ? 'Ожидайте подтверждения оператора.' : order.status === 'confirmed' && order.identity_status === 'required' ? 'Заполните документы.' : order.identity_status === 'verified' && order.status === 'confirmed' ? 'Документы проверены.' : '';
+        statusPanel.append(statusLabel,statusTitle); if (statusDetail.textContent) statusPanel.append(statusDetail);
+        const customerActions = document.createElement('details'); customerActions.className = 'request-more-actions customer-actions';
+        const customerActionsTitle = document.createElement('summary'); customerActionsTitle.textContent = 'Действия с заявкой'; customerActions.append(customerActionsTitle);
+        const customerPrimaryLabels = new Set(['Внести изменения', 'Посмотреть изменения', 'Заполнить документы', 'Исправить данные', 'Получил', 'Сдаю оборудование']);
+        for (const node of [...card.childNodes]) { if (node.nodeType === 1 && (node.matches('button.primary, .stage-notice, .handover-progress') || (node.tagName === 'BUTTON' && customerPrimaryLabels.has(node.textContent)))) statusPanel.append(node); else customerActions.append(node); }
+        statusPanel.append(customerActions); card.append(statusPanel);
+        const customerPeriod = reviewSection('Период аренды', 'request-summary'); customerPeriod.dataset.rentalStart = order.starts_at; customerPeriod.dataset.rentalEnd = order.ends_at; customerPeriod.dataset.rentalClosed = String(['returned','cancelled','expired'].includes(order.status));
+        const customerDates = document.createElement('div'); customerDates.className = 'rental-period'; for (const date of [order.starts_at,order.ends_at]) { const value = document.createElement('span'); value.textContent = dateText(date); customerDates.append(value); } customerPeriod.append(customerDates); updateRentalProgress(customerPeriod); card.append(customerPeriod);
+        const customerEquipment = document.createElement('details'); customerEquipment.className = 'request-section request-equipment-section'; customerEquipment.open = true;
+        const customerEquipmentTitle = document.createElement('summary'); customerEquipmentTitle.textContent = `Техника · ${order.items.length} поз.`; customerEquipment.append(customerEquipmentTitle);
+        const customerEquipmentList = document.createElement('div'); customerEquipmentList.className = 'request-equipment';
+        const itemRows = order.items.map(item => { const row = document.createElement('div'); row.className = 'request-equipment-row'; const main = document.createElement('div'); main.className = 'equipment-card-main'; const thumb = document.createElement('div'); thumb.className = 'request-equipment-thumb'; thumb.innerHTML = catalogMedia(item, 'request-item'); const info = document.createElement('div'); info.className = 'request-equipment-info'; const name = document.createElement('span'); name.className = 'request-equipment-title'; name.textContent = item.title || item.name; const quantity = document.createElement('span'); quantity.className = 'request-equipment-quantity'; quantity.textContent = String(item.quantity); info.append(name, quantity); main.append(thumb, info); row.append(main); customerEquipmentList.append(row); return row; });
+        customerEquipment.append(customerEquipmentList); if (itemRows.length > 5) { const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; const update = expanded => { itemRows.forEach((row,index) => row.hidden = index >= 5 && !expanded); more.setAttribute('aria-expanded',String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${itemRows.length - 5} ▾`; }; more.addEventListener('click',() => update(more.getAttribute('aria-expanded') !== 'true')); update(false); customerEquipment.append(more); } card.append(customerEquipment);
+        if (!(order.status === 'cancelled' && order.identity_status === 'not_required')) { const customerIdentity = document.createElement('section'); customerIdentity.className = 'request-section customer-identity-status'; const identityTitle = document.createElement('h4'); identityTitle.textContent = 'Анкета'; const identitySummary = document.createElement('p'); identitySummary.className = order.identity_status === 'verified' ? 'identity-verified' : 'identity-unverified'; identitySummary.textContent = identityStatusNames[order.identity_status] || 'Не заполнена'; customerIdentity.append(identityTitle,identitySummary); card.append(customerIdentity); }
         accordion.append(toggle, card); outer.append(accordion); $("orders-content").append(outer);
         toggle.addEventListener("click", event => {
           event.preventDefault(); const opening = !disclosureIsOpen(accordion);
@@ -1755,13 +1836,17 @@
     return `/api/miniapp/admin/bookings?${params}`;
   }
 
+  let adminTabAnimations = [];
   async function showAdmin(mode = "orders") {
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const changingAdminTab = state.view === "admin" && state.adminMode !== mode;
+    const adminOrder = ['orders','catalog','repairs','support'];
+    const adminDirection = adminOrder.indexOf(mode) < adminOrder.indexOf(state.adminMode) ? -1 : 1;
+    adminTabAnimations.forEach(animation => animation.cancel()); adminTabAnimations = [];
     if (changingAdminTab) window.PolyRentalMotion?.cancelTransient();
     const returningToOrders = state.view !== "admin" && state.adminMode === "orders" && mode === "orders";
     $("admin-panel").classList.remove("catalog-editing");
-    $("admin-settings").hidden = Boolean(state.role?.pii_only);
+    $("admin-settings-open").hidden = Boolean(state.role?.pii_only);
     if (state.role?.pii_only) {mode = "orders";document.querySelectorAll("#admin-panel .calendar-sync").forEach(node=>node.hidden=true);}
     document.querySelectorAll(".admin-tabs .admin-mode").forEach((button) => { if (state.role?.pii_only && button.dataset.mode !== "orders") button.hidden = true; });
     if (state.role?.staff_role === "admin" && !$("staff-settings-button")) {
@@ -1782,7 +1867,7 @@
           }
         });
         if(data)await showAdmin(mode);
-      }); settings.id="staff-settings-button"; $("admin-settings").append(settings);
+      }); settings.id="staff-settings-button"; $("settings-staff").append(settings);
     }
     const sequence = ++adminRenderSequence;
     const anchoredRequestId = selectedRequestId;
@@ -1799,14 +1884,15 @@
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
     if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
     render();
-    changeHeading($("admin-panel").querySelector("h2"), ({orders:"Заявки",catalog:"Управление · Каталог",repairs:"Ремонт",support:"Обращения"})[mode] || "Управление");
     document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
-    if (changingAdminTab) window.PolyRentalMotion?.enter(content);
     const previousScrollY = window.scrollY;
     content.style.minHeight = mode === "orders" && previousCard ? `${content.offsetHeight}px` : "";
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
     if (!content.querySelector(".request-card") || mode !== "orders") showLoading(content, "Загружаем…");
+    if (changingAdminTab && !reducedMotion?.matches) for (const element of [content]) {
+      adminTabAnimations.push(element.animate([{transform:`translateX(${-adminDirection * 36}px)`,opacity:.75},{transform:'translateX(0)',opacity:1}],{duration:300,easing:'cubic-bezier(.22,1,.36,1)'}));
+    }
     try {
       if (mode === "support") {
         const result = await api(`/api/miniapp/admin/support?page=${state.supportPage}&page_size=20${state.supportFilterId ? `&thread_id=${state.supportFilterId}` : ""}`);
@@ -1865,9 +1951,8 @@
         toggle.append(owner);
         const body = document.createElement("div"); body.className = "request-body";
         const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
-        const summary = reviewSection("Сроки и техника", "request-summary");
+        const summary = reviewSection("Период аренды", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
-        summary.append(labelledValues([["Ответственный", order.assignee_id ? (order.assignee_name || "Сотрудник") : "Не назначен"]]));
         const period = document.createElement("div"); period.className = "rental-period";
         period.innerHTML = `<span>${escapeHtml(dateText(order.starts_at))}</span><span>${escapeHtml(dateText(order.ends_at))}</span>`;
         summary.append(period);
@@ -1926,10 +2011,25 @@
         const emptyEquipment = document.createElement("p"); emptyEquipment.className = "request-equipment-empty"; emptyEquipment.textContent = "В заявке пока нет оборудования.";
         emptyEquipment.hidden = Boolean(equipment.querySelector(".request-equipment-row")); equipment.append(emptyEquipment);
         equipment.hidden = hasInspectionCards;
-        summary.append(equipment);
-        const formHost = reviewSection("Анкета клиента", "request-form-host");
-        formHost.append(labelledValues([["Имя в заявке", order.customer_name], ["Контакт", order.customer_contact]]));
-        const formHint = document.createElement("p"); formHint.textContent = `Анкета: ${identityStatusNames[order.identity_status] || order.identity_status}. ${state.role?.pii_admin ? "Раскройте проверку, чтобы сверить документы и реквизиты." : "Документы и решение по анкете доступны администратору ПД."}`; formHost.append(formHint);
+        const equipmentSection = document.createElement("details"); equipmentSection.className = "request-section request-equipment-section"; equipmentSection.open = true;
+        const equipmentHeading = document.createElement("summary"); equipmentHeading.textContent = `Техника · ${equipment.querySelectorAll('.request-equipment-row').length} поз.`; equipmentSection.append(equipmentHeading, equipment);
+        const equipmentRows = [...equipment.querySelectorAll('.request-equipment-row')];
+        if (equipmentRows.length > 5) {
+          const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; more.setAttribute('aria-expanded', 'false');
+          const updateEquipmentVisibility = expanded => { equipmentRows.forEach((row, index) => { row.hidden = index >= 5 && !expanded; }); more.setAttribute('aria-expanded', String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${equipmentRows.length - 5} ▾`; };
+          more.addEventListener('click', () => updateEquipmentVisibility(more.getAttribute('aria-expanded') !== 'true')); updateEquipmentVisibility(false); equipmentSection.append(more);
+        }
+        if (hasInspectionCards) equipmentSection.hidden = true;
+        const formHost = document.createElement('section'); formHost.className = 'request-section request-form-host';
+        const formDetails = document.createElement('details'); formDetails.className = 'request-form-details';
+        const formHeading = document.createElement('summary'); formHeading.textContent = 'Анкета клиента'; formDetails.append(formHeading);
+        const formStatus = document.createElement('span'); formStatus.className = 'request-form-status'; formStatus.textContent = identityStatusNames[order.identity_status] || 'Не заполнена';
+        formStatus.classList.add(order.identity_status === 'verified' ? 'identity-verified' : 'identity-unverified');
+        const formSection = document.createElement('section'); formSection.className = 'request-section request-form-section';
+        formSection.hidden = order.status === 'cancelled' && order.identity_status === 'not_required';
+        formHeading.append(formStatus);
+        formDetails.append(labelledValues([["Имя в заявке", order.customer_name], ["Контакт", order.customer_contact]]));
+        const formHint = document.createElement("p"); formHint.textContent = `Анкета: ${identityStatusNames[order.identity_status] || order.identity_status}. ${state.role?.pii_admin ? "Раскройте проверку, чтобы сверить документы и реквизиты." : "Документы и решение по анкете доступны администратору ПД."}`; formDetails.append(formHint); formHost.append(formDetails);
         const actions = document.createElement("div"); actions.className = "action-row";
         const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status");
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
@@ -1943,10 +2043,16 @@
         const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview request-actions";
         const nextHead = document.createElement("div"); nextHead.className = "request-next-head";
         const nextHeading = document.createElement("h4"); nextHeading.textContent = "Следующий шаг";
+        nextStep.textContent = nextStep.textContent.replace(/^Следующий шаг:\s*/i, '');
+        if (order.status === 'pending') nextStep.textContent = 'Проверьте заявку';
+        if (order.status === 'confirmed' && order.identity_status === 'verified') nextStep.textContent = 'Начните подготовку';
+        if (order.status === 'preparing') nextStep.textContent = 'Проверьте экземпляры';
+        if (order.status === 'confirmed' && !['submitted', 'verified', 'needs_changes'].includes(order.identity_status)) nextStep.textContent = 'Ожидаем анкету';
+        nextStep.textContent = nextStep.textContent.replace(/\.+\s*$/, '').replace(/^\p{Ll}/u, letter => letter.toLocaleUpperCase('ru-RU'));
         nextHead.append(nextHeading, ownership);
         nextOverview.append(nextHead, nextStep);
         appendHandoverProgress(nextOverview, order, true);
-        body.append(nextOverview, summary, formHost); accordion.append(toggle, body); card.append(accordion);
+        body.append(nextOverview, summary, equipmentSection, formSection); formSection.append(formHost); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
         const reworkTargets = { confirmed: ["pending", "Ожидает проверки"], preparing: ["confirmed", "Подтверждена"], ready: ["preparing", "Подготовка"], return_inspection: ["issued", "Выдана"] };
         if (reworkTargets[order.status] && (order.status !== "confirmed" || ["manager","admin"].includes(state.role?.staff_role))) {
@@ -1961,7 +2067,7 @@
         if (order.status === "confirmed") {
           if (order.customer_change_request?.status === "pending") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент запросил изменения. Рассмотрите запрос до начала подготовки."; actions.append(note); }
           else if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
-          else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = state.role?.pii_admin ? "Дождитесь заполнения анкеты клиентом и проверьте документы. Затем начните подготовку." : "Дождитесь заполнения анкеты клиентом и проверки сотрудником с доступом к персональным данным. Затем начните подготовку."; actions.append(note); }
+          else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = state.role?.pii_admin ? "После заполнения проверьте документы." : "После заполнения документы проверит ответственный сотрудник."; actions.append(note); }
         }
         if (order.status === "preparing") {
           actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
@@ -1986,7 +2092,7 @@
           actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
-          formHost.append(actionButton("Проверить анкету", () => reviewIdentity(order, card), order.id, "secondary lock-exempt", false));
+          formHost.append(actionButton(order.identity_status === 'verified' ? "Посмотреть анкету" : "Проверить анкету", () => reviewIdentity(order, card), order.id, "primary workflow-next lock-exempt request-review-button", false));
         }
         if (["pending", "needs_changes", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заявку", async () => { if (await confirmCancel(order.human_number || "", order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
 
@@ -2026,7 +2132,7 @@
         for (const node of [...actions.childNodes]) {
           if (node.nodeType === 1 && node.tagName === "BUTTON") {
             if (node.hidden) continue;
-            if (node.classList.contains("workflow-next") || node.classList.contains("lock-exempt")) primaryActions.append(node);
+            if (node.classList.contains("workflow-next") || node.classList.contains("primary")) primaryActions.append(node);
             else if (node.classList.contains("danger")) dangerZone.append(node);
             else secondaryGrid.append(node);
           } else {
@@ -2035,8 +2141,8 @@
         }
         if (primaryActions.childNodes.length) nextOverview.append(primaryActions);
         if (secondaryGrid.childNodes.length || dangerZone.childNodes.length) {
-          const moreActions = document.createElement("details"); moreActions.className = "request-more-actions"; moreActions.open = true;
-          const moreSummary = document.createElement("summary"); moreSummary.textContent = "Управление заявкой";
+          const moreActions = document.createElement("details"); moreActions.className = "request-more-actions";
+          const moreSummary = document.createElement("summary"); moreSummary.textContent = "Действия с заявкой";
           const moreBody = document.createElement("div"); moreBody.className = "request-more-body";
           if (secondaryGrid.childNodes.length) moreBody.append(secondaryGrid);
           if (dangerZone.childNodes.length) moreBody.append(dangerZone);
@@ -2225,15 +2331,8 @@
     try { masked = await api(`/api/miniapp/admin/bookings/${bookingId}/identity`); }
     finally { loading.remove(); }
     if (!isCurrent()) return;
-    const reasons = {
-      manual_review: "Нужна ручная проверка", student_text: "Найдены признаки студенческого билета",
-      other_document: "Найдены признаки другого документа", blank_image: "Признаки документа не обнаружены: однотонное фото",
-      uncertain: "Недостаточно признаков: возможны блики или нечёткое фото",
-      unavailable: "Локальная проверка недоступна", timeout: "Время проверки истекло",
-    };
-    const labels = {passport_main: "Паспорт: фото", passport_registration: "Паспорт: регистрация", student_front: "Студенческий"};
     const card = document.createElement("div"); card.className = "identity-check-review";
-    card.setAttribute("aria-label", "Результаты проверки документов");
+    card.setAttribute("aria-label", "Проверка анкеты"); card.tabIndex = -1;
     const personal = reviewSection("Личные данные", "review-personal-data");
     personal.append(labelledValues([["ФИО", masked.full_name || order.customer_name], ["Контакт", order.customer_contact]]));
     const documentSection = reviewSection("Документ", "review-document-data");
@@ -2248,25 +2347,24 @@
       reveal.hidden = true;
     }, bookingId, "secondary lock-exempt", false);
     documentSection.append(reveal);
-    const checks = reviewSection("Результат проверки документов", "review-document-checks");
-    const documentKinds = [...new Set([...(masked.documents || []), ...Object.keys(masked.document_checks || {})])];
-    if (!documentKinds.length) { const note = document.createElement("p"); note.textContent = "Автоматическая проверка отсутствует. Требуется ручная проверка документов."; checks.append(note); }
-    for (const kind of documentKinds) {
-      const check = masked.document_checks?.[kind] || {};
-      const group = document.createElement("div"); group.className = "document-verdict";
-      const title = document.createElement("h5"); title.textContent = labels[kind] || "Документ"; group.append(title);
-      group.append(labelledValues([["Автоматический результат", `${check.document === "document" ? "документ" : check.document === "not_document" ? "не документ" : "не определено"}, ${check.student === "student" ? "студенческий" : check.student === "other" ? "другой документ" : "тип не определён"}`], ["Причина / ручная проверка", reasons[check.reason] || reasons.manual_review]]));
-      if ((masked.documents || documentKinds).includes(kind)) group.append(actionButton(`Открыть фото · ${labels[kind] || "документ"}`, () => openDocumentViewer(bookingId, kind), bookingId, "ghost document-button lock-exempt", false));
-      checks.append(group);
-    }
-    const notice = document.createElement("p"); notice.className = "review-advisory"; notice.textContent = "Предварительный результат. Сверьте фотографии и реквизиты перед ручным решением. Сбой или таймаут автоматической проверки допускает ручное решение."; checks.append(notice);
+    const documentKinds = (masked.documents || []).filter(kind => ['passport_main','passport_registration','student_front'].includes(kind));
+    if (documentKinds.length) documentSection.append(actionButton('Просмотр документов', () => openDocumentViewer(bookingId, documentKinds), bookingId, 'primary document-button lock-exempt', false));
+    else { const note = document.createElement('p'); note.textContent = 'Фотографии документов отсутствуют'; documentSection.append(note); }
     const decision = reviewSection("Решение по анкете", "review-decision");
     if (masked.review_comment) { const comment = document.createElement("p"); comment.textContent = `Комментарий к исправлениям: ${masked.review_comment}`; decision.append(comment); }
     const actions = document.createElement("div"); actions.className = "action-row";
     const approve = actionButton("Подтвердить документы", async () => {
       if (!window.confirm("Фотографии и реквизиты сверены? Подтвердить документы?")) return;
       await api(`/api/miniapp/admin/bookings/${bookingId}/identity/review`, { method: "POST", body: JSON.stringify({ approved: true, comment: "", fields: [] }) });
-    }, bookingId, "primary lock-exempt");
+      selectedRequestId = bookingId;
+      await showAdmin("orders");
+      const refreshed = document.querySelector(`.request-card[data-booking-id="${bookingId}"]`);
+      if (refreshed) {
+        const heading = refreshed.querySelector('.request-toggle');
+        heading?.focus({preventScroll:true});
+        refreshed.scrollIntoView({behavior: reducedMotion?.matches ? 'instant' : 'smooth', block:'start'});
+      }
+    }, bookingId, "primary lock-exempt", false);
     const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost lock-exempt");
     const canReview = ["confirmed", "preparing", "ready"].includes(order.status) && ["submitted", "needs_changes", "verified"].includes(order.identity_status);
     approve.disabled = changes.disabled = !canReview;
@@ -2289,8 +2387,11 @@
     } else actions.append(changes);
     if (!canReview) { const note = document.createElement("p"); note.textContent = "Решение по анкете доступно на этапах подтверждения, подготовки и готовности к выдаче."; decision.append(note); }
     const close = document.createElement("button"); close.className = "button ghost"; close.type = "button"; close.textContent = "Закрыть";
-    close.addEventListener("click", () => { clearRequestReview(requestCard); [...host.querySelectorAll("button")].find((button) => button.textContent === "Проверить анкету")?.focus({ preventScroll: true }); });
-    actions.append(close); decision.append(actions); card.append(personal, documentSection, checks, decision); host.append(card);
+    close.addEventListener("click", () => { clearRequestReview(requestCard); host.querySelector('.request-review-button')?.focus({ preventScroll: true }); });
+    if (order.identity_status !== 'verified') { decision.append(actions); card.append(personal, documentSection, decision); }
+    else card.append(personal, documentSection);
+    card.append(close); host.append(card);
+    card.focus({preventScroll:true}); requestAnimationFrame(() => scrollElementIntoView(card, {block:'start', inline:'nearest'}));
   }
 
   function requestIdentityChanges(bookingId) {
@@ -2410,12 +2511,12 @@
       form.addEventListener("submit", submit); cancel.addEventListener("click", cancelHandler); dialog.addEventListener("keydown", keydown);
     });
   }
-  async function openDocumentViewer(bookingId, kind) {
+  async function openDocumentViewer(bookingId, kinds) {
     if (!state.role?.pii_admin) return;
     documentViewerReturnFocus = document.activeElement;
     documentViewerBookingId = bookingId;
-    documentViewerItems = ["passport_main", "passport_registration", "student_front"];
-    documentViewerIndex = Math.max(0, documentViewerItems.indexOf(kind));
+    documentViewerItems = kinds;
+    documentViewerIndex = 0;
     const viewer = $("document-viewer"); setDialogHidden(viewer, false);
     $("document-viewer-close").focus();
     await loadDocumentViewerImage(bookingId);
@@ -2443,32 +2544,38 @@
   }
 
   async function navigateAdminCategory(code, staticResult = null, origin = null) {
+    cancelCategoryScroll();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
     const previousCategory = catalogView.category;
     const backwards = code === categoryParent(previousCategory);
-    const snapshot = window.PolyRentalMotion?.captureCategory(origin || $("admin-catalog-heading"));
+    if (!backwards) categoryScrollPositions.admin.set(previousCategory, initialScroll.y);
+    const targetScroll = backwards ? (categoryScrollPositions.admin.get(code) ?? initialScroll.y) : initialScroll.y;
+    const snapshot = window.PolyRentalMotion?.captureCategoryView($("admin-catalog-level"));
     window.PolyRentalMotion?.cancelReflow([document.querySelector(".admin-categories"), document.querySelector(".admin-catalog-items")]);
     holdCategoryHeight($("admin-content"));
     const token = ++categoryTransitions.admin;
+    preserveAdminCatalogControls = true;
     ++catalogView.sequence;
     catalogView.category = code; catalogView.page = 0;
     $("admin-content").classList.toggle("catalog-category-screen", Boolean(code));
     $("admin-content").querySelector(".category-empty-overlay")?.remove();
     clearTimeout(catalogView.timer); syncCatalogBackButton();
-    const pendingHeading = $("admin-catalog-heading"); if (pendingHeading) changeHeading(pendingHeading, clientCatalog.categories.find(category => category.code === code)?.name || "Каталог оборудования");
-    if (!backwards) window.PolyRentalMotion?.categoryMorph(snapshot, $("admin-catalog-heading"));
-    if (staticResult) { renderAdminCatalog(staticResult); window.scrollTo(initialScroll.x, initialScroll.y); }
+    const pendingHeading = $("admin-catalog-heading"); if (pendingHeading) pendingHeading.textContent = clientCatalog.categories.find(category => category.code === code)?.name || "Каталог оборудования";
+    if (staticResult) { renderAdminCatalog(staticResult); window.scrollTo(initialScroll.x, initialScroll.y); window.PolyRentalMotion?.transitionCategoryView(snapshot, $("admin-catalog-level"), backwards ? -1 : 1); }
     else {
       const content = $("admin-content");
       content.querySelector(".admin-categories")?.replaceChildren();
       const items = content.querySelector(".admin-catalog-items"); if (items) showLoading(items, "Загружаем…");
       window.scrollTo(initialScroll.x, initialScroll.y);
+      window.PolyRentalMotion?.transitionCategoryView(snapshot, $("admin-catalog-level"), backwards ? -1 : 1);
       await reloadCatalogPage(false, true);
     }
-    if (token !== categoryTransitions.admin || state.view !== "admin" || state.adminMode !== "catalog" || catalogView.category !== code) return;
+    if (token !== categoryTransitions.admin || state.view !== "admin" || state.adminMode !== "catalog" || catalogView.category !== code) { if (token === categoryTransitions.admin) preserveAdminCatalogControls = false; return; }
+    preserveAdminCatalogControls = false;
     const heading = $("admin-catalog-heading"); heading?.focus({preventScroll:true});
-    const destination = backwards ? [...document.querySelectorAll(".admin-categories [data-category-code]")].find(node => node.dataset.categoryCode === previousCategory) : heading;
-    if (backwards) window.PolyRentalMotion?.categoryMorph(snapshot, destination || heading);
+    await window.PolyRentalMotion?.waitCategory();
+    if (token !== categoryTransitions.admin || state.view !== 'admin' || state.adminMode !== 'catalog' || catalogView.category !== code) return;
+    await settleCategoryScroll(categoryDestination(heading, backwards, targetScroll), () => token === categoryTransitions.admin && state.view === 'admin' && state.adminMode === 'catalog' && catalogView.category === code);
   }
   function catalogPagePath() {
     return `/api/miniapp/admin/catalog?${new URLSearchParams({page:String(catalogView.page), page_size:"20", q:catalogView.query, condition:catalogView.status, category:catalogView.category})}`;
@@ -2479,6 +2586,7 @@
     const selection = preserveSearch && current && current === document.activeElement ? [current.selectionStart, current.selectionEnd, current.selectionDirection] : null;
     try {
       const result = await api(catalogPagePath());
+      if (preservePosition) await window.PolyRentalMotion?.waitCategory();
       if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog" || $("admin-panel").classList.contains("catalog-editing") || query !== catalogView.query || condition !== catalogView.status || category !== catalogView.category || page !== catalogView.page) return;
       if (page > 0 && page * (result.page_size || 20) >= result.total) { catalogView.page = Math.max(0, Math.ceil(result.total / (result.page_size || 20)) - 1); return reloadCatalogPage(preserveSearch); }
       const scroll = preservePosition ? {x:window.scrollX, y:window.scrollY} : null;
@@ -2511,6 +2619,7 @@
   function renderAdminCatalog(result, editor = null) {
     setCategories(result.categories || []);
     $("admin-panel").classList.toggle("catalog-editing", Boolean(editor));
+    const preservedControls = preserveAdminCatalogControls && !editor && result.page != null ? $("admin-content").querySelector('.catalog-controls') : null;
     const content = $("admin-content"); content.classList.toggle("catalog-category-screen", Boolean(catalogView.category) && !editor); content.replaceChildren();
     if (editor) {
       const form = catalogEditor(result, editor);
@@ -2536,6 +2645,10 @@
     const controls = document.createElement("div"); controls.className = "catalog-controls";
     controls.innerHTML = `<label><span class="sr-only">Поиск в каталоге</span><span class="catalog-search-input"><input type="search" placeholder="Поиск: модель, SKU, S/N, инвентарный код" value="${escapeHtml(catalogView.query)}"><button class="admin-search-hide-keyboard" type="button" aria-label="Скрыть клавиатуру" title="Скрыть клавиатуру"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M5 8h1m2 0h1m2 0h1m2 0h1m2 0h1M5 11h1m2 0h1m2 0h1m2 0h1m2 0h1M7 14h10m-7 5 2 2 2-2"/></svg></button></span></label><label><span class="sr-only">Состояние экземпляра</span><select><option value="all">Все состояния</option><option value="available">Доступен</option><option value="maintenance">На ремонте</option><option value="retired">Выведен из эксплуатации</option></select></label>`;
     const [search, status] = controls.querySelectorAll("input, select"); status.value = catalogView.status;
+    const bell = document.querySelector('.catalog-search > .notification-bell').cloneNode(true);
+    const searchRow = document.createElement('div'); searchRow.className = 'catalog-search-row';
+    controls.firstElementChild.before(searchRow); searchRow.append(controls.querySelector('label'), bell);
+    bell.querySelector('.notification-dot').hidden = !inboxUnread;
     controls.querySelector(".admin-search-hide-keyboard").addEventListener("click", () => search.blur());
     search.addEventListener("input", () => {
       content.querySelector(".category-empty-overlay")?.remove();
@@ -2548,7 +2661,7 @@
       if (selection.start != null && selection.end != null) refreshedSearch?.setSelectionRange(selection.start, selection.end, selection.direction || "none");
     });
     status.addEventListener("change", () => { catalogView.status = status.value; if (result.page != null) { catalogView.page = 0; clearTimeout(catalogView.timer); void reloadCatalogPage(); } else renderAdminCatalog(result, editor); });
-    content.prepend(controls);
+    content.prepend(preservedControls || controls);
 
     if (result.dependencies.length) {
       const dependencies = document.createElement("article"); dependencies.className = "admin-card";
@@ -2566,13 +2679,10 @@
       operations.append(dependencies);
     }
 
-    const categoryHost = document.createElement("div"); categoryHost.className = "client-categories admin-categories";
+    const level = document.createElement("div"); level.id = "admin-catalog-level"; level.className = "catalog-level"; content.append(level);
+    const categoryHost = document.createElement("div"); categoryHost.className = "client-categories admin-categories categories-list";
     const currentCategory = clientCatalog.categories.find(c => c.code === catalogView.category);
     const selectCategory = (code, origin = null) => { void navigateAdminCategory(code, result.page != null ? null : result, origin); };
-    if (currentCategory) {
-      const back = document.createElement("button"); back.type = "button"; back.className = "button ghost"; back.textContent = "← " + (currentCategory.parent_code ? "Назад" : "Все категории");
-      back.addEventListener("click", () => selectCategory(currentCategory.parent_code || "")); categoryHost.append(back);
-    }
     if (!catalogView.query.trim()) for (const category of clientCatalog.categories.filter(c => (c.parent_code || "") === catalogView.category)) {
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
@@ -2607,6 +2717,7 @@
     const categoryHeading = document.createElement("h3"); categoryHeading.id = "admin-catalog-heading"; categoryHeading.tabIndex = -1; categoryHeading.className = "catalog-screen-heading";
     categoryHeading.textContent = currentCategory?.name || (catalogView.query.trim() ? "Результаты поиска" : "Каталог оборудования");
     const categoryHeadingRow = document.createElement("div"); categoryHeadingRow.className = "catalog-heading-row";
+    const backButton = document.createElement('button'); backButton.type='button'; backButton.className='catalog-search-back'; backButton.setAttribute('aria-label','Назад'); backButton.textContent='←'; backButton.disabled = !catalogView.category; backButton.addEventListener('click',back);
     const manageCategories = plainButton("", () => {
       catalogView.editingCategories = !catalogView.editingCategories;
       if (catalogView.query.trim()) { catalogView.query = ""; catalogView.page = 0; if (result.page != null) { void reloadCatalogPage(); return; } }
@@ -2616,8 +2727,10 @@
     manageCategories.setAttribute("aria-label", catalogView.editingCategories ? "Завершить редактирование категорий" : "Редактировать категории");
     manageCategories.setAttribute("aria-pressed", String(catalogView.editingCategories));
     manageCategories.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20l4-.8L19.4 7.8a2.1 2.1 0 0 0-3-3L5 16.2 4 20zM14.8 6.4l2.8 2.8"/></svg>';
-    categoryHeadingRow.append(categoryHeading, manageCategories);
-    content.append(categoryHeadingRow, categoryHost); syncCatalogBackButton();
+    const path = document.createElement("p"); path.className = "catalog-path"; path.textContent = categoryPath(catalogView.category);
+    const titleGroup = document.createElement("div"); titleGroup.append(path, categoryHeading);
+    categoryHeadingRow.append(backButton, titleGroup, manageCategories);
+    level.append(categoryHeadingRow, categoryHost); syncCatalogBackButton();
     const categoryIndex = !catalogView.category && !catalogView.query.trim() && clientCatalog.categories.length;
     const categoryMatches = code => { let current = clientCatalog.categories.find(c => c.code === code); const visited = new Set(); while (current && !visited.has(current.code)) { if (current.code === catalogView.category) return true; visited.add(current.code); current = clientCatalog.categories.find(c => c.code === current.parent_code); } return false; };
     const query = catalogView.query.trim().toLocaleLowerCase("ru-RU");
@@ -2625,19 +2738,12 @@
       const searchText = [article.title, article.name, article.kind, article.brand, article.key_spec, article.description, article.sku, ...article.equipment.flatMap((asset) => [asset.serial, asset.inventory_code, asset.asset_code, asset.location])].join(" ").toLocaleLowerCase("ru-RU");
       return (!catalogView.category || categoryMatches(article.category)) && (!query || searchText.includes(query)) && (catalogView.status === "all" || article.equipment.some((asset) => asset.condition === catalogView.status));
     });
-    const layoutControls = document.createElement("div"); layoutControls.className = "catalog-layout admin-catalog-layout"; layoutControls.hidden = false;
-    layoutControls.setAttribute("role", "group"); layoutControls.setAttribute("aria-label", "Вид каталога управления");
     const articleGrid = document.createElement("div"); articleGrid.className = "admin-catalog-items";
-    for (const [layout, title, icon] of [["list", "Список", "list"], ["grid", "Плитка", "grid"]]) {
-      const button = document.createElement("button"); button.type = "button"; button.className = "button ghost catalog-layout-icon";
-      button.setAttribute("aria-label", title); button.title = title; button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`;
-      button.addEventListener("click", () => { catalogView.layout = layout; const change = () => { articleGrid.classList.toggle("tiles", layout === "grid"); categoryHost.classList.toggle("categories-list", layout === "list"); }; if (window.PolyRentalMotion) window.PolyRentalMotion.reflow([categoryHost, articleGrid], change); else change(); layoutControls.querySelectorAll("button").forEach(node => node.setAttribute("aria-pressed", String(node === button))); try { localStorage.setItem("polyrental-admin-catalog-layout", layout); } catch (_) {} });
-      button.setAttribute("aria-pressed", String(catalogView.layout === layout)); layoutControls.append(button);
-    }
-    articleGrid.classList.toggle("tiles", catalogView.layout === "grid"); categoryHost.classList.toggle("categories-list", catalogView.layout === "list"); content.insertBefore(layoutControls, categoryHost);
+    articleGrid.classList.toggle("tiles", categoryIsLeaf(catalogView.category) && catalogLayout('admin') === 'grid');
+    if (categoryIsLeaf(catalogView.category)) level.insertBefore(layoutPicker('admin',articleGrid),categoryHost);
     const emptyCategory = Boolean(catalogView.category && !query && !visibleArticles.length && !clientCatalog.categories.some(category => category.parent_code === catalogView.category));
-    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex || emptyCategory); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; content.append(summary, articleGrid);
-    if (emptyCategory && !catalogView.editingCategories) categoryEmptyOverlay(articleGrid, () => selectCategory(categoryParent(catalogView.category)));
+    const summary = document.createElement("p"); summary.hidden = Boolean(categoryIndex || emptyCategory); summary.className = "catalog-summary"; summary.textContent = `Показано моделей: ${visibleArticles.length} из ${result.total ?? result.articles.length}`; level.append(summary, articleGrid);
+    if (emptyCategory && !catalogView.editingCategories) categoryEmptyOverlay(articleGrid);
     for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
@@ -3126,6 +3232,42 @@
   }
 
   let stageNoticesBusy = false;
+  function updateInboxDots() {
+    const unread = Math.max(0, Number(inboxUnread) || 0);
+    document.querySelectorAll('.notification-dot').forEach(dot => { dot.hidden = unread === 0; });
+    document.querySelectorAll('.notification-bell').forEach(button => {
+      button.setAttribute('aria-label', unread ? `Уведомления: ${unread} непрочитанных` : 'Уведомления');
+    });
+  }
+  async function refreshInbox() {
+    if (!authorized || preview || document.hidden) return;
+    try { const result = await api('/api/miniapp/notifications/inbox?offset=0'); inboxUnread = result.unread; updateInboxDots(); } catch (_) { /* Retry on the next poll. */ }
+  }
+  async function loadInboxPage(reset = false) {
+    if (inboxBusy) return;
+    inboxBusy = true;
+    try {
+      if (reset) { inboxOffset = 0; $('notification-items').replaceChildren(); }
+      $('notification-status').textContent = 'Загрузка…';
+      const result = await api(`/api/miniapp/notifications/inbox?offset=${inboxOffset}`);
+      for (const item of result.items) { const row = document.createElement('article'); row.className = 'notification-item'; const message = document.createElement('p'); message.textContent = item.message; const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = dateText(item.created_at); row.append(message, date); $('notification-items').append(row); }
+      inboxOffset += result.items.length;
+      $('notification-more').hidden = !result.has_more;
+      $('notification-status').textContent = inboxOffset ? '' : 'Пока нет уведомлений';
+      if (result.items.length) await api('/api/miniapp/notifications/inbox/read', {method:'POST',body:JSON.stringify({ids:result.items.map(item=>item.id)})});
+      await refreshInbox();
+    } catch (_) { $('notification-status').textContent = 'Не удалось загрузить уведомления. Попробуйте ещё раз.'; }
+    finally { inboxBusy = false; }
+  }
+  document.addEventListener('click', event => {
+    const button = event.target.closest?.('.notification-bell'); if (!button) return;
+    if (!authorized || preview) { showError('Уведомления доступны после входа.'); return; }
+    inboxOpener = button; setDialogHidden($('notification-dialog'), false); $('notification-title').focus({preventScroll:true}); void loadInboxPage(true);
+  });
+  $('notification-more').addEventListener('click', () => void loadInboxPage());
+  $('notification-close').addEventListener('click', () => { setDialogHidden($('notification-dialog'), true); window.PolyRentalDialogs?.restoreFocus(inboxOpener); });
+  $('notification-dialog').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); $('notification-close').click(); } });
+  if (authorized && !preview) { void refreshInbox(); setInterval(() => void refreshInbox(), 15000); }
   function showStageNotice() { void claimStageNotices(); }
   async function claimStageNotices() {
     if (!authorized || stageNoticesBusy || document.hidden) return;
@@ -3206,7 +3348,7 @@
         if (!start || !end) { showError("Сначала укажите сроки аренды."); return; }
         const existing = new Set([...dialog.querySelectorAll('[name^="quantity-"]')].map(input => Number(input.name.slice(9))));
         const selected = new Map(); let items = [];
-        await workflowDialog("Добавить оборудование", `<p>Доступность на сроки заявки. Выберите позиции и количество.</p><label class="field"><span>Поиск в каталоге</span><input type="search" class="request-catalog-search" placeholder="Название, модель или артикул"></label><p class="request-catalog-status" role="status">Загружаем каталог…</p><div class="request-catalog-results"></div><p class="request-catalog-total" role="status">Ничего не выбрано</p><button type="button" class="button secondary request-catalog-retry" hidden>Повторить загрузку</button>`, "Добавить выбранное", picker => {
+        await workflowDialog("Добавить оборудование", `<p>Доступность на сроки заявки. Выберите позиции и количество.</p><label class="field"><span>Поиск в каталоге</span><input type="search" class="request-catalog-search" placeholder="Название, модель или артикул"></label><p class="request-catalog-status" role="status"></p><div class="request-catalog-results"></div><p class="request-catalog-total" role="status">Ничего не выбрано</p><button type="button" class="button secondary request-catalog-retry" hidden>Повторить загрузку</button>`, "Добавить выбранное", picker => {
           const search=picker.querySelector('.request-catalog-search'), host=picker.querySelector('.request-catalog-results'), status=picker.querySelector('.request-catalog-status'), total=picker.querySelector('.request-catalog-total'), retry=picker.querySelector('.request-catalog-retry'), submit=picker.querySelector('[type="submit"]');
           const render=()=>{
             host.replaceChildren(); const query=search.value.trim().toLocaleLowerCase('ru-RU');
@@ -3227,7 +3369,7 @@
             }
             const quantity=[...selected.values()].reduce((a,b)=>a+b,0);total.textContent=quantity ? `Выбрано: ${quantity} шт.` : 'Ничего не выбрано'; submit.disabled=!quantity;
           };
-          const load=async()=>{retry.hidden=true;status.textContent='Загружаем каталог…';submit.disabled=true;try {const result=await api(`/api/miniapp/availability?${new URLSearchParams({start:start+":00+03:00",end:end+":00+03:00"})}`);items=result.all_items||result.items||[];render();}catch(error){status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
+          const load=async()=>{retry.hidden=true;status.textContent='';showLoading(host,'');submit.disabled=true;try {const result=await api(`/api/miniapp/availability?${new URLSearchParams({start:start+":00+03:00",end:end+":00+03:00"})}`);items=result.all_items||result.items||[];render();}catch(error){host.replaceChildren();status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
           search.addEventListener('input',render);retry.addEventListener('click',load);void load();
         },async()=>{
           for(const [id,quantityValue] of selected){
@@ -3254,7 +3396,7 @@
     if (order.status === "pending") card.append(plainButton("Изменить заявку", () => editRequestDialog(order)));
     const request = order.customer_change_request;
     if (order.status === "confirmed" && request) {
-      const note = document.createElement("p"); note.className="notice"; note.setAttribute("role","status");
+      const note = document.createElement("p"); note.className="notice stage-notice"; note.setAttribute("role","status");
       note.textContent = request.status === "pending" ? "Запрос на изменения отправлен. Дождитесь решения оператора." : request.status === "rejected" ? "Оператор отклонил запрос на изменения. Заявка остаётся подтверждённой." : "";
       if (note.textContent) card.append(note);
       if (["pending","rejected"].includes(request.status)) card.append(plainButton("Посмотреть запрос на изменения", async () => {
@@ -3342,8 +3484,17 @@
     if (state.role?.pii_only) actions.querySelectorAll("button:not(.lock-exempt)").forEach((button) => { button.hidden=true; });
   }
 
+  let assignmentOpening = false;
   async function manualAssign(order) {
-    const catalog = await api("/api/miniapp/admin/catalog");
+    const existing = document.querySelector('.assignment-editor');
+    if (existing) { scrollElementIntoView(existing, {block:'start'}); return; }
+    if (assignmentOpening) return;
+    if (!order.lines.some(line => line.quantity > 0)) { showError('В заявке нет оборудования. Верните заявку на доработку или обратитесь к администратору для восстановления позиции.'); return; }
+    assignmentOpening = true;
+    let catalog;
+    try { catalog = await api("/api/miniapp/admin/catalog"); }
+    finally { assignmentOpening = false; }
+    if (document.querySelector('.assignment-editor') || state.view !== 'admin' || state.adminMode !== 'orders') return;
     const editor = document.createElement("article"); editor.className = "admin-card assignment-editor";
     editor.innerHTML = `<div class="order-head"><div><h3>Замена экземпляров</h3><p>Выберите конкретную технику для каждой позиции заказа.</p></div><button type="button" class="button ghost compact assignment-close">Закрыть</button></div><form class="assignment-form"></form>`;
     const form = editor.querySelector("form");
@@ -3601,6 +3752,9 @@
     }
   }
   function beginRequestDeletion(order, card, lineId = null, assetId = null) {
+    const remaining = order.lines.reduce((sum, line) => sum + Math.max(0, Number(line.quantity) || 0), 0);
+    const removed = assetId ? 1 : lineId ? Number(order.lines.find(line => line.id === lineId)?.quantity || 0) : 0;
+    if (assetId && remaining <= removed) { showError('Нельзя удалить последнюю единицу оборудования. Замените экземпляр или отмените заявку.'); return; }
     const offset = window.scrollY;
     card.inert = true; card.setAttribute("aria-hidden", "true");
     if (!lineId && !assetId) animateRequestRemoval(card); else card.style.visibility = "hidden";
@@ -3655,6 +3809,20 @@
     queueCalendarAvailability(); renderItems(); renderCart(); saveDraft(); render();
   });
   $("client-search-hide-keyboard").addEventListener("click", () => $("client-catalog-search").blur());
+  $("client-catalog-back").addEventListener("click", back);
+  let searchViewportBaseline = window.visualViewport?.height || innerHeight;
+  function updateSearchKeyboard() {
+    const active = document.activeElement;
+    const searching = active?.matches('#client-catalog-search, .catalog-controls input[type="search"]');
+    const viewport = window.visualViewport?.height || innerHeight;
+    if (!searching) searchViewportBaseline = Math.max(viewport, innerHeight);
+    const keyboardOpen = Boolean(searching && matchMedia('(max-width: 700px)').matches && Math.max(searchViewportBaseline, innerHeight) - viewport > 120);
+    document.body.classList.toggle('catalog-keyboard-open', keyboardOpen);
+  }
+  document.addEventListener('focusin', updateSearchKeyboard);
+  document.addEventListener('focusout', () => setTimeout(updateSearchKeyboard, 0));
+  window.visualViewport?.addEventListener('resize', updateSearchKeyboard);
+  window.addEventListener('resize', updateSearchKeyboard);
   $("client-catalog-search").addEventListener("input", () => {
     $("step-items").querySelector(".category-empty-overlay")?.remove();
     if (clientCatalog.paged === false || preview) { renderItems(); return; }
@@ -3663,16 +3831,7 @@
   });
   $("client-catalog-prev").addEventListener("click", () => { if (clientCatalog.page > 0) { clientCatalog.page--; void loadItems(); } });
   $("client-catalog-next").addEventListener("click", () => { if ((clientCatalog.page + 1) * clientCatalog.pageSize < clientCatalog.total) { clientCatalog.page++; void loadItems(); } });
-  function setCatalogLayout(layout, animate = false) {
-    const change = () => { $("items-grid").classList.toggle("items-grid-tiles", layout === "grid"); $("client-categories").classList.toggle("categories-list", layout === "list"); };
-    if (animate && window.PolyRentalMotion) window.PolyRentalMotion.reflow([$("client-categories"), $("items-grid")], change); else change();
-    $("catalog-list").setAttribute("aria-pressed", String(layout === "list"));
-    $("catalog-grid").setAttribute("aria-pressed", String(layout === "grid"));
-    try { localStorage.setItem("polyrental-catalog-layout", layout); } catch (_) { /* Preference is optional. */ }
-  }
-  $("catalog-list").addEventListener("click", () => setCatalogLayout("list", true));
-  $("catalog-grid").addEventListener("click", () => setCatalogLayout("grid", true));
-  try { catalogView.layout = localStorage.getItem("polyrental-admin-catalog-layout") === "grid" ? "grid" : "list"; setCatalogLayout(localStorage.getItem("polyrental-catalog-layout") === "grid" ? "grid" : "list"); } catch (_) { setCatalogLayout("list"); }
+  catalogView.layout = "list"; $("client-categories").classList.add("categories-list");
   async function findNearestPeriod() {
     const sequence = ++nearestSearchSequence;
     const button = $("nearest-search"), key = nearestSelectionKey(); nearestProposal = null; $("nearest-apply").hidden = true;
@@ -3703,6 +3862,35 @@
   $("change-dates").addEventListener("click", () => { state.step = 2; render(); });
   $("availability-edit-cart").addEventListener("click", () => { state.step = 1; renderCart(); render(); });
   $("top-back-button").addEventListener("click", back);
+  let settingsReturnScroll = 0;
+  function selectSettingsTab(name) {
+    for (const key of ['notifications', 'calendar', 'staff']) {
+      const selected = key === name, tab = $(`settings-tab-${key}`);
+      tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
+      $(`settings-${key}`).hidden = !selected;
+    }
+  }
+  function closeAdminSettings() {
+    $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open');
+    $('admin-heading').textContent = 'Управление'; syncCatalogBackButton();
+    window.scrollTo(0, settingsReturnScroll); $('admin-settings-open').focus({preventScroll:true});
+  }
+  $('admin-settings-open').addEventListener('click', () => {
+    if (!guardStaffNavigation() || state.role?.pii_only) return;
+    settingsReturnScroll = window.scrollY; $('settings-tab-staff').hidden = state.role?.staff_role !== 'admin';
+    selectSettingsTab('notifications'); $('admin-settings').hidden = false; $('admin-panel').classList.add('settings-open');
+    $('admin-heading').textContent = 'Настройки'; $('operator-notification-settings').open = true;
+    syncCatalogBackButton(); window.scrollTo(0, 0); $('admin-heading').focus({preventScroll:true});
+  });
+  for (const name of ['notifications', 'calendar', 'staff']) $('settings-tab-' + name).addEventListener('click', () => selectSettingsTab(name));
+  $('admin-settings').querySelector('[role="tablist"]').addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden);
+    let index = tabs.indexOf(document.activeElement); if (index < 0) return;
+    event.preventDefault(); index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[index].click(); tabs[index].focus();
+  });
+  $("admin-back-button").addEventListener("click", () => { if (guardStaffNavigation()) catalogBack(); });
   let supportContext = { screen: "profile", bookingId: null }, supportReturnFocus = null;
   const supportDrafts = new Map();
   const supportDraftKey = context => JSON.stringify([context.screen, context.bookingId]);
@@ -3711,6 +3899,14 @@
     if (value) supportDrafts.set(key, value); else supportDrafts.delete(key);
   });
   let releasePending = null, releaseCurrent = null, releaseReturnFocus = null;
+  function animateRelease(opening) {
+    const card = $("release-dialog").querySelector('.dialog-card'), from = $("app-version").getBoundingClientRect(), to = card.getBoundingClientRect();
+    if (reducedMotion?.matches || !to.width || !to.height) return Promise.resolve();
+    const x = from.left + from.width / 2 - (to.left + to.width / 2), y = from.top + from.height / 2 - (to.top + to.height / 2);
+    const start = {transform:`translate(${x}px, ${y}px) scale(.08)`, opacity:0}, end = {transform:'translate(0, 0) scale(1)',opacity:1};
+    card.getAnimations().forEach(animation => animation.cancel());
+    return card.animate(opening ? [start,end] : [end,start], {duration:280,easing:'cubic-bezier(.22,1,.36,1)'}).finished.catch(()=>{});
+  }
   function showPendingRelease() {
     if (!releasePending || document.hidden || state.onboardingLoading || document.querySelector('.dialog-backdrop:not([hidden])')) return;
     releaseCurrent = releasePending; releasePending = null;
@@ -3722,18 +3918,21 @@
       title.textContent = item.title; text.textContent = item.text; section.append(title, text); $("release-items").append(section);
     }
     setDialogHidden($("release-dialog"), false); render(); $("release-title").focus({preventScroll:true});
+    void animateRelease(true);
     $("release-dialog").querySelector(".dialog-card").scrollTop = 0;
   }
   async function loadReleaseAnnouncement() {
     if (!authorized || preview) return;
     try {
       const {release} = await api("/api/miniapp/release");
-      if (!release || release.seen || !Array.isArray(release.items) || !release.items.length) return;
-      releasePending = release; showPendingRelease();
+      if (!release || !Array.isArray(release.items) || !release.items.length) return;
+      releaseCurrent = release;
+      if (!release.seen) { releasePending = release; showPendingRelease(); }
     } catch (_) { /* Release notes are optional; a later launch retries. */ }
   }
-  function closeRelease() {
+  async function closeRelease() {
     if ($("release-dialog").hidden) return;
+    await animateRelease(false);
     setDialogHidden($("release-dialog"), true);
     const version = releaseCurrent.version;
     render();
@@ -3742,7 +3941,11 @@
     void api("/api/miniapp/release/seen", {method:"POST", body:JSON.stringify({version})}).catch(()=>{});
   }
   $("release-close").addEventListener("click", closeRelease);
-  $("release-feedback").addEventListener("click", () => { closeRelease(); void openSupport("feedback"); });
+  $("app-version").addEventListener("click", async () => {
+    try { const {release} = await api('/api/miniapp/release'); if (release?.items?.length) { releasePending = release; showPendingRelease(); } }
+    catch (_) { showError('Не удалось загрузить информацию об обновлении.'); }
+  });
+  $("release-feedback").addEventListener("click", async () => { await closeRelease(); void openSupport("feedback"); });
   $("release-dialog").addEventListener("keydown", event => {
     if (event.key === "Tab" && document.activeElement === $("release-title")) { event.preventDefault(); $(event.shiftKey ? "release-close" : "release-feedback").focus(); }
     else if (event.key === "Tab") trapDialogFocus(event, $("release-dialog"));
@@ -3986,21 +4189,6 @@
     input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
   document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
-  const adminTabsBar = document.querySelector(".admin-tabs");
-  if (adminTabsBar) {
-    adminTabsBar.addEventListener("pointermove", (event) => {
-      if (event.pointerType === "touch") return;
-      for (const button of adminTabsBar.querySelectorAll(".admin-mode:not([hidden])")) {
-        const rect = button.getBoundingClientRect();
-        const distance = Math.abs(event.clientX - (rect.left + rect.width / 2));
-        const proximity = Math.max(0, 1 - distance / 120);
-        button.style.setProperty("--tab-scale", (1 + proximity * 0.11).toFixed(3));
-      }
-    });
-    adminTabsBar.addEventListener("pointerleave", () => {
-      for (const button of adminTabsBar.querySelectorAll(".admin-mode")) button.style.removeProperty("--tab-scale");
-    });
-  }
   $("admin-queue").addEventListener("change", event => { state.adminQueue = event.target.value; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all"; void showAdmin("orders"); });
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-status").addEventListener("change", (event) => { state.adminStatus = event.target.value; state.adminQueue = "all"; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
@@ -4063,7 +4251,12 @@
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
   else if (siteProfile) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Вы вошли через Telegram. Чтобы получать уведомления, начните диалог с ботом."; }
-  else if (hasDraft && restoredPeriod) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве."; }
+  else if (hasDraft && restoredPeriod) {
+    const notice = document.createElement("div"); notice.className = "stage-toast"; notice.setAttribute("role", "status");
+    const copy = document.createElement("span"); copy.textContent = "Мы восстановили сроки и выбранное оборудование из черновика на этом устройстве.";
+    const close = plainButton("×", () => removeNotice(notice), "ghost"); close.setAttribute("aria-label", "Закрыть уведомление");
+    notice.append(copy, close); document.body.append(notice); setTimeout(() => removeNotice(notice), 8000);
+  }
   tg?.expand?.();
   if (authorized) {
     Promise.all([api("/api/miniapp/me"), api("/api/miniapp/profile").catch(() => null), api("/api/miniapp/cart").catch(() => null)]).then(([role, profileState, cart]) => {

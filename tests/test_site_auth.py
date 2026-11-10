@@ -39,3 +39,22 @@ def test_telegram_site_login(monkeypatch):
     assert client.post('/protected', headers={'Origin':'http://testserver','X-Telegram-Init-Data':''}).status_code == 200
     assert client.post('/site/logout', headers={'Origin':'http://testserver','X-Telegram-Init-Data':''}, follow_redirects=False).status_code == 303
     assert client.get('/protected').status_code == 401
+
+
+def test_local_preview_bypasses_telegram_only_on_loopback(monkeypatch):
+    monkeypatch.setenv('SESSION_SECRET', 'a sufficiently long test secret of 40 characters')
+    monkeypatch.setenv('LOCAL_SITE_AUTH_BYPASS_USER_ID', '100')
+    monkeypatch.delenv('BOT_TOKEN', raising=False)
+    monkeypatch.delenv('BOT_USERNAME', raising=False)
+    app = FastAPI(); app.include_router(router)
+    @app.get('/protected')
+    def protected(user=Depends(require_customer)): return user
+
+    local = TestClient(app, base_url='http://127.0.0.1:18080')
+    login = local.get('/site/login', follow_redirects=False)
+    assert login.status_code == 303
+    assert login.headers['location'] == '/site'
+    assert local.get('/protected').json()['id'] == 100
+
+    remote = TestClient(app, base_url='http://testing.example')
+    assert remote.get('/site/login').status_code == 503

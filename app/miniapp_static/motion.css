@@ -56,6 +56,10 @@
 
 .category-transition-shape { position:fixed; z-index:900; overflow:hidden; pointer-events:none; color:var(--text); }
 .category-transition-copy { width:100% !important; height:100% !important; min-height:0 !important; margin:0 !important; pointer-events:none; }
+.category-level-transition { position:fixed; z-index:45; overflow:hidden; pointer-events:none; contain:layout paint; }
+.category-level-outgoing { width:100%; height:100%; }
+.catalog-level { overflow-x:clip; }
+.category-level-transition > * { width:100% !important; min-height:100%; margin:0 !important; pointer-events:none; }
 
 /* Visual copies are inert and never change the document layout. */
 .cart-flight { position:fixed; z-index:950; pointer-events:none; transform-origin:center; overflow:hidden; border-radius:12px; }
@@ -64,4 +68,4 @@
 .heading-morph-copy { position:fixed; z-index:40; margin:0 !important; pointer-events:none; overflow:hidden; transform-origin:left center; }
 
 /* Transition copies keep their text on one line while the mask changes size. */
-.category-transition-copy .category-card-name, .heading-morph-copy { white-space:nowrap; overflow:hidden; text-overflow:clip; }
+.category-transition-copy .category-card-name, .heading-morph-copy { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

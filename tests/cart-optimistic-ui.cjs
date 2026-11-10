@@ -15,6 +15,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
    if(url.pathname.startsWith('/miniapp/static/')){const f=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(f),contentType:f.endsWith('.css')?'text/css':'text/javascript'});}
    if(url.pathname==='/api/miniapp/me')return route.fulfill({json:{id:42,admin:false}});
    if(url.pathname==='/api/miniapp/profile')return route.fulfill({json:{display_name:'QA',onboarding_seen:true,start_screen:'booking'}});
+   if(url.pathname==='/api/miniapp/catalog/categories')return route.fulfill({json:{items:mode==='success'?[{code:'camera',name:'Камеры'}]:[]}});
    if(url.pathname==='/api/miniapp/cart'&&method==='GET'){if(offline)return route.abort('failed');return route.fulfill({json:server});}
    if(url.pathname==='/api/miniapp/cart'&&method==='PUT'){
     const payload=route.request().postDataJSON();writes++; if(writes===1){received();await gate;
@@ -36,8 +37,9 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  {
   const f=await setup('success'), {page}=f;
   await page.setViewportSize({width:320,height:844});
+  await page.getByRole('button',{name:'Камеры',exact:true}).click();
   for (const layout of ['list','grid']) {
-   await page.locator(`#catalog-${layout}`).click();
+   await page.locator('#client-product-layout').getByRole('button',{name:layout==='list'?'Список':'Плитка'}).click();
    const card=page.locator('.item-card').first();
    assert.equal(await card.locator('.quantity-control').innerText(),'−\n0\n+');
    assert.equal(await page.locator('#main-button').innerText(),'В корзину · 0');

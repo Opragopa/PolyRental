@@ -147,6 +147,23 @@ async def claim_booking_notifications(user=Depends(require_customer)):
     return {"items": await asyncio.to_thread(claim_notices, user["id"])}
 
 
+@router.get("/api/miniapp/notifications/inbox")
+async def notification_inbox(offset: int = Query(0, ge=0), user=Depends(require_customer)):
+    from .notification_inbox import inbox
+    return await asyncio.to_thread(inbox, user["id"], offset)
+
+
+class NotificationReadRequest(BaseModel):
+    ids: list[str] = Field(max_length=10)
+
+
+@router.post("/api/miniapp/notifications/inbox/read")
+async def notification_inbox_read(payload: NotificationReadRequest, user=Depends(require_customer)):
+    from .notification_inbox import mark_read
+    await asyncio.to_thread(mark_read, user["id"], payload.ids)
+    return {"ok": True}
+
+
 @router.get("/api/miniapp/catalog/categories")
 async def catalog_categories():
     from .public_cache import cached_public_value

@@ -100,7 +100,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    assert.equal(await staff.page.locator('.equipment-owner-form [name="name"]').inputValue(),'Владелец QA');
    assert.equal(await staff.page.getByRole('button',{name:'Указать или изменить занятость'}).isVisible(),true);
    await staff.page.locator('.equipment-owner-form [name="name"]').fill('Новый владелец');
-   staff.page.once('dialog',dialog=>dialog.dismiss());await staff.page.locator('#top-back-button').click();assert.equal(await staff.page.locator('.equipment-owner-form').isVisible(),true);
+   staff.page.once('dialog',dialog=>dialog.dismiss());await staff.page.locator('#tab-new').click();assert.equal(await staff.page.locator('.equipment-owner-form').isVisible(),true);
    await staff.page.getByRole('button',{name:'Сохранить владельца'}).click();await staff.page.getByText('Владелец сохранён',{exact:true}).waitFor();assert.equal(savedOwner.name,'Новый владелец');
    await staff.page.locator('.feature-add textarea').fill('Новая особенность');await staff.page.getByRole('button',{name:'Добавить особенность'}).click();
    await staff.page.locator('.feature-edit textarea').filter({hasText:'Новая особенность'}).waitFor();assert.equal(savedFeature.description,'Новая особенность');

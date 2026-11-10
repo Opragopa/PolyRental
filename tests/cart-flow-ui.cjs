@@ -88,6 +88,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.locator('#step-done').waitFor();
     await page.locator('#tab-orders').click();
     await page.locator('#orders-content .customer-order-toggle').first().click();
+    await page.locator('#orders-content .customer-actions > summary').first().click();
     await page.getByRole('button',{name:'Повторить заявку'}).click();
     assert.equal(await page.locator('#step-contact').isVisible(), true);
     assert.equal(await page.locator('#start').inputValue(), '');

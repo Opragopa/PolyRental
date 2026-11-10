@@ -18,7 +18,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     });
     const deleted = [];
     const orders = [1,2].map(id => ({id, human_number:`ТС26000${id}`, status:'pending', identity_status:'not_required', starts_at:'2026-11-02T10:00:00+03:00', ends_at:'2026-11-02T18:00:00+03:00', customer_name:'QA', customer_contact:'@qa', items:[{name:'Камера',quantity:1}], lines:[{id:id*10,article_id:1,name:'Камера',quantity:1}], assets:[],inspections:[]}));
-    orders.push({...orders[0], id:3, human_number:'ТС260003', status:'preparing', identity_status:'verified', assets:[{id:30, name:'Камера', serial:'TEST', article_id:1}], lines:[{id:30, article_id:1, name:'Камера', quantity:1}]});
+    orders.push({...orders[0], id:3, human_number:'ТС260003', status:'preparing', identity_status:'verified', assets:[{id:30, name:'Камера', serial:'TEST', article_id:1},{id:31,name:'Камера 2',serial:'TEST2',article_id:1}], lines:[{id:30, article_id:1, name:'Камера', quantity:2}]});
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.hostname === 'telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"signed",initDataUnsafe:{user:{id:100}}}}'});
@@ -63,10 +63,11 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     assert.equal(deleted.length, 1);
     const third = page.locator('.request-card[data-booking-id="3"]');
     await third.locator('.request-toggle').click();
-    await third.getByRole('button',{name:'Удалить экземпляр Камера'}).click();
+    await third.getByRole('button',{name:'Удалить экземпляр Камера',exact:true}).click();
     await page.getByRole('button',{name:'Отменить',exact:true}).click();
-    assert.equal(await third.getByRole('button',{name:'Удалить экземпляр Камера'}).isVisible(), true);
+    assert.equal(await third.getByRole('button',{name:'Удалить экземпляр Камера',exact:true}).isVisible(), true);
     await first.locator('.request-toggle').click();
+    await first.locator('.request-more-actions > summary').click();
     await first.getByRole('button',{name:'Удалить заявку ТС260001'}).click();
     assert.equal(await first.isVisible(),false,'deleted request must immediately vacate its layout slot');
     assert.equal(await page.locator('.request-particles .request-disintegrating-copy').count(),1);

@@ -70,7 +70,7 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
   });
   await page.goto('http://polyrental.test/miniapp');
   await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
-  if (admin) {await page.locator('.request-toggle').waitFor();await page.locator('.request-toggle').click();}
+  if (admin) {await page.locator('.request-toggle').waitFor();await page.locator('.request-toggle').click();const more=page.locator('.request-more-actions > summary').first();if(await more.isVisible())await more.click();}
   else {await page.locator('#tab-orders').click();await page.locator('#orders-content .customer-order-toggle').first().click();}
   return {page,errors,writes,releaseInspectionRefresh};
 }
@@ -140,7 +140,8 @@ if(require.main===module)(async()=>{
     }
     {
       const {page, errors, writes} = await fixture(browser, {admin:true, role:'admin'});
-      await page.locator('#admin-settings > summary').click();
+      await page.locator('#admin-settings-open').click();
+      await page.locator('#settings-tab-staff').click();
       await page.getByRole('button', {name:'Сотрудники', exact:true}).click();
       const dialog = page.locator('.workflow-dialog');
       try { await dialog.waitFor({state:'visible', timeout:3000}); } catch (error) { throw new Error(`Staff dialog: ${await page.locator('#global-error').innerText()}`, {cause:error}); }

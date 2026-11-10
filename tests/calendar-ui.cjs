@@ -190,7 +190,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     piiAdmin=true; await page.reload();
     await page.locator('.request-card[data-booking-id="7"] .request-toggle').click();
     await page.getByRole("button",{name:/^Проверить анкету/}).click();
-    assert.match(await page.locator(".identity-check-review").innerText(),/не документ.*однотонное фото/s);
+    assert.equal(await page.locator(".review-document-checks").count(),0, "Незавершённые автоматические результаты не показываются");
     page.on("dialog",dialog=>dialog.accept());
     await Promise.all([page.waitForResponse(response=>response.url().endsWith("/identity/review")),page.getByRole("button",{name:"Подтвердить документы",exact:true}).click()]);
     assert.equal(reviews[0].approved,true);

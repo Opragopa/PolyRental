@@ -29,6 +29,7 @@ function samplePdf() {
         await page.route('**/api/miniapp/me',route=>route.fulfill({json:{id:100,admin:true,pii_admin:true,staff_role:'admin'}}));
         await page.reload(); await page.locator('.request-toggle').click();
       }
+      await page.locator(admin ? '.request-more-actions > summary' : '.customer-actions > summary').first().click();
       await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
       await page.locator('[data-preview-ready="true"]').waitFor({timeout:20000});
       assert.ok(await page.locator('.receipt-pages canvas').count()>=1);
@@ -46,6 +47,7 @@ function samplePdf() {
     }
     {
       const {page}=await fixture(browser,{receipt:{body:Buffer.from('invalid pdf')}});
+      await page.locator('.customer-actions > summary').click();
       await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
       await page.getByText('Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.',{exact:true}).waitFor();
       assert.ok(await page.getByRole('button',{name:'Скачать PDF',exact:true}).isVisible());
@@ -53,6 +55,7 @@ function samplePdf() {
     }
     {
       const {page}=await fixture(browser,{receipt:{status:404,type:'application/json',body:JSON.stringify({detail:'Срок хранения расписки истёк'})}});
+      await page.locator('.customer-actions > summary').click();
       await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
       await page.getByText('Срок хранения расписки истёк',{exact:true}).waitFor();
       assert.equal(await page.locator('.workflow-dialog').count(),0); await page.close();

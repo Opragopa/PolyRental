@@ -742,6 +742,13 @@ def deletion_undo_seconds():
         return 5
 
 
+def _require_remaining_equipment(session, booking_id, removed_quantity):
+    total = session.scalar(select(func.coalesce(func.sum(BookingLine.quantity), 0)).where(
+        BookingLine.booking_id == booking_id, BookingLine.deleted_at.is_(None)))
+    if total <= removed_quantity:
+        raise Conflict("Нельзя удалить последнюю единицу оборудования. Замените экземпляр или отмените заявку")
+
+
 def _create_deletion_intent(session, booking_id, actor_id, intent_id, target_type, target_id):
     session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"delete-intent:{intent_id}"})
     existing = session.get(DeletionIntent, intent_id, with_for_update=True)
@@ -764,6 +771,8 @@ def _create_deletion_intent(session, booking_id, actor_id, intent_id, target_typ
         valid = False
     if not valid:
         raise Conflict("Позиция или состояние заявки изменились")
+    if target_type == "asset":
+        _require_remaining_equipment(session, booking_id, 1)
     holder = session.scalar(select(BookingOperationLease.actor_id).where(
         BookingOperationLease.booking_id == booking_id, BookingOperationLease.expires_at > now()).limit(1))
     if holder is not None and (target_type != "asset" or holder != actor_id):
@@ -1009,6 +1018,7 @@ def set_booking_asset_deleted(booking_id, equipment_id, actor_id, deleted, inten
         if deleted:
             if line.quantity < 1 or line.deleted_at is not None:
                 raise Conflict("Количество позиции уже изменилось")
+            _require_remaining_equipment(session, booking_id, 1)
             asset.removed_billable = line.billable_quantity > 0
             line.quantity -= 1
             if asset.removed_billable:

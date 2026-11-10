@@ -45,6 +45,18 @@ def ready_booking(monkeypatch, partial=False):
     return booking_id
 
 
+def test_last_equipment_cannot_be_removed_in_preparation(monkeypatch):
+    from app.rental import set_booking_asset_deleted
+    booking_id = ready_booking(monkeypatch)
+    booking = get_booking(booking_id)
+    # Return to preparation and remove one of the two assigned units.
+    set_booking_asset_deleted(booking_id, booking.assets[0].equipment_id, 100, True)
+    remaining = get_booking(booking_id).assets
+    assert len(remaining) == 1
+    with pytest.raises(Conflict, match="последнюю единицу"):
+        set_booking_asset_deleted(booking_id, remaining[0].equipment_id, 100, True)
+
+
 def test_full_cycle_docx_is_atomic_immutable_and_survives_identity_removal(monkeypatch):
     booking_id = ready_booking(monkeypatch)
     asset_id = get_booking(booking_id).assets[0].equipment_id
@@ -142,6 +154,43 @@ def test_change_deadlines_responses_are_encrypted_and_replay_safe(monkeypatch):
         assert sum(pool.map(process_change_deadlines,[deadline,deadline])) == 1
     assert get_booking(booking_id).status == "pending"
     assert change_view(booking_id,42)["status"] == "unanswered"
+
+
+def test_manager_proposal_checks_stock_and_customer_response_rechecks_it(monkeypatch):
+    configure(monkeypatch)
+    from tests.test_operation_lease import pending_booking
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    camera = article_with_assets("CHANGE-CAMERA", 1)
+    proposal = {"start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat(),
+                "lines": [{"article_id": row.article_id, "quantity": row.quantity} for row in booking.lines]
+                         + [{"article_id": camera, "quantity": 2}]}
+    with pytest.raises(Conflict, match="Недостаточно свободных единиц"):
+        propose_change(booking_id, 100, "manager_edit", "Добавить камеру", proposal)
+    assert get_booking(booking_id).status == "pending"
+    proposal["lines"][-1]["quantity"] = 1
+    change_id = propose_change(booking_id, 100, "manager_edit", "Добавить камеру", proposal)
+    other = create_booking(43, "Клиент", "@synthetic", booking.starts_at, booking.ends_at,
+                           [{"article_id": camera, "quantity": 1}])
+    transition(other, "confirmed", 100)
+    with pytest.raises(Conflict, match="Недостаточно свободных единиц"):
+        update_request(booking_id, 42, None, None, None, change_id, True)
+    assert change_view(booking_id, 42)["status"] == "pending"
+
+
+def test_customer_accepts_one_available_camera_added_by_manager(monkeypatch):
+    configure(monkeypatch)
+    from tests.test_operation_lease import pending_booking
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    camera = article_with_assets("CHANGE-ONE-CAMERA", 1)
+    proposal = {"start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat(),
+                "lines": [{"article_id": row.article_id, "quantity": row.quantity} for row in booking.lines]
+                         + [{"article_id": camera, "quantity": 1}]}
+    change_id = propose_change(booking_id, 100, "manager_edit", "Добавить камеру", proposal)
+    update_request(booking_id, 42, None, None, None, change_id, True)
+    assert any(row.article_id == camera and row.quantity == 1 for row in get_booking(booking_id).lines)
+    assert change_view(booking_id, 42)["status"] == "accepted"
 
 
 def test_inventory_permissions_owner_visibility_and_findings(monkeypatch):

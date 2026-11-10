@@ -82,6 +82,7 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    await dialog.getByRole('button',{name:'Отправить вопрос'}).click();await dialog.locator('#support-result.success').waitFor();
    await dialog.locator('#support-close').click();await dialog.waitFor({state:'hidden'});
    // Per-booking drafts and the profile draft must not share text.
+   await page.locator('#orders-content .customer-actions > summary').click();
    await page.locator('#orders-content .customer-order-body').getByRole('button',{name:'Поддержка',exact:true}).click();
    assert.equal(await dialog.locator('#support-question').inputValue(),'');
    await dialog.locator('#support-question').fill('Вопрос по заявке');await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});

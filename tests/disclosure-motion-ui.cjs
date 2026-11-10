@@ -65,6 +65,17 @@ const motion = source.slice(source.indexOf('  // Animate the element'), source.i
         await page.locator('.heading-morph-copy').evaluateAll(nodes=>nodes.forEach(node=>node.getAnimations().forEach(animation=>animation.finish())));
         await page.waitForFunction(()=>!document.querySelector('.heading-morph-copy'));
       } else assert.equal(await page.locator('.heading-morph-copy').count(),0);
+      await page.setContent('<section id="category" style="width:240px;height:70px"><button>Очень длинное название категории</button></section>');
+      await page.evaluate(()=>{const source=document.querySelector('#category'); PolyRentalMotion.transitionCategoryView(PolyRentalMotion.captureCategoryView(source),source,1);});
+      if (reducedMotion === 'no-preference') {
+        const clone=page.locator('.category-level-transition');
+        assert.equal(await clone.getAttribute('aria-hidden'),'true');
+        assert.equal(await clone.evaluate(el=>el.getAnimations({subtree:true})[0].effect.getKeyframes()[1].transform),'translateX(-240px)');
+        await page.evaluate(()=>PolyRentalMotion.cancelTransient());
+        await page.evaluate(()=>{const source=document.querySelector('#category'); PolyRentalMotion.transitionCategoryView(PolyRentalMotion.captureCategoryView(source),source,-1);});
+        assert.equal(await clone.evaluate(el=>el.getAnimations({subtree:true})[0].effect.getKeyframes()[1].transform),'translateX(240px)');
+        await page.evaluate(()=>PolyRentalMotion.cancelTransient());
+      } else assert.equal(await page.locator('.category-level-transition').count(),0);
       await page.close();
     }
     console.log('Disclosure motion, layout, keyboard and reduced motion: passed');

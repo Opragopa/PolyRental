@@ -45,17 +45,56 @@
   function morphText(element, nextText) {
     if (!element || element.textContent === nextText) return;
     const old = headingAnimations.get(element); old?.animations.forEach(animation=>animation.cancel()); old?.layer.remove();
-    const previous = element.textContent; element.textContent = nextText;
+    const previous = element.textContent;
+    const previousRect = element.getBoundingClientRect();
+    element.textContent = nextText;
     if (preference.matches || typeof element.animate !== "function" || !element.isConnected || !element.getClientRects().length) return;
     const rect = element.getBoundingClientRect(); if (!rect.width || !rect.height) return;
     const layer = element.cloneNode(false); layer.removeAttribute("id"); layer.classList.add("heading-morph-copy"); layer.setAttribute("aria-hidden","true"); layer.textContent = previous;
-    layer.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`; document.body.append(layer);
+    layer.style.cssText = `left:${previousRect.left}px;top:${previousRect.top}px;width:${previousRect.width}px;height:${previousRect.height}px`; document.body.append(layer);
     const exit = layer.animate([{opacity:1,transform:"scaleX(1)"},{opacity:0,transform:"scaleX(1.06)"}],{duration:240,easing:"ease-in",fill:"forwards"});
     const entry = element.animate([{opacity:0,transform:"scaleX(.95)"},{opacity:1,transform:"scaleX(1)"}],{duration:340,easing:"cubic-bezier(.22, 1, .36, 1)"});
     const state = {animations:[exit,entry], layer}; headingAnimations.set(element,state);
     void Promise.allSettled(state.animations.map(animation=>animation.finished)).then(()=>{layer.remove(); if(headingAnimations.get(element)===state) headingAnimations.delete(element);});
   }
   let categoryAnimation = null, categoryLayer = null;
+  let categoryEntries = [];
+  function captureCategoryView(panel) {
+    if (!panel || preference.matches) return null;
+    const rect = panel.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const copy = panel.cloneNode(true);
+    copy.querySelectorAll('.category-empty-overlay').forEach(node => node.remove());
+    copy.inert = true;
+    return {copy, left:rect.left, top:rect.top, width:rect.width, height:rect.height};
+  }
+  function transitionCategoryView(snapshot, panel, direction) {
+    categoryAnimation?.cancel(); categoryLayer?.remove();
+    categoryEntries.forEach(animation => animation.cancel()); categoryEntries = [];
+    categoryAnimation = null; categoryLayer = null;
+    if (!snapshot || !panel || preference.matches) return;
+    const layer = document.createElement('div');
+    layer.className = 'category-level-transition'; layer.setAttribute('aria-hidden', 'true'); layer.inert = true;
+    layer.style.cssText = `left:${snapshot.left}px;top:${snapshot.top}px;width:${snapshot.width}px;height:${snapshot.height}px`;
+    const moving = document.createElement('div'); moving.className = 'category-level-outgoing'; layer.append(moving);
+    const shadow = moving.attachShadow({mode:'closed'});
+    document.querySelectorAll('link[rel="stylesheet"]').forEach(link => shadow.append(link.cloneNode()));
+    const style = document.createElement('style'); style.textContent = ':host > *:not(link):not(style){width:100% !important;min-height:100%;margin:0 !important;pointer-events:none}'; shadow.append(style, snapshot.copy);
+    document.body.append(layer); categoryLayer = layer;
+    const offset = Math.round(snapshot.width) * (direction < 0 ? -1 : 1);
+    const options = {duration:340, easing:'cubic-bezier(.25, .1, .25, 1)'};
+    categoryAnimation = moving.animate([{transform:'translateX(0)'},{transform:`translateX(${-offset}px)`}], options);
+    for (const child of panel.children) {
+      if (child.hidden) continue;
+      const targets = child.matches('#items-grid, .admin-catalog-items') ? [...child.children] : [child];
+      for (const target of targets) {
+        if (target.matches('.category-empty-overlay') || target.querySelector('.category-empty-overlay')) continue;
+        categoryEntries.push(target.animate([{transform:`translateX(${offset}px)`},{transform:'translateX(0)'}], options));
+      }
+    }
+    const current = categoryAnimation;
+    void current.finished.catch(()=>{}).then(()=>{layer.remove(); if(categoryAnimation===current){categoryAnimation=null;categoryLayer=null;categoryEntries=[];}});
+  }
   function captureCategory(element) {
     if (!element || preference.matches) return null;
     const rect = element.getBoundingClientRect();
@@ -66,6 +105,7 @@
   function cancelTransient() {
     for (const state of headingAnimations.values()) { state.animations.forEach(animation=>animation.cancel()); state.layer.remove(); } headingAnimations.clear();
     categoryAnimation?.cancel(); categoryLayer?.remove(); categoryAnimation = null; categoryLayer = null;
+    categoryEntries.forEach(animation=>animation.cancel()); categoryEntries = [];
     for (const flight of cartFlights) { flight.animation.cancel(); flight.layer.remove(); } cartFlights.clear();
   }
   function categoryMorph(snapshot, destination) {
@@ -75,6 +115,10 @@
     if (!end.width || !end.height) return;
     const layer = document.createElement('div'); layer.className = 'category-transition-shape'; layer.setAttribute('aria-hidden','true');
     snapshot.copy.classList.add('category-transition-copy'); snapshot.copy.inert = true; layer.append(snapshot.copy); document.body.append(layer); categoryLayer = layer;
+    // Keep the cloned contents at their original size while the mask changes.
+    // Otherwise grid/list labels reflow on every animation frame.
+    snapshot.copy.style.setProperty('width', `${snapshot.width}px`, 'important');
+    snapshot.copy.style.setProperty('height', `${snapshot.height}px`, 'important');
     const middleLeft = (snapshot.left + end.left) / 2;
     const middleTop = (snapshot.top + end.top) / 2 - Math.min(18, Math.abs(snapshot.top-end.top) * .08);
     const frames = [{left:`${snapshot.left}px`,top:`${snapshot.top}px`,width:`${snapshot.width}px`,height:`${snapshot.height}px`,borderRadius:'14px',opacity:.96},
@@ -125,9 +169,9 @@
       for (const animation of entries.values()) animation.cancel();
       for (const animations of reflows.values()) animations.forEach(animation => animation.cancel());
       for (const flight of cartFlights) { flight.animation.cancel(); flight.layer.remove(); } cartFlights.clear();
-      reflows.clear(); categoryAnimation?.cancel(); categoryLayer?.remove(); categoryAnimation = null; categoryLayer = null;
+      reflows.clear(); categoryAnimation?.cancel(); categoryLayer?.remove(); categoryAnimation = null; categoryLayer = null; categoryEntries.forEach(animation=>animation.cancel()); categoryEntries = [];
       for (const {animations} of exits.values()) animations.forEach(animation => animation.finish());
     }
   });
-  window.PolyRentalMotion = {removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, flyToCart, cancelTransient, morphText};
+  window.PolyRentalMotion = {removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, captureCategoryView, transitionCategoryView, waitCategory: () => categoryAnimation?.finished.catch(()=>{}), flyToCart, cancelTransient, morphText};
 })();

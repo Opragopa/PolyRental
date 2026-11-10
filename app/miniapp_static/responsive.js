@@ -11,14 +11,14 @@
   const schedule = () => {
     if (!frame) frame = requestAnimationFrame(update);
   };
-  const observer = new ResizeObserver(entries => {
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(entries => {
     for (const {target, contentRect} of entries) {
       if (target.matches(".tabs, .action-bar") || widths.get(target) !== contentRect.width) {
         widths.set(target, contentRect.width);
         schedule();
       }
     }
-  });
+  }) : { observe() {}, unobserve() {} };
   function update() {
     frame = 0;
     const writes = [];

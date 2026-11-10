@@ -11,9 +11,11 @@ const {fixture, base} = require('./completion-ui.cjs');
     await page.locator('[data-mode="catalog"]').click();
     const category = page.locator('.admin-categories .category-card').filter({hasText:'Камера'});
     if (await category.count()) await category.click();
-    const layouts = page.locator('.admin-catalog-layout');
-    await layouts.getByRole('button',{name:'Плитка'}).click();
-    assert.equal(await page.locator('.admin-catalog-items').evaluate(el=>el.classList.contains('tiles')),true);
+    const layouts = page.locator('#admin-catalog-level .product-layout');
+    if (await layouts.isVisible()) {
+      await layouts.getByRole('button',{name:'Плитка'}).click();
+      assert.equal(await page.locator('.admin-catalog-items').evaluate(el=>el.classList.contains('tiles')),true);
+    } else assert.equal(await page.locator('.admin-catalog-layout').count(),0, 'Корневые категории не переключаются в сетку');
     await page.getByRole('button',{name:'Новый артикул',exact:true}).click();
     await page.locator('.catalog-form').getByRole('button',{name:'Создать категорию',exact:true}).click();
     const dialog = page.locator('.workflow-dialog');

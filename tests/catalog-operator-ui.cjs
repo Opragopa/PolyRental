@@ -36,7 +36,7 @@ const {fixture, base} = require('./completion-ui.cjs');
   assert.equal(await page.locator('.category-edit-tile .category-card').first().evaluate(el=>getComputedStyle(el).animationName),'none');
   await page.getByRole('button',{name:'Камера',exact:true}).click(); await page.locator('#admin-catalog-heading').getByText('Камера',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Создать категорию'}).click(); const nested=page.getByRole('dialog',{name:'Создать категорию'}); assert.equal(await nested.locator('[name="parent_code"]').inputValue(),'camera'); await nested.getByRole('button',{name:'Отмена'}).click();
-  await page.locator('.admin-categories').getByRole('button',{name:'← Все категории'}).click(); await page.locator('#admin-catalog-heading').getByText('Каталог оборудования',{exact:true}).waitFor();
+  await page.locator('#admin-catalog-level .catalog-search-back').click(); await page.locator('#admin-catalog-heading').getByText('Каталог оборудования',{exact:true}).waitFor();
   await page.emulateMedia({reducedMotion:'reduce'}); assert.equal(await page.locator('.category-edit-tile .category-card').first().evaluate(el=>getComputedStyle(el).animationName),'none');
   await page.getByRole('button',{name:'Завершить редактирование категорий'}).click(); assert.equal(await page.getByRole('button',{name:'Создать категорию'}).count(),0);
   await page.getByRole('button',{name:'Камера',exact:true}).click();

@@ -33,6 +33,11 @@ const card = (page, id) => page.locator(`.request-card[data-booking-id="${id}"]`
 const openCard = async (page, id) => {
   await card(page, id).locator(".request-toggle").click();
   await card(page, id).locator(".request-body").waitFor({ state: "visible" });
+  if (!process.env.REQUEST_CARD_LAYOUT_QA) {
+    if (await card(page,id).locator('.request-form-details > summary').isVisible()) await card(page,id).locator('.request-form-details > summary').click();
+    const more = card(page,id).locator('.request-more-actions > summary');
+    if (await more.count()) await more.click();
+  }
 };
 const assertHistory = async (page, id) => {
   const history=card(page,id).locator("details.request-history");
@@ -121,6 +126,23 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
   const browser = await engine.launch({ headless: true, ...(engineName === "chromium" && process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) });
   const passed = [];
   try {
+    if (process.env.REQUEST_CARD_LAYOUT_QA) {
+      const lines = Array.from({length: 7}, (_, i) => ({id:i+1, article_id:i+1, name:`QA equipment ${i+1}`, quantity:1}));
+      const {page, errors} = await fixture(browser, {orders:[order(7,{identity_status:'missing',lines})]});
+      await openCard(page,7);
+      const selected = card(page,7);
+      if (process.env.QA_SCREENSHOTS) { fs.mkdirSync(process.env.QA_SCREENSHOTS, {recursive:true}); await selected.screenshot({path:path.join(process.env.QA_SCREENSHOTS,'request-card-layout.png'), animations:'disabled'}); }
+      assert.equal(await selected.locator('.request-equipment-row:visible').count(),5);
+      await selected.getByRole('button',{name:/Показать ещё/}).click();
+      assert.equal(await selected.locator('.request-equipment-row:visible').count(),7);
+      await selected.getByRole('button',{name:/Свернуть список/}).click();
+      assert.equal(await selected.locator('.request-equipment-row:visible').count(),5);
+      assert.equal(await selected.locator('.request-form-details').evaluate(node=>node.open),false);
+      await selected.locator('.request-form-details > summary').click();
+      assert.equal(await selected.locator('.request-form-details').evaluate(node=>node.open),true);
+      assert.equal(await selected.locator('.rental-progress').count(),1);
+      assert.deepEqual(errors, []); await page.close(); console.log('Request card layout and disclosures: passed'); return;
+    }
     for (const [width, dark] of [[320, false], [390, true], [1024, false]]) {
       const { page, errors, requests, reviews } = await fixture(browser, { width, dark });
       assert.equal(await page.locator(".request-accordion[open]").count(), 0, "The initial list stays compact");
@@ -130,10 +152,11 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
           assert.equal(await tab.isVisible(), true);
           assert.ok(await tab.evaluate(node => { const box = node.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth && box.height >= 44; }), `${name} fits and is tappable`);
         }
-        await page.locator("#admin-settings > summary").click();
+        await page.locator("#admin-settings-open").click();
         assert.equal(await page.locator("#operator-notification-settings").isVisible(), true);
+        await page.locator('#settings-tab-staff').click();
         assert.equal(await page.getByRole("button", {name:"Сотрудники", exact:true}).isVisible(), true);
-        await page.locator("#admin-settings > summary").click();
+        await page.locator("#admin-back-button").click();
       }
       if (process.env.QA_SCREENSHOTS && width === 320 && !dark) {
         fs.mkdirSync(process.env.QA_SCREENSHOTS, { recursive: true });
@@ -147,17 +170,21 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const review = card(page, 8).locator(".identity-check-review");
       await review.waitFor();
       assert.equal(await page.locator("#admin-content > .identity-check-review").count(), 0, "Review belongs to its request");
-      for (const section of [".review-personal-data", ".review-document-data", ".review-document-checks", ".review-decision"]) assert.equal(await review.locator(section).count(), 1, section);
+      for (const section of [".review-personal-data", ".review-document-data", ".review-decision"]) assert.equal(await review.locator(section).count(), 1, section);
+      assert.equal(await review.locator('.review-document-checks').count(), 0);
+      assert.equal(await review.evaluate(node => node === document.activeElement), true, 'Review receives focus');
       assert.ok(await review.locator("dt").count() >= 3, "Data has readable field labels");
-      assert.match(await review.innerText(), /не документ.*однотонное фото/s);
-      assert.match(await review.innerText(), /Время проверки истекло|таймаут/i, "Automatic failure retains its manual fallback reason");
       await review.getByRole("button", { name: "Раскрыть реквизиты", exact: true }).click();
       await waitUntil(async () => (await review.innerText()).includes(full.registration_address), "Full reveal did not render");
       assert.ok(await review.locator("dd").count() >= 8, "Revealed data stays structured");
-      const previewButton = review.getByRole("button", { name: "Открыть фото · Паспорт: фото", exact: true });
+      const previewButton = review.getByRole("button", { name: "Просмотр документов", exact: true });
+      assert.ok(await previewButton.evaluate(el => Math.abs(el.getBoundingClientRect().width - el.parentElement.getBoundingClientRect().width) < 2), 'Document viewer button fills its section');
       await previewButton.click();
       await page.locator("#document-viewer-image[src]").waitFor();
       assert.equal(await page.locator("#document-viewer").isVisible(), true);
+      assert.match(await page.locator('#document-viewer-title').innerText(), /фото/);
+      await page.locator('#document-viewer-next').click();
+      await page.waitForFunction(() => document.querySelector('#document-viewer-title').textContent.includes('регистрация'));
       await page.keyboard.press("Escape");
       assert.equal(await page.locator("#document-viewer").isHidden(), true);
       assert.equal(await page.locator("#document-viewer-image").getAttribute("src"), null, "Closing the preview releases the image");
@@ -175,13 +202,10 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.equal(await card(page, 8).locator(".request-accordion").getAttribute("open") !== null, true);
       assert.equal(await page.locator(".request-accordion[open]").count(), 1);
       assert.deepEqual(reviews[0], { bookingId: 8, payload: { approved: true, comment: "", fields: [] } });
-      await card(page, 8).getByRole("button", { name: /^Проверить анкету/ }).click();
-      await card(page, 8).getByRole("button", { name: "Отклонить / исправить", exact: true }).click();
-      await page.locator('#identity-review-form input[value="student_front"]').check();
-      await page.locator("#identity-review-form textarea").fill("QA replace synthetic photo");
-      await page.locator("#identity-review-submit").click();
-      await waitUntil(async () => reviews.length === 2 && await page.locator("#identity-review-dialog").isHidden(), "Correction request was not saved");
-      assert.deepEqual(reviews[1].payload, { approved: false, comment: "QA replace synthetic photo", fields: ["student_front"] });
+      await card(page, 8).getByRole("button", { name: "Посмотреть анкету" }).click();
+      assert.equal(await card(page, 8).locator('.review-decision').count(),0);
+      await card(page, 8).locator('.identity-check-review').getByRole('button',{name:'Закрыть',exact:true}).click();
+      assert.equal(await card(page, 8).getByRole('button',{name:'Посмотреть анкету'}).evaluate(el=>el===document.activeElement),true);
       await openCard(page, 7);
       await waitUntil(async () => await card(page, 8).locator(".request-accordion").getAttribute("open") === null, "Previous request did not close after its animation");
       assert.equal(await page.locator(".identity-check-review").count(), 0, "Closing a request removes sensitive review data");
@@ -208,7 +232,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       await approve.click();
       await waitUntil(async () => reviews.length === 1 && await selected.getByRole("button", { name: /^Начать подготовку/ }).isVisible(), "Context-preserving refresh did not finish");
       const after = await page.evaluate(() => scrollY);
-      assert.ok(Math.abs(after - before) <= 3, `Refresh jumped from ${before}px to ${after}px`);
+      assert.ok(after < before && await selected.locator('.request-toggle').isVisible(), 'Approval returns to the selected request');
       assert.equal(await selected.locator(".request-accordion").getAttribute("open") !== null, true);
       assert.equal(await page.locator(".request-card").count(), 20, "The surrounding list stays visible");
       assert.deepEqual(errors, []); passed.push("keyboard accordion and scroll context after action"); await page.close();
@@ -275,24 +299,27 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.deepEqual(errors, []); passed.push("rework dialog and transition"); await page.close();
     }
     {
-      const { page, errors, orders } = await fixture(browser, { orders: [order(7, {status:"ready", identity_status:"verified"})] });
+      const { page, errors } = await fixture(browser, { orders: [order(7, {status:"ready", identity_status:"verified"})] });
       await openCard(page, 7);
-      await card(page, 7).getByRole("button", {name:"Проверить анкету"}).click();
+      await card(page, 7).getByRole("button", {name:"Посмотреть анкету"}).click();
+      assert.equal(await card(page, 7).locator('.review-decision').count(),0);
       assert.equal(await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).count(), 0);
       assert.equal(await card(page, 7).getByRole("button", {name:"Подписал: выдача"}).count(), 0);
-      await card(page, 7).getByRole("button", {name:"Вернуть в подготовку"}).click();
-      await page.locator("#rework-dialog textarea").fill("Исправить анкету");
-      await page.locator("#rework-dialog").getByRole("button", {name:"Вернуть на доработку"}).click();
-      await waitUntil(async () => orders[0].status === "preparing" && await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).count() === 1, "Review did not reopen after rework");
-      assert.equal(await card(page, 7).getByRole("button", {name:"Отклонить / исправить"}).evaluate(el => el === document.activeElement), true);
-      assert.deepEqual(errors, []); passed.push("ready identity rework and signer boundary"); await page.close();
+      assert.deepEqual(errors, []); passed.push("verified identity view and signer boundary"); await page.close();
+    }
+    {
+      const {page, errors} = await fixture(browser, {orders:[order(7,{status:'cancelled',identity_status:'not_required'}),order(8,{status:'cancelled',identity_status:'verified'})]});
+      await openCard(page,7); assert.equal(await card(page,7).locator('.request-form-section').isVisible(),false);
+      await openCard(page,8); assert.equal(await card(page,8).locator('.request-form-section').isVisible(),true);
+      assert.equal(await card(page,8).getByRole('button',{name:'Посмотреть анкету'}).isVisible(),true);
+      assert.deepEqual(errors,[]); passed.push('cancelled identity visibility'); await page.close();
     }
     {
       const { page, errors } = await fixture(browser, { orders: [order(7, { assignee_id: 200, starts_at: "2026-10-25T10:00:00Z", ends_at: "2026-10-26T09:00:00Z" })] });
       const selected = card(page, 7);
       assert.match(await selected.locator(".request-assignee").innerText(), /Ответственный: вы/);
       await openCard(page, 7);
-      assert.match(await selected.locator(".request-summary").innerText(), /Ответственный/);
+      assert.match(await selected.locator(".request-assignee").innerText(), /Ответственный/);
       assert.equal(await selected.locator(".rental-overdue").innerText(), "Просрочено");
       assert.equal(await selected.locator(".rental-progress").count(), 0);
       assert.deepEqual(errors, []); passed.push("assignee and overdue rental period"); await page.close();

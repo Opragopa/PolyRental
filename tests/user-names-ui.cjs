@@ -29,7 +29,8 @@ const { fixture, base } = require('./completion-ui.cjs');
       {telegram_id:123456789,role:'admin',name:'@manager_anna',full_name:''},
       {telegram_id:987654321,role:'operator',name:'Борис',full_name:''}
     ]}}));
-    await page.locator('#admin-settings > summary').click();
+    await page.locator('#admin-settings-open').click();
+    await page.locator('#settings-tab-staff').click();
     await page.getByRole('button',{name:'Сотрудники',exact:true}).click();
     const staff = page.locator('.workflow-dialog select[name="staff"]');
     await staff.waitFor();
