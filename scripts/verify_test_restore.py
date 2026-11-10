@@ -30,6 +30,8 @@ def fingerprint(database):
         'changes', (SELECT count(*) FROM booking_changes),
         'identities', (SELECT count(*) FROM customer_identities),
         'catalog_images', (SELECT count(*) FROM article_images),
+        'category_images', (SELECT count(*) FROM catalog_categories WHERE image_webp IS NOT NULL),
+        'category_image_digest', (SELECT md5(coalesce(string_agg(md5(image_webp), ',' ORDER BY code), '')) FROM catalog_categories WHERE image_webp IS NOT NULL),
         'image_digest', (SELECT md5(coalesce(string_agg(md5(webp), ',' ORDER BY article_id), '')) FROM article_images),
         'document_digest', (SELECT md5(coalesce(string_agg(sha256, ',' ORDER BY booking_id, kind), '')) FROM booking_documents),
         'revision', (SELECT version_num FROM alembic_version))"""
@@ -67,6 +69,8 @@ def main():
     # Every database-changing command below targets a fresh name in db_test.
     assert restore_name.startswith("polyrental_restore_test_") and len(restore_name) < 63
     source = fingerprint("polyrental_test")
+    if args.seed_synthetic and source["category_images"] < 1:
+        raise RuntimeError("Synthetic category photo fixture is missing")
     archive = run([*DB_COMMAND, "pg_dump", "-U", "polyrental", "-d", "polyrental_test", "-Fc"])
     environment = {**os.environ, "BACKUP_MASTER_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode()}
     created = False

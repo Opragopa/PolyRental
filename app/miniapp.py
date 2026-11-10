@@ -33,7 +33,7 @@ from .catalog_import import MAX_CSV_BYTES, import_catalog_csv
 from .cart import CartConflict, get_cart, put_cart
 from .availability_events import subscribe as subscribe_availability, unsubscribe as unsubscribe_availability
 from .catalog_titles import catalog_title
-from .catalog_categories import list_categories, create_category, delete_category
+from .catalog_categories import list_categories, create_category, delete_category, update_category, save_category_image, edit_category
 from .booking_events import claim_notices
 from .request_sla import request_sla
 from .support import (SupportConflict, submit_question, list_threads as list_support_threads, support_threads_page,
@@ -165,6 +165,55 @@ async def admin_create_category(payload: CategoryRequest, user=Depends(require_a
         return await asyncio.to_thread(create_category, payload.name, user["id"], payload.parent_code, payload.icon)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+class CategoryRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+@router.patch("/api/miniapp/admin/catalog/categories/{code}")
+async def admin_update_category(code: str, payload: CategoryRenameRequest, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(update_category, code, payload.name, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/api/miniapp/admin/catalog/categories/{code}/edit")
+async def admin_edit_category(code: str, name: str = Form(...), remove_photo: bool = Form(False),
+                              photo: UploadFile | None = File(None), user=Depends(require_admin)):
+    from .catalog_images import MAX_UPLOAD
+    raw = None
+    if photo is not None:
+        raw = await photo.read(MAX_UPLOAD + 1)
+        await photo.close()
+    try:
+        await asyncio.to_thread(edit_category, code, name, raw, remove_photo, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.put("/api/miniapp/admin/catalog/categories/{code}/photo")
+async def admin_category_photo(code: str, photo: UploadFile = File(...), user=Depends(require_admin)):
+    from .catalog_images import MAX_UPLOAD, preview_data
+    raw = await photo.read(MAX_UPLOAD + 1)
+    await photo.close()
+    try:
+        preview = await asyncio.to_thread(save_category_image, code, raw, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True, "image_data": preview_data(preview)}
+
+
+@router.delete("/api/miniapp/admin/catalog/categories/{code}/photo")
+async def admin_delete_category_photo(code: str, user=Depends(require_admin)):
+    try:
+        await asyncio.to_thread(save_category_image, code, None, user["id"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True}
 
 
 @router.delete("/api/miniapp/admin/catalog/categories/{code}")

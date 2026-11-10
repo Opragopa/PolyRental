@@ -30,6 +30,9 @@ save_equipment(tag,tag,"",0,"available",article_id=article)
 from app.catalog_images import save_image
 preview=io.BytesIO();Image.new("RGB",(32,32),"blue").save(preview,format="PNG")
 save_image(article,preview.getvalue(),100)
+from app.catalog_categories import create_category, save_category_image
+category=create_category(tag,100)
+save_category_image(category["code"],preview.getvalue(),100)
 start=now()+timedelta(days=5)
 booking=create_booking(42,"TEST-Client","@synthetic",start,start+timedelta(hours=2),[{"article_id":article,"quantity":1}])
 transition(booking,"confirmed",100);verified_identity(booking);assign_booking_assets(booking,100)
@@ -37,4 +40,4 @@ for asset in get_booking(booking).assets:record_inspection(booking,asset.equipme
 transition(booking,"ready",100);paper(booking);transition(booking,"issued",100)
 other=create_booking(43,"TEST-Other","@synthetic",start+timedelta(days=2),start+timedelta(days=2,hours=2),[{"article_id":article,"quantity":1}])
 propose_change(other,100,"client_fix","TEST-Private encrypted comment")
-print("Synthetic encrypted receipt, signature, identity and request-change fixture created in polyrental_test")
+print("Synthetic receipt, identity, category photo and request-change fixture created in polyrental_test")
