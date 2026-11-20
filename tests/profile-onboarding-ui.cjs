@@ -68,7 +68,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
           const back=row.querySelector('#profile-prev').getBoundingClientRect();
           return {gap:parseFloat(getComputedStyle(row).gap),below:below.top-back.bottom};
         });
-        assert(spacing.gap>=10 && spacing.below>=12, `Profile navigation touches adjacent blocks at ${width}px`);
+        assert(spacing.gap>=12 && spacing.below>=12, `Profile navigation touches adjacent blocks at ${width}px: ${JSON.stringify(spacing)}`);
       }
       await page.setViewportSize({width:390, height:844});
       await page.locator('#profile-disclosure > summary').click();

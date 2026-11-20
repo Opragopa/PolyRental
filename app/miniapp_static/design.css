@@ -2289,12 +2289,12 @@ details[open] > summary::after { transform:rotate(-90deg) !important; }
 #profile-disclosure > .profile-private { border:0; border-top:1px solid var(--line); border-radius:0 0 18px 18px; }
 
 #orders-panel :is(#profile-pagination, .profile-identity-actions, .profile-settings-actions) {
-  gap:var(--space-3);
-  margin-block-start:var(--space-3);
+  gap:max(12px, var(--space-3));
+  margin-block-start:max(12px, var(--space-3));
 }
-#orders-panel .profile-history { margin-block-end:var(--space-3); }
-#orders-panel .profile-toolbar { gap:var(--space-3); }
-#orders-panel #profile-pagination { padding-block:var(--space-3); }
+#orders-panel .profile-history { margin-block-end:max(12px, var(--space-3)); }
+#orders-panel .profile-toolbar { gap:max(12px, var(--space-3)); }
+#orders-panel #profile-pagination { padding-block:max(12px, var(--space-3)); }
 
 .article-card-head { cursor:pointer; }
 .article-summary-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); }
