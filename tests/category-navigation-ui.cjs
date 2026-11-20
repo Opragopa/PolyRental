@@ -19,6 +19,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  if(p==='/api/miniapp/release/seen')return route.fulfill({json:{ok:true}});
  if(p==='/api/miniapp/notifications/inbox/read'){inboxRead=true;return route.fulfill({json:{ok:true}});}
  if(p==='/api/miniapp/notifications/inbox')return route.fulfill({json:{items:[{id:'d:1',message:'Заявка обновлена',created_at:'2026-11-01T10:00:00Z'}],unread:!inboxRead,has_more:false}});
+ if(p==='/api/miniapp/admin/notification-preferences')return route.fulfill({json:{quiet_start:'21:00',quiet_end:'08:00'}});
  if(p==='/api/miniapp/cart'&&m==='GET')return route.fulfill({json:cart});
  if(p==='/api/miniapp/cart'&&m==='PUT'){cart={...route.request().postDataJSON(),version:cart.version+1};return route.fulfill({json:cart});}
  if(p==='/api/miniapp/catalog/categories')return route.fulfill({json:{items:categories}});
@@ -89,6 +90,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('#client-catalog-back').click(); await page.locator('#catalog-page-title').getByText('Каталог оборудования').waitFor();
  await page.locator('#tab-admin').click(); await page.locator('[data-mode="catalog"]').click();
  await page.locator('#admin-settings-open').click(); assert.equal(await page.locator('#admin-heading').innerText(),'Настройки'); assert(await page.locator('#settings-notifications').isVisible()); assert(await page.locator('#settings-tab-staff').isVisible());
+ await page.waitForFunction(()=>document.querySelector('#operator-quiet-form input[name="quiet_start"]').value==='21:00');
  await page.locator('#operator-quiet-form input[name="quiet_start"]').fill('22:00'); await page.locator('#settings-tab-calendar').click(); assert(await page.locator('#settings-calendar').isVisible()); await page.locator('#settings-tab-notifications').click(); assert.equal(await page.locator('#operator-quiet-form input[name="quiet_start"]').inputValue(),'22:00');
  await page.evaluate(()=>window.__telegramBack()); assert.equal(await page.locator('#admin-heading').innerText(),'Управление'); assert.equal(await page.locator('[data-mode="catalog"]').getAttribute('aria-pressed'),'true');
  assert.equal(await page.locator('#admin-panel > .panel-head h2').innerText(),'Управление'); assert(await page.locator('#admin-back-button').isVisible()); assert(await page.locator('#admin-back-button').isDisabled());

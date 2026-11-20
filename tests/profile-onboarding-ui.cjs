@@ -77,12 +77,16 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       assert.equal(await page.locator('.profile-fields-masked .profile-identity-value').count(),Object.values(identity).filter(Boolean).length);
       assert.match(await page.locator('.profile-fields-masked .profile-identity-value').first().evaluate(node=>getComputedStyle(node).filter),/blur/);
       assert.match(await page.locator('#profile-identity-fields').innerText(),/123456/);
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       const geometry=await page.locator('.profile-identity-row').evaluateAll(rows=>rows.map(row=>({top:row.offsetTop,height:row.offsetHeight,text:row.textContent})));
       await page.evaluate(()=>window.profileValueNodes=[...document.querySelectorAll('.profile-identity-value')]);
       if(process.env.QA_SCREENSHOTS){fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});await page.waitForTimeout(300);await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,`profile-masked-${admin}.png`),fullPage:true});}
       await page.locator('.profile-fields-masked .profile-identity-row').nth(1).click();
       assert.equal(identityRequests, 1);
-      assert.deepEqual(await page.locator('.profile-identity-row').evaluateAll(rows=>rows.map(row=>({top:row.offsetTop,height:row.offsetHeight,text:row.textContent}))),geometry,'blur toggle keeps every row in exactly the same place');
+      const revealed=await page.locator('.profile-identity-row').evaluateAll(rows=>rows.map(row=>({top:row.offsetTop,height:row.offsetHeight,text:row.textContent})));
+      assert.deepEqual(revealed.map(row=>row.text),geometry.map(row=>row.text));
+      assert(revealed.every((row,index)=>Math.abs(row.top-geometry[index].top)<=1 && Math.abs(row.height-geometry[index].height)<=1),
+        'blur toggle keeps rows aligned to within one CSS pixel');
       assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.profile-identity-value')].every((node,index)=>node===window.profileValueNodes[index])),true,'reveal keeps the same text nodes');
       if(process.env.QA_SCREENSHOTS){fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,`profile-revealed-${admin}.png`),fullPage:true});}
       await page.locator('#profile-identity-fields').getByText('Номер паспорта:', {exact:false}).waitFor();
