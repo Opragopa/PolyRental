@@ -125,8 +125,10 @@
   let rentalPurposeEnabled = true;
   async function refreshBookingQuestion() {
     try {
-      const settings = await api('/api/miniapp/booking-settings');
-      if (typeof settings.rental_purpose_enabled === 'boolean') rentalPurposeEnabled = settings.rental_purpose_enabled;
+      if (!preview) {
+        const settings = await api('/api/miniapp/booking-settings');
+        if (typeof settings.rental_purpose_enabled === 'boolean') rentalPurposeEnabled = settings.rental_purpose_enabled;
+      }
     } catch (_) { /* An optional question must not block booking during a read failure. */ }
     $('rental-purpose-field').hidden = !rentalPurposeEnabled;
   }
