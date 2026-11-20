@@ -100,6 +100,14 @@ app.include_router(router)
 app.mount("/miniapp/static", StaticFiles(directory=STATIC_DIR), name="miniapp-static")
 
 
+@app.middleware('http')
+async def revalidate_frontend(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/miniapp/static/'):
+        response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
+    return response
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": __version__}

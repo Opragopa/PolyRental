@@ -29,6 +29,22 @@ def _initialize(session, uid):
     session.execute(text("INSERT INTO notification_inbox_users(recipient_id) VALUES (:uid) ON CONFLICT DO NOTHING"), {"uid": uid})
 
 
+def _presentation(message, kind):
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    # Telegram navigation and attribution are not notification content.
+    content = [line for line in lines if not line.startswith(("Автор:", "Открыть заявку"))]
+    if kind == "support":
+        return {"title": "Поддержка", "summary": message, "kind": kind}
+    if not content:
+        return {"title": "Уведомление", "summary": "", "kind": kind}
+    title, *body = content
+    # Older card deliveries contain the entire rental inventory. In the inbox
+    # the booking number and its status are sufficient to identify the update.
+    if any(line.startswith("Создана:") for line in body):
+        body = [line.removeprefix("Статус:").strip() for line in body if line.startswith("Статус:")]
+    return {"title": title, "summary": " ".join(body), "kind": kind}
+
+
 def inbox(uid, offset=0, limit=10):
     with Session.begin() as session:
         _initialize(session, uid)
@@ -48,7 +64,9 @@ def inbox(uid, offset=0, limit=10):
                     message = unescape(re.sub(r"<[^>]*>", "", delivery_message(delivery)))
                 except (ValueError, TypeError):
                     message = "Новое уведомление"
-            items.append({"id": row["key"], "message": message, "created_at": row["created_at"].isoformat()})
+            kind = "support" if row["kind"] == "support" else "booking" if delivery.booking_id else "notification"
+            items.append({"id": row["key"], "message": message, "created_at": row["created_at"].isoformat(),
+                          **_presentation(message, kind)})
         return {"items": items, "unread": bool(unread), "has_more": len(rows) > limit}
 
 

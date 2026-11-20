@@ -5,6 +5,51 @@
   const preference = matchMedia("(prefers-reduced-motion: reduce)");
   const exits = new Map();
   const entries = new Map();
+  const feedbackAnimations = new Map();
+  const presses = new Map();
+  function feedbackAnimation(element, frames, options = {}) {
+    if (!element || preference.matches || typeof element.animate !== "function") return;
+    feedbackAnimations.get(element)?.cancel();
+    const animation = element.animate(frames, {duration:240, easing:"cubic-bezier(.22,1,.36,1)", ...options});
+    feedbackAnimations.set(element, animation);
+    void animation.finished.catch(()=>{}).then(()=>{ if (feedbackAnimations.get(element) === animation) feedbackAnimations.delete(element); });
+  }
+  function quantityFeedback(value, target) {
+    // Only the number deforms; neither the text around it nor the hit area moves.
+    feedbackAnimation(value, [{transform:"scale(1)"}, {transform:"scale(1.16,.84)",offset:.22}, {transform:"scale(.94,1.09)",offset:.6}, {transform:"scale(1)"}]);
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    feedbackAnimation(target, [{boxShadow:"0 0 0 0 transparent"}, {boxShadow:`0 0 0 3px ${color}`,offset:.35}, {boxShadow:"0 0 0 0 transparent"}], {duration:280, delay:80});
+  }
+  function stage(element, direction = 1) {
+    feedbackAnimation(element, [{opacity:.5,transform:`translateY(${direction * 10}px)`}, {opacity:1,transform:"translateY(0)"}], {duration:220});
+  }
+  function result(element) {
+    feedbackAnimation(element, [{transform:"perspective(600px) rotateX(12deg) scale(.82)"}, {transform:"perspective(600px) rotateX(-2deg) scale(1.08)",offset:.65}, {transform:"perspective(600px) rotateX(0) scale(1)"}], {duration:320});
+  }
+  function startPress(key, button) {
+    if (preference.matches || !button || button.disabled || presses.has(key)) return;
+    const rect = button.getBoundingClientRect(); if (!rect.width || !rect.height) return;
+    const layer = document.createElement('div'); layer.className='press-feedback'; layer.inert=true; layer.setAttribute('aria-hidden','true');
+    layer.style.cssText=`left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;border-radius:${getComputedStyle(button).borderRadius}`;
+    document.body.append(layer);
+    const animation=layer.animate([{transform:'scale(.94)',opacity:.04},{transform:'scale(1)',opacity:.14}],{duration:90,easing:'ease-out',fill:'forwards'});
+    presses.set(key,{layer,animation});
+  }
+  function endPress(key, cancelled = false) {
+    const state=presses.get(key); if (!state) return; presses.delete(key); state.animation.cancel();
+    if (cancelled || preference.matches) { state.layer.remove(); return; }
+    const animation=state.layer.animate([{transform:'scale(1)',opacity:.14},{transform:'scale(1.035)',opacity:0}],{duration:140,easing:'ease-out'});
+    state.animation=animation;
+    // Keep releasing cues tracked so navigation and reduced motion remove them.
+    const releaseKey=Symbol('release'); presses.set(releaseKey,state);
+    void animation.finished.catch(()=>{}).then(()=>{state.layer.remove();presses.delete(releaseKey);});
+  }
+  document.addEventListener('pointerdown',event=>{ if (event.button===0) startPress(event.pointerId,event.target.closest?.('button')); },true);
+  document.addEventListener('pointerup',event=>endPress(event.pointerId),true);
+  document.addEventListener('pointercancel',event=>endPress(event.pointerId,true),true);
+  document.addEventListener('keydown',event=>{if (!event.repeat && ['Enter',' '].includes(event.key)) startPress('keyboard',event.target.closest?.('button'));},true);
+  document.addEventListener('keyup',event=>{if (['Enter',' '].includes(event.key)) endPress('keyboard');},true);
+  window.addEventListener('blur',()=>{for(const key of presses.keys())endPress(key,true);});
   function enter(element, direction = 1) {
     if (!element || preference.matches || typeof element.animate !== "function") return;
     entries.get(element)?.cancel();
@@ -16,6 +61,7 @@
     if (exits.has(dialog)) return exits.get(dialog).promise;
     dialog.setAttribute("data-modal-closing", "");
     dialog.inert = true;
+    dialog.style.pointerEvents = "none";
     if (preference.matches || typeof dialog.animate !== "function") {
       dialog.remove();
       return Promise.resolve();
@@ -33,7 +79,10 @@
     if (collapse) dialog.style.overflow = "hidden";
     const animations = [dialog.animate(exitFrames, {duration: 160, easing: "ease-out", fill: "forwards"})];
     if (card) animations.push(card.animate(frames, {duration: 160, easing: "ease-out", fill: "forwards"}));
-    const promise = Promise.allSettled(animations.map(animation => animation.finished)).then(() => {
+    let exitTimeout;
+    const deadline = new Promise(resolve => { exitTimeout = setTimeout(resolve, 400); });
+    const promise = Promise.race([Promise.allSettled(animations.map(animation => animation.finished)), deadline]).then(() => {
+      clearTimeout(exitTimeout);
       dialog.remove();
       animations.forEach(animation => animation.cancel());
       exits.delete(dialog);
@@ -52,8 +101,8 @@
     const rect = element.getBoundingClientRect(); if (!rect.width || !rect.height) return;
     const layer = element.cloneNode(false); layer.removeAttribute("id"); layer.classList.add("heading-morph-copy"); layer.setAttribute("aria-hidden","true"); layer.textContent = previous;
     layer.style.cssText = `left:${previousRect.left}px;top:${previousRect.top}px;width:${previousRect.width}px;height:${previousRect.height}px`; document.body.append(layer);
-    const exit = layer.animate([{opacity:1,transform:"scaleX(1)"},{opacity:0,transform:"scaleX(1.06)"}],{duration:240,easing:"ease-in",fill:"forwards"});
-    const entry = element.animate([{opacity:0,transform:"scaleX(.95)"},{opacity:1,transform:"scaleX(1)"}],{duration:340,easing:"cubic-bezier(.22, 1, .36, 1)"});
+    const exit = layer.animate([{opacity:1,transform:"scaleX(1)"},{opacity:0,transform:"scaleX(1.02)"}],{duration:160,easing:"ease-in",fill:"forwards"});
+    const entry = element.animate([{opacity:0,transform:"scaleX(.98)"},{opacity:1,transform:"scaleX(1)"}],{duration:240,easing:"cubic-bezier(.22, 1, .36, 1)"});
     const state = {animations:[exit,entry], layer}; headingAnimations.set(element,state);
     void Promise.allSettled(state.animations.map(animation=>animation.finished)).then(()=>{layer.remove(); if(headingAnimations.get(element)===state) headingAnimations.delete(element);});
   }
@@ -103,6 +152,9 @@
     return {left:rect.left, top:rect.top, width:rect.width, height:rect.height, copy};
   }
   function cancelTransient() {
+    for (const host of surfaces.keys()) cancelSurface(host);
+    for (const animation of feedbackAnimations.values()) animation.cancel(); feedbackAnimations.clear();
+    for (const key of presses.keys()) endPress(key,true);
     for (const state of headingAnimations.values()) { state.animations.forEach(animation=>animation.cancel()); state.layer.remove(); } headingAnimations.clear();
     categoryAnimation?.cancel(); categoryLayer?.remove(); categoryAnimation = null; categoryLayer = null;
     categoryEntries.forEach(animation=>animation.cancel()); categoryEntries = [];
@@ -124,25 +176,68 @@
     const frames = [{left:`${snapshot.left}px`,top:`${snapshot.top}px`,width:`${snapshot.width}px`,height:`${snapshot.height}px`,borderRadius:'14px',opacity:.96},
       {left:`${middleLeft}px`,top:`${middleTop}px`,width:`${(snapshot.width+end.width)/2}px`,height:`${(snapshot.height+end.height)/2}px`,borderRadius:'11px',opacity:.68,offset:.5},
       {left:`${end.left}px`,top:`${end.top}px`,width:`${end.width}px`,height:`${end.height}px`,borderRadius:'8px',opacity:0}];
-    categoryAnimation = layer.animate(frames,{duration:480,easing:'cubic-bezier(.45, 0, .25, 1)',fill:'forwards'});
+    categoryAnimation = layer.animate(frames,{duration:320,easing:'cubic-bezier(.45, 0, .25, 1)',fill:'forwards'});
     const current = categoryAnimation; void current.finished.catch(()=>{}).then(()=>{layer.remove(); if(categoryAnimation===current){categoryAnimation=null;categoryLayer=null;}});
   }
   const cartFlights = new Set();
   function flyToCart(card, target) {
     if (preference.matches || !card || !target || target.hidden) return;
-    const start = card.getBoundingClientRect(), end = target.getBoundingClientRect();
+    const source = card.querySelector('.catalog-media') || card;
+    const start = source.getBoundingClientRect(), end = target.getBoundingClientRect();
     if (!start.width || !start.height || !end.width || !end.height) return;
     while (cartFlights.size >= 3) { const oldest = cartFlights.values().next().value; oldest.animation.cancel(); oldest.layer.remove(); cartFlights.delete(oldest); }
     const layer = document.createElement('div'); layer.className = 'cart-flight'; layer.setAttribute('aria-hidden','true'); layer.inert = true;
     layer.style.cssText = `left:${start.left}px;top:${start.top}px;width:${start.width}px;height:${start.height}px`;
-    const copy = card.cloneNode(true); copy.removeAttribute('id'); copy.querySelectorAll('[id]').forEach(node=>node.removeAttribute('id')); layer.append(copy); document.body.append(layer);
+    const copy = source.cloneNode(true); copy.removeAttribute('id'); copy.querySelectorAll('[id]').forEach(node=>node.removeAttribute('id')); layer.append(copy); document.body.append(layer);
     const dx = end.left + end.width/2 - (start.left + start.width/2), dy = end.top + end.height/2 - (start.top + start.height/2);
     const bend = Math.min(50, Math.max(16, Math.abs(dx) * .18));
-    const animation = layer.animate([{transform:'translate(0,0) scale(1)',opacity:.9},{transform:`translate(${dx*.48}px,${dy*.48-bend}px) scale(.6)`,opacity:.72,offset:.5},{transform:`translate(${dx}px,${dy}px) scale(.12)`,opacity:0}],{duration:580,easing:'cubic-bezier(.42, 0, .2, 1)',fill:'forwards'});
+    const animation = layer.animate([{transform:'translate(0,0) scale(1)',opacity:.9},{transform:`translate(${dx*.48}px,${dy*.48-bend}px) scale(.6)`,opacity:.72,offset:.5},{transform:`translate(${dx}px,${dy}px) scale(.12)`,opacity:0}],{duration:420,easing:'cubic-bezier(.42, 0, .2, 1)',fill:'forwards'});
     const flight = {layer,animation}; cartFlights.add(flight);
     void animation.finished.catch(()=>{}).then(()=>{layer.remove();cartFlights.delete(flight);});
   }
   const reflows = new Map();
+  const surfaces = new Map();
+  function cancelSurface(host) {
+    const state = surfaces.get(host);
+    if (!state) return;
+    surfaces.delete(host); state.observer?.disconnect(); state.animation?.cancel();
+    host.style.overflow = state.overflow;
+  }
+  function surface(host, change) {
+    const height = host.getBoundingClientRect().height;
+    const opacity = surfaces.has(host) ? getComputedStyle(host).opacity : .65;
+    cancelSurface(host);
+    change();
+    if (preference.matches || !host.getClientRects().length || typeof host.animate !== 'function') return;
+    const state = {overflow:host.style.overflow};
+    surfaces.set(host, state);
+    host.style.overflow = 'clip';
+    const animate = (from, fromOpacity = getComputedStyle(host).opacity) => {
+      state.animation?.cancel();
+      const target = host.getBoundingClientRect().height;
+      state.animation = host.animate([{height:`${from}px`,opacity:fromOpacity},{height:`${target}px`,opacity:1}],
+        {duration:220,easing:'cubic-bezier(.22,1,.36,1)'});
+      const current = state.animation;
+      void current.finished.catch(()=>{}).then(()=>{
+        if (surfaces.get(host) === state && state.animation === current) cancelSurface(host);
+      });
+    };
+    animate(height, opacity);
+    // Loading a form while entering must not leave a stale fixed end height.
+    if (typeof ResizeObserver === 'function') {
+      const sizes = new Map([...host.children].map(node=>[node,`${node.getBoundingClientRect().width}:${node.getBoundingClientRect().height}`]));
+      state.observer = new ResizeObserver(entries=>{
+        let changed = false;
+        for (const {target} of entries) {
+          const rect = target.getBoundingClientRect(), size = `${rect.width}:${rect.height}`;
+          if (sizes.get(target) !== size) changed = true;
+          sizes.set(target,size);
+        }
+        if (changed && surfaces.get(host) === state) animate(host.getBoundingClientRect().height);
+      });
+      for (const child of host.children) state.observer.observe(child);
+    }
+  }
   function cancelReflow(containers) {
     for (const host of containers.filter(Boolean)) { for (const animation of reflows.get(host) || []) animation.cancel(); reflows.delete(host); }
   }
@@ -165,6 +260,9 @@
   }
   preference.addEventListener("change", () => {
     if (preference.matches) {
+      for (const host of surfaces.keys()) cancelSurface(host);
+      for (const animation of feedbackAnimations.values()) animation.cancel(); feedbackAnimations.clear();
+      for (const key of presses.keys()) endPress(key,true);
       for (const state of headingAnimations.values()) { state.animations.forEach(animation=>animation.cancel()); state.layer.remove(); } headingAnimations.clear();
       for (const animation of entries.values()) animation.cancel();
       for (const animations of reflows.values()) animations.forEach(animation => animation.cancel());
@@ -173,5 +271,5 @@
       for (const {animations} of exits.values()) animations.forEach(animation => animation.finish());
     }
   });
-  window.PolyRentalMotion = {removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, captureCategoryView, transitionCategoryView, waitCategory: () => categoryAnimation?.finished.catch(()=>{}), flyToCart, cancelTransient, morphText};
+  window.PolyRentalMotion = {surface, cancelSurface, removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, captureCategoryView, transitionCategoryView, waitCategory: () => categoryAnimation?.finished.catch(()=>{}), flyToCart, cancelTransient, morphText, quantityFeedback, stage, result};
 })();

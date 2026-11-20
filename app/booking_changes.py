@@ -1,5 +1,6 @@
 """Encrypted request changes, optimistic responses and durable deadline notifications."""
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from html import escape
 import json
 import os
@@ -7,11 +8,14 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select, delete
 
-from .db import (Audit, Booking, BookingAsset, BookingChange, BookingLine, BookingOperationLease,
-                 NotificationDelivery, Session)
+from .db import (Audit, Booking, BookingAsset, BookingChange, BookingHandover, BookingLine,
+                 BookingOperationLease, Inspection, NotificationDelivery, Session)
 from .pii import _master_key
-from .rental import Conflict, _normalize_lines, validate_interval
+from .rental import Conflict, _claim_stage, _normalize_lines, availability, validate_interval
 from .inventory import require_role
+
+
+FORCE_EDIT_STATUSES = {"pending", "needs_changes", "confirmed", "preparing", "ready"}
 
 
 def now():
@@ -51,14 +55,16 @@ def queue(session, booking, event, message, recipient=None, sensitive=False):
                                      event=event, message=message, next_retry_at=now()))
 
 
-def _save_history(session, booking, audit, before, after, change=None):
+def _save_history(session, booking, audit, before, after, change=None, *, change_type="customer_edit", comment=None):
     """Bind an encrypted comparison to the exact audit event, without a migration."""
     session.add(audit)
     session.flush()
     if change is None:
         change = BookingChange(booking_id=booking.id, actor_id=audit.actor_id,
-                               change_type="customer_edit", status="accepted")
+                               change_type=change_type, status="accepted")
         payload = {"before": before, "after": after}
+        if comment is not None:
+            payload["comment"] = comment
         session.add(change)
     else:
         payload = _decode(change)
@@ -115,7 +121,7 @@ def propose_change(booking_id, actor_id, change_type, comment, proposed=None, ex
         after = proposed or before
         if change_type == "manager_edit":
             start, end = datetime.fromisoformat(after["start"]), datetime.fromisoformat(after["end"])
-            validate_interval(start, end, enforce_booking_notice=True)
+            validate_interval(start, end, enforce_booking_notice=True, allow_past_start=True)
             normalized = _normalize_lines(session, after["lines"])
             _check_change_availability(session, booking, normalized, start, end)
             after = {"start": start.isoformat(), "end": end.isoformat(),
@@ -160,6 +166,103 @@ def change_view(booking_id, actor_id, pii=False):
                 "deadline": change.deadline.isoformat() if change.deadline else None, **payload}
 
 
+def _apply_edit(session, booking, start, end, normalized):
+    # Reuse line IDs, including hidden rows, to preserve the unique article key.
+    session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking.id))
+    existing = {row.article_id: row for row in session.scalars(select(BookingLine).where(BookingLine.booking_id == booking.id))}
+    selected = {row[0].id for row in normalized}
+    for article_id, row in existing.items():
+        if article_id not in selected:
+            row.deleted_at = now()
+    for article, quantity, _rate, auto_added, _billable in normalized:
+        row = existing.get(article.id)
+        if row is None:
+            row = BookingLine(booking_id=booking.id, article_id=article.id)
+            session.add(row)
+        row.quantity, row.billable_quantity, row.hourly_rate = quantity, 0, 0
+        row.auto_added, row.deleted_at = auto_added, None
+    booking.starts_at, booking.ends_at = start, end
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "lines": [{"article_id": article.id, "quantity": quantity, "name": article.name}
+                      for article, quantity, *_ in normalized]}
+
+
+def _force_edit_state(session, booking_id):
+    booking = session.get(Booking, booking_id, with_for_update=True)
+    if not booking or booking.deleted_at:
+        raise ValueError("Заявка не найдена")
+    if booking.status not in FORCE_EDIT_STATUSES:
+        raise Conflict("Изменение доступно до фактической выдачи оборудования")
+    before = _snapshot(booking)
+    change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id)
+                            .order_by(BookingChange.id.desc()).limit(1))
+    revision = sha256(json.dumps(
+        [booking.id, booking.status, before, [change.id, change.status] if change else None],
+        sort_keys=True, ensure_ascii=False,
+    ).encode()).hexdigest()
+    draft = before
+    if booking.status == "needs_changes" and change and change.status == "pending" and change.ciphertext:
+        draft = _decode(change)["after"]
+    return booking, change, before, draft, revision
+
+
+def force_edit_context(booking_id, actor_id):
+    require_role(actor_id)
+    with Session.begin() as session:
+        _, _, _, draft, revision = _force_edit_state(session, booking_id)
+        return {"draft": draft, "revision": revision}
+
+
+def edit_availability(booking_id, actor_id, start, end, *, staff=False):
+    if staff:
+        require_role(actor_id)
+    with Session() as session:
+        booking = session.get(Booking, booking_id)
+        if not booking or booking.deleted_at or (not staff and booking.customer_id != actor_id):
+            raise ValueError("Заявка не найдена")
+        if booking.status not in (FORCE_EDIT_STATUSES if staff else {"pending", "needs_changes"}):
+            raise Conflict("Редактирование на этом этапе недоступно")
+    validate_interval(start, end, enforce_booking_notice=True, allow_past_start=True)
+    return availability(start, end, allow_past_start=True, exclude_booking_id=booking_id)
+
+
+def force_edit_request(booking_id, actor_id, start, end, lines, comment, expected_revision):
+    require_role(actor_id)
+    comment = comment.strip()
+    if not comment or len(comment) > 2000:
+        raise ValueError("Укажите комментарий для клиента до 2000 символов")
+    with Session.begin() as session:
+        booking, change, before, _, revision = _force_edit_state(session, booking_id)
+        if revision != expected_revision:
+            raise Conflict("Заявка изменилась во время редактирования. Откройте её заново")
+        validate_interval(start, end, enforce_booking_notice=True, allow_past_start=True)
+        normalized = _normalize_lines(session, lines)
+        _check_change_availability(session, booking, normalized, start, end)
+        was_confirmed = booking.status in {"confirmed", "preparing", "ready"}
+        if was_confirmed:
+            from .handover import reset_draft
+            from .roles import staff_allows
+            _claim_stage(session, booking, actor_id, bypass_owner=staff_allows(actor_id, "manager"))
+            reset_draft(session, booking.id)
+            handover = session.get(BookingHandover, booking.id)
+            if handover:
+                handover.data = {}
+            booking.act_signed_at = booking.act_signed_by = None
+            session.execute(delete(Inspection).where(Inspection.booking_id == booking.id, Inspection.stage == "pre_issue"))
+        from .customer_changes import obsolete_request
+        obsolete_request(session, booking)
+        if change and change.status == "pending":
+            change.status = "superseded"
+        after = _apply_edit(session, booking, start, end, normalized)
+        booking.status = "pending"
+        booking.hold_expires_at = None
+        session.execute(delete(BookingOperationLease).where(BookingOperationLease.booking_id == booking.id))
+        _save_history(session, booking,
+                      Audit(booking_id=booking.id, actor_id=actor_id, action="request_force_edited"),
+                      before, after, change_type="staff_edit", comment=comment)
+        return booking.status
+
+
 def update_request(booking_id, customer_id, start, end, lines, change_id=None, accept=True, comment="", expected_before=None):
     """A response is bound to the exact proposal; replay never applies a newer edit."""
     with Session.begin() as session:
@@ -200,30 +303,14 @@ def update_request(booking_id, customer_id, start, end, lines, change_id=None, a
             raise Conflict("Ответьте на актуальный запрос изменений")
         if start is None or end is None or lines is None:
             raise ValueError("Передайте исправленные даты и оборудование")
-        validate_interval(start, end, enforce_booking_notice=True)
+        validate_interval(start, end, enforce_booking_notice=True, allow_past_start=True)
         normalized = _normalize_lines(session, lines)
         _check_change_availability(session, booking, normalized, start, end)
-        # Reuse line IDs, including hidden rows, to preserve the unique article key.
-        session.execute(delete(BookingAsset).where(BookingAsset.booking_id == booking.id))
-        existing = {row.article_id: row for row in session.scalars(select(BookingLine).where(BookingLine.booking_id == booking.id))}
-        selected = {row[0].id for row in normalized}
-        for article_id, row in existing.items():
-            if article_id not in selected:
-                row.deleted_at = now()
-        for article, quantity, rate, auto_added, billable in normalized:
-            article_id = article.id
-            row = existing.get(article_id)
-            if row is None:
-                row = BookingLine(booking_id=booking.id, article_id=article_id)
-                session.add(row)
-            row.quantity, row.billable_quantity, row.hourly_rate = quantity, 0, 0
-            row.auto_added, row.deleted_at = auto_added, None
-        booking.starts_at, booking.ends_at, booking.status = start, end, "pending"
+        after = _apply_edit(session, booking, start, end, normalized)
+        booking.status = "pending"
         if change_id is not None:
             change.status = "accepted"
             queue(session, booking, "request_changes_answered", f"Клиент подтвердил изменения заявки {escape(booking.human_number or str(booking.id))}. Проверьте доступность и подтвердите заявку.", change.actor_id)
-        after = {"start": start.isoformat(), "end": end.isoformat(),
-                 "lines": [{"article_id": row[0].id, "quantity": row[1], "name": row[0].name} for row in normalized]}
         _save_history(session, booking,
             Audit(booking_id=booking.id, actor_id=customer_id, action="request_updated"),
             before, after, change if change_id is not None else None)

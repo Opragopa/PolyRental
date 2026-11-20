@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .catalog_import import MAX_CSV_BYTES, import_catalog_csv, parse_catalog_csv
 from .chat_workflows import LimitedPhotoBuffer, PAGE_SIZE, button, private
+from .chat_labels import equipment_condition, INSPECTION_PROFILES
 from .rental import Conflict, delete_dependency, delete_equipment, list_articles, list_dependencies, save_dependency
 from .roles import staff_allows
 
@@ -88,8 +89,8 @@ async def article_detail(message, actor, article_id, page=0):
     article = next((item for item in await asyncio.to_thread(list_articles) if item.id == article_id), None)
     if article is None: raise ValueError("Артикул не найден")
     page = max(0, min(page, max(0,(len(article.equipment)-1)//PAGE_SIZE)))
-    text = f"<b>{html.escape(article.name)}</b> · {html.escape(article.sku)}\nID модели: {article.id} · {'в каталоге' if article.is_active else 'скрыт'}\nКатегория: {html.escape(article.category)} · проверка: {html.escape(article.inspection_profile)}\nКомплектация: {html.escape((article.composition or 'не указана')[:1000])}\nЭкземпляров: {len(article.equipment)}"
-    rows = [[button(f"{asset.inventory_number} · {asset.condition}"[:60], f"cat:asset:{asset.id}")] for asset in article.equipment[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    text = f"<b>{html.escape(article.name)}</b> · {html.escape(article.sku)}\nНомер модели: {article.id} · {'в каталоге' if article.is_active else 'скрыт'}\nКатегория: {html.escape(article.category)} · проверка: {INSPECTION_PROFILES.get(article.inspection_profile, 'Общая')}\nКомплектация: {html.escape((article.composition or 'не указана')[:1000])}\nЭкземпляров: {len(article.equipment)}"
+    rows = [[button(f"{asset.inventory_number} · {equipment_condition(asset.condition)}"[:60], f"cat:asset:{asset.id}")] for asset in article.equipment[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
     if page: nav.append(button("← Назад", f"cat:article:{article_id}:{page-1}"))
     if (page+1)*PAGE_SIZE < len(article.equipment): nav.append(button("Далее →", f"cat:article:{article_id}:{page+1}"))
@@ -107,7 +108,7 @@ async def asset_detail(message, actor, asset_id):
     from .rental import list_equipment
     asset = next((item for item in await asyncio.to_thread(list_equipment) if item.id == asset_id), None)
     if asset is None: raise ValueError("Экземпляр не найден")
-    text = f"<b>{html.escape(asset.name)}</b>\nID: {asset.id} · код: {html.escape(asset.inventory_number)}\nСостояние: {html.escape(asset.condition)}\nМесто: {html.escape(asset.storage_location or 'не указано')}\nСерийный номер: {html.escape(asset.serial_number or 'не указан')}\nИнвентарный номер: {html.escape(asset.asset_inventory_code or 'не указан')}"
+    text = f"<b>{html.escape(asset.name)}</b>\nНомер экземпляра: {asset.id} · код: {html.escape(asset.inventory_number)}\nСостояние: {equipment_condition(asset.condition)}\nМесто: {html.escape(asset.storage_location or 'не указано')}\nСерийный номер: {html.escape(asset.serial_number or 'не указан')}\nИнвентарный номер: {html.escape(asset.asset_inventory_code or 'не указан')}"
     rows = [[button("Изменить экземпляр", f"ce:asset:{asset.id}"), button("Удалить экземпляр", f"cat:askdelete:{asset.id}")], [button("Владелец, занятость, особенности", f"iv:menu:{asset.id}")], [button("К модели", f"cat:article:{asset.article_id}")]]
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -249,6 +250,12 @@ async def import_save(query: CallbackQuery, state: FSMContext):
 
 ARTICLE_FIELDS = {"sku": "sku", "name": "name", "kind": "kind", "brand": "brand", "key_spec": "key_spec", "description": "description", "composition": "composition", "category": "category", "inspection_profile": "inspection_profile", "buffer_hours": "buffer_hours", "image_url": "image_url", "active": "is_active"}
 ASSET_FIELDS = {"article_id": "article_id", "serial": "serial_number", "inventory_code": "asset_inventory_code", "location": "storage_location", "condition": "condition", "health": "health_percent", "charge": "charge_percent"}
+FIELD_LABELS = dict(zip(
+    [*ARTICLE_FIELDS, *ASSET_FIELDS],
+    ['артикул', 'название', 'вид', 'бренд', 'характеристика', 'описание', 'комплектация', 'категория',
+     'профиль проверки', 'перерыв между арендами', 'ссылка на фото', 'в каталоге', 'номер модели',
+     'серийный номер', 'инвентарный номер', 'место', 'состояние', 'исправность', 'заряд']))
+FIELD_ALIASES = {label: key for key, label in FIELD_LABELS.items()}
 
 
 def snapshot_fields(item, fields):
@@ -261,6 +268,7 @@ def parse_editor_values(text, field_names):
         if not line.strip(): continue
         if "=" not in line: raise ValueError("Каждое поле укажите отдельной строкой в формате поле=значение")
         key, value = line.split("=", 1); key, value = key.strip().lower(), value.strip()
+        key = FIELD_ALIASES.get(key, key)
         if key not in field_names or key in result: raise ValueError(f"Неизвестное или повторное поле: {key[:40]}")
         result[key] = "" if value in {"-", "−"} else value
     if not result: raise ValueError("Укажите хотя бы одно поле")
@@ -278,18 +286,23 @@ def editor_payload(kind, base, updates):
     for key, value in updates.items():
         if key in {"health", "charge"} and value == "": values[key] = None
         elif key in {"article_id", "buffer_hours", "health", "charge"}:
-            if not value.isascii() or not value.isdigit(): raise ValueError(f"{key}: укажите целое число")
+            if not value.isascii() or not value.isdigit(): raise ValueError(f"{FIELD_LABELS[key]}: укажите целое число")
             values[key] = int(value)
         elif key == "active":
-            if value.casefold() not in {"да", "нет", "true", "false", "1", "0"}: raise ValueError("active: укажите да или нет")
+            if value.casefold() not in {"да", "нет", "true", "false", "1", "0"}: raise ValueError("В каталоге: укажите да или нет")
             values[key] = value.casefold() in {"да", "true", "1"}
+        elif key == 'condition':
+            values[key] = {'доступен':'available', 'на ремонте':'maintenance', 'ремонт':'maintenance',
+                           'списан':'retired', 'выведен из эксплуатации':'retired'}.get(value.casefold(), value)
+        elif key == 'inspection_profile':
+            values[key] = {label.casefold(): code for code, label in INSPECTION_PROFILES.items()}.get(value.casefold(), value)
         else: values[key] = value
     try:
         model = (ArticleRequest if kind == "article" else EquipmentRequest).model_validate(values)
     except ValidationError as exc:
         raise ValueError("Проверьте обязательные поля, длину значений и допустимые диапазоны") from exc
     if kind == "equipment" and model.condition not in {"available", "maintenance", "retired"}:
-        raise ValueError("condition: available, maintenance или retired")
+        raise ValueError("Состояние: доступен, на ремонте или списан")
     return model.model_dump(mode="json")
 
 
@@ -319,9 +332,9 @@ async def editor_start(query, state, action, identifier=None):
     await state.clear(); await state.update_data(editor_kind=kind, editor_id=record_id, editor_before=before, editor_base=base)
     await state.set_state(CatalogEditor.input); await query.answer()
     if kind == "article":
-        hint = "Поля: sku, name, kind, brand, key_spec, description, composition, category, inspection_profile, buffer_hours, image_url, active. Категории: /categories. Профиль: generic, camera, optics, light, battery. active: да/нет. Для нового обязательны sku и name."
+        hint = "Поля: " + ', '.join(FIELD_LABELS[key] for key in ARTICLE_FIELDS) + ". Категории: /categories. Профиль проверки: общая, камеры, оптика, свет, аккумуляторы. В каталоге: да/нет. Для новой модели обязательны артикул и название. Пример: название=Камера."
     else:
-        hint = "Поля: article_id, serial, inventory_code, location, condition, health, charge. condition: available, maintenance, retired; health и charge: 0–100."
+        hint = "Поля: " + ', '.join(FIELD_LABELS[key] for key in ASSET_FIELDS) + ". Состояние: доступен, на ремонте, списан; исправность и заряд: 0–100. Пример: состояние=доступен."
     await query.message.answer("Пришлите изменяемые поля, каждое с новой строки: поле=значение. Для очистки необязательного поля укажите −. " + hint + " Отмена: /cancel_booking.")
 
 
@@ -363,7 +376,13 @@ async def editor_input(message: Message, state: FSMContext):
     except ValueError as exc: return await message.answer(str(exc))
     nonce=secrets.token_hex(4)
     await state.update_data(editor_payload=payload,editor_nonce=nonce); await state.set_state(CatalogEditor.confirm)
-    preview="\n".join(f"{html.escape(key)}: {html.escape(str(payload.get(key,''))[:250])}" for key in updates)
+    def display_value(key):
+        value = payload.get(key, '')
+        if key == 'condition': return equipment_condition(value)
+        if key == 'inspection_profile': return INSPECTION_PROFILES.get(value, 'Общая')
+        if key == 'active': return 'да' if value else 'нет'
+        return str(value)
+    preview="\n".join(f"{FIELD_LABELS[key]}: {html.escape(display_value(key)[:250])}" for key in updates)
     await message.answer("Проверьте изменения:\n"+preview,parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button("Сохранить",f"ce:save:{nonce}")]]))
 
 

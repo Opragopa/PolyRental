@@ -30,6 +30,10 @@ def handover_state(booking_id, session=None):
     for field in ("issued_by", "returned_by"):
         if data.get(field):
             data[field + "_name"] = user_name(session, data[field], saved=data.get(field + "_name", ""))
+    if data.get("operator_return"):
+        confirmation = data["operator_return"]
+        data["operator_return"] = {**confirmation, "actor_name": user_name(
+            session, confirmation["actor_id"], saved=confirmation.get("actor_name", ""))}
     return data
 
 
@@ -163,7 +167,7 @@ def handover_summary_signature(data):
     return hashlib.sha256(json.dumps({"snapshot":data.get("snapshot", []), "exceptions":data.get("exceptions", [])}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def customer_attest(booking_id, customer_id, action, acknowledged=False, expected_summary_signature=None):
+def customer_attest(booking_id, customer_id, action, acknowledged=False, expected_summary_signature=None, expected_issued_at=None):
     with Session.begin() as session:
         booking = session.get(Booking, booking_id, with_for_update=True)
         if not booking or booking.customer_id != customer_id or booking.deleted_at:
@@ -175,20 +179,13 @@ def customer_attest(booking_id, customer_id, action, acknowledged=False, expecte
         if data.get("recipient_id") != customer_id:
             raise Conflict("Вернуть оборудование может только получатель")
         if action == "received":
-            if expected_summary_signature is not None and handover_summary_signature(data) != expected_summary_signature:
-                raise Conflict("Состав выдачи изменился. Ознакомьтесь с перечнем заново")
-            if booking.status != "issued" or not data.get("snapshot"):
-                raise Conflict("Получение доступно после выдачи оборудования")
-            if data.get("exceptions") and not acknowledged:
-                raise Conflict("Подтвердите ознакомление с перечнем частичной выдачи")
-            if data.get("received_at") and data.get("exceptions_acknowledged") == acknowledged:
-                return
-            data.setdefault("received_at", now().isoformat())
-            data["exceptions_acknowledged"] = acknowledged
+            raise Conflict("Выдачу подтверждает сотрудник. Отдельное подтверждение получения больше не требуется.")
         elif action == "returning":
+            if expected_issued_at is not None and data.get("issued_at") != expected_issued_at:
+                raise Conflict("Выдача изменилась. Откройте заявку и подтвердите сдачу заново.")
             if data.get("returning_at") and booking.status == "return_inspection":
                 return
-            if booking.status != "issued" and not (booking.status == "return_inspection" and data.get("legacy_issue")):
+            if booking.status != "issued" and not (booking.status == "return_inspection" and (data.get("legacy_issue") or data.get("operator_return"))):
                 raise Conflict("Возврат доступен только после выдачи")
             data["returning_at"] = now().isoformat()
             if booking.status == "issued":
@@ -272,14 +269,13 @@ def validate_return_start(session, booking):
     row = session.get(BookingHandover, booking.id)
     if row is None:
         raise Conflict("Для старой заявки сначала подготовьте расписку через перенос выдачи")
-    if not row.data.get("returning_at") or row.data.get("recipient_id") != booking.customer_id:
+    if not (row.data.get("returning_at") or row.data.get("operator_return")) or row.data.get("recipient_id") != booking.customer_id:
         raise Conflict("Получатель должен отметить «Сдаю оборудование»")
 
 
 def validate_return_finish(session, booking, actor_id=None, actor_name=""):
     row = session.get(BookingHandover, booking.id)
-    if row is None or not row.data.get("returning_at"):
-        raise Conflict("Получатель должен отметить «Сдаю оборудование»")
+    validate_return_start(session, booking)
     row.data = {**row.data, "returned_at": now().isoformat(), "returned_by": actor_id,
                 "returned_by_name": user_name(session, actor_id, saved=actor_name)}
 

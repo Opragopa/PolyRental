@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from .chat_workflows import PAGE_SIZE, button, private
+from .chat_labels import booking_status
 from .rental import Conflict, get_booking, list_articles, list_hidden_test_bookings
 from .roles import staff_allows
 
@@ -24,7 +25,7 @@ async def hidden_list(message,actor,page):
     if not await asyncio.to_thread(staff_allows,actor,'admin'):raise PermissionError('Нужна роль администратора')
     bookings=await asyncio.to_thread(list_hidden_test_bookings)
     page=max(0,min(page,max(0,(len(bookings)-1)//PAGE_SIZE)))
-    rows=[[button(f"{booking.human_number or booking.id} · {booking.status}",f'am:restore:{booking.id}')] for booking in bookings[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows=[[button(f"{booking.human_number or booking.id} · {booking_status(booking.status)}",f'am:restore:{booking.id}')] for booking in bookings[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
     if page:nav.append(button('← Назад',f'am:hidden:{page-1}'))
     if (page+1)*PAGE_SIZE<len(bookings):nav.append(button('Далее →',f'am:hidden:{page+1}'))

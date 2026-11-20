@@ -32,6 +32,9 @@ def clean_database(monkeypatch):
             else:
                 row.role = role
     with Session.begin() as session:
+        from app.db import HandoverSettings, BookingSettings
+        session.execute(delete(BookingSettings))
+        session.execute(delete(HandoverSettings))
         for model in (CustomerChangeRequest, OperatorNotificationPreference, PurgeLog, SupportActivity, SupportMessage, SupportThread, SlaEscalation, BookingCart, ClientActivity, ClientProfile, ArticleTitleAudit, NotificationDelivery, BookingDeletionAudit, PIIAudit, PrivacyConsent, IdentityDocument, CustomerIdentity,
                       RepairTicket, Inspection, BookingAsset, BookingLine, Audit,
                       Occupancy, BookingItem, Booking, ArticleDependency, Equipment, Article):

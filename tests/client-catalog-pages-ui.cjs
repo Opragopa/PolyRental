@@ -24,7 +24,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('#client-catalog-search').fill('Камера 45');await page.clock.runFor(350);await page.getByRole('button',{name:'Увеличить количество: Камера 45'}).click();
  assert.equal(await page.locator('#selected-count').innerText(),'3');assert.deepEqual(lastSelected.sort((a,b)=>a-b),[1,21]);
  await page.locator('#main-button').click();await page.locator('#cart-items').getByText('Камера 01',{exact:true}).waitFor();await page.locator('#cart-items').getByText('Камера 21',{exact:true}).waitFor();await page.locator('#cart-items').getByText('Камера 45',{exact:true}).waitFor();
- await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');unavailable=true;
+ unavailable=true;
  await page.locator('#main-button').click();await page.locator('#main-button').click();await page.getByText(/нужно 1 шт., доступно 0 шт./).waitFor();
  assert.deepEqual(lastSelected.sort((a,b)=>a-b),[1,21,45]);assert.equal(await page.locator('#step-dates').isVisible(),true);
  assert.deepEqual(errors,[]);console.log('Client catalog pages and selected-item revalidation: passed');await page.close();

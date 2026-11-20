@@ -14,6 +14,23 @@ class Base(DeclarativeBase):
     pass
 
 
+class BookingSettings(Base):
+    __tablename__ = "booking_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="booking_settings_singleton"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    rental_purpose_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+
+
+class HandoverSettings(Base):
+    __tablename__ = "handover_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="handover_settings_singleton"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    pickup_location: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    pickup_instructions: Mapped[str] = mapped_column(Text, default="", server_default="")
+    updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
 class StaffRole(Base):
     """Persist the staff subrole independently of configured PII access."""
     __tablename__ = "staff_roles"
@@ -214,6 +231,7 @@ class Booking(Base):
     sla_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     customer_name: Mapped[str] = mapped_column(String(200))
     customer_contact: Mapped[str] = mapped_column(String(200))
+    rental_purpose: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(30), default="pending")
@@ -712,6 +730,7 @@ def init_db():
             columns = _columns(connection, "bookings")
             additions = {
                 "client_request_id": "VARCHAR(36)",
+                "rental_purpose": "TEXT NOT NULL DEFAULT ''",
                 "identity_status": "VARCHAR(30) NOT NULL DEFAULT 'not_required'",
                 "act_signed_at": "TIMESTAMPTZ", "act_signed_by": "BIGINT",
                 "returned_at": "TIMESTAMPTZ", "inspection_cycle_started_at": "TIMESTAMPTZ", "receipt_number": "VARCHAR(20)",

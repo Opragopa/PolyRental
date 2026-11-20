@@ -22,6 +22,8 @@
   function update() {
     frame = 0;
     const writes = [];
+    const layoutWidth = `${root.getBoundingClientRect().width}px`;
+    if (root.style.getPropertyValue("--layout-width") !== layoutWidth) writes.push(() => root.style.setProperty("--layout-width", layoutWidth));
     for (const button of buttons) {
       if (!button.isConnected) {
         observer.unobserve(button);

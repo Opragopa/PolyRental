@@ -25,7 +25,7 @@ async function fixture(browser, orders = [order(7), order(8)]) {
     if (url.pathname === '/api/miniapp/cart') return route.fulfill({json:{version:0, start:'', end:'', lines:[]}});
     if (url.pathname === '/api/miniapp/profile/history') return route.fulfill({json:{items:orders, total:orders.length}});
     const identity = /^\/api\/miniapp\/bookings\/(\d+)\/identity$/.exec(url.pathname);
-    if (identity) { const id = Number(identity[1]); identityRequests.push(id); return route.fulfill({json:await responses.identity(id, route.request().method())}); }
+    if (identity) { const id = Number(identity[1]); identityRequests.push(id); return route.fulfill({json:await responses.identity(id, route.request().method(), route.request())}); }
     if (/\/identity\/reusable-profile$/.test(url.pathname)) return route.fulfill({json:await responses.reusable()});
     if (url.pathname === '/api/miniapp/privacy-consent') return route.fulfill({json:await responses.consent()});
     if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[], total:0}});
@@ -119,9 +119,9 @@ async function fixture(browser, orders = [order(7), order(8)]) {
     {
       const {page, errors, responses, open} = await fixture(browser);
       const started = deferred(), late = deferred();
-      const fields = {full_name:'Тестовый Клиент', birth_date:'2000-01-01', passport_series:'1234', passport_number:'123456', passport_issued_at:'2020-01-01', passport_division_code:'123-456', passport_issuer:'Тестовый отдел', registration_address:'Тестовая улица', residential_address:'Тестовая улица'};
-      responses.identity = async (id, method) => {
-        if (method === 'POST') { assert.equal(id, 7); started.resolve(); return late.promise; }
+      const fields = {phone:'+79990000000', full_name:'Тестовый Клиент', birth_date:'2000-01-01', passport_series:'1234', passport_number:'123456', passport_issued_at:'2020-01-01', passport_division_code:'123-456', passport_issuer:'Тестовый отдел', registration_address:'Тестовая улица', residential_address:'Тестовая улица'};
+      responses.identity = async (id, method, request) => {
+        if (method === 'POST') { assert.equal(id, 7); assert.match(request.postData(), /"phone":"\+79990000000"/); started.resolve(); return late.promise; }
         return {status:'needs_changes', fields, documents:[], review_fields:['full_name']};
       };
       await open(7, false); await page.locator('#identity-form').waitFor({state:'visible'});

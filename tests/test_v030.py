@@ -189,7 +189,7 @@ def test_encrypted_verdict_and_pii_boundary(monkeypatch):
     with TestClient(app) as client:
         booking_id = create_confirmed(client, customer)
         consent = client.get("/api/miniapp/privacy-consent", headers=customer).json()
-        fields = dict(full_name="Анна Иванова", birth_date="2000-01-01", passport_series="4510", passport_number="123456",
+        fields = dict(phone="+79990000000", full_name="Анна Иванова", birth_date="2000-01-01", passport_series="4510", passport_number="123456",
                       passport_issued_at="2020-01-01", passport_issuer="ОВД", passport_division_code="770-001",
                       registration_address="Москва", residential_address="Москва", student_id_number="12345678",
                       student_institution="Санкт-Петербургский государственный университет")

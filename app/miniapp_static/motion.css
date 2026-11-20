@@ -1,9 +1,9 @@
 /* Motion roles: press 120ms, feedback 160ms, surfaces 220ms, exit 160ms.
    Keep fixed navigation still and animate only the content that changes. */
-:root { --motion-fast: 120ms; --motion-normal: 220ms; --motion-exit: 160ms; }
+:root { --motion-fast: 100ms; --motion-normal: 220ms; --motion-exit: 160ms; }
 @media (prefers-reduced-motion: no-preference) {
-  .step-panel:not([hidden]), #orders-panel:not([hidden]), #admin-panel:not([hidden]),
-  #identity-panel:not([hidden]), #step-done:not([hidden]), .login-card {
+  #orders-panel:not([hidden]), #admin-panel:not([hidden]),
+  #identity-panel:not([hidden]), .login-card {
     animation: ui-surface-enter var(--motion-normal) var(--motion-ease) backwards;
   }
   .theme-switch span { transition: background-color 160ms, color 160ms; }
@@ -13,6 +13,11 @@
   .profile-identity-actions .button { transition: opacity 160ms, background-color 160ms, transform 120ms var(--motion-ease); }
   .document-viewer:not([hidden]) .document-viewer-card,
   .stage-toast { animation: ui-surface-enter 180ms var(--motion-ease) backwards; }
+  .dialog-backdrop:not([hidden]) .dialog-card { animation:dialog-depth-enter 220ms var(--motion-ease) backwards; }
+  @keyframes dialog-depth-enter {
+    from { opacity:0; transform:perspective(900px) translateY(12px) rotateX(4deg) scale(.99); }
+    to { opacity:1; transform:perspective(900px) translateY(0) rotateX(0) scale(1); }
+  }
   .delete-snackbar:not([hidden]) { animation: snackbar-enter 180ms var(--motion-ease) backwards; }
   @keyframes snackbar-enter { from { opacity: 0; transform: translate(-50%, .5rem); } to { opacity: 1; transform: translateX(-50%); } }
   .equipment-card-drawer { transition: grid-template-rows 220ms var(--motion-ease), opacity 160ms; }
@@ -40,10 +45,10 @@
     }
     .dialog-backdrop:not([hidden]) .dialog-card { animation: none; }
     .dialog-backdrop[hidden] { opacity: 0; pointer-events: none; }
-    .dialog-backdrop[hidden] .dialog-card { opacity: 0; transform: translateY(.5rem) scale(.99); }
+    .dialog-backdrop[hidden] .dialog-card { opacity: 0; transform: perspective(900px) translateY(12px) rotateX(4deg) scale(.99); }
     @starting-style {
       .dialog-backdrop:not([hidden]) { opacity: 0; }
-      .dialog-backdrop:not([hidden]) .dialog-card { opacity: 0; transform: translateY(.5rem) scale(.99); }
+      .dialog-backdrop:not([hidden]) .dialog-card { opacity: 0; transform: perspective(900px) translateY(12px) rotateX(4deg) scale(.99); }
     }
   }
 }

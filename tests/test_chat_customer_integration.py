@@ -18,26 +18,16 @@ class MemoryState:
     async def clear(self): self.data={};self.state=None
 
 
-def test_partial_receipt_requires_fresh_read_and_records_ack(monkeypatch):
+def test_old_receipt_button_is_retired_without_modifying_handover(monkeypatch):
     monkeypatch.setattr(cw,'private',lambda _:True)
     booking_id=ready_booking(monkeypatch,partial=True)
-    transition(booking_id,'ready',100)
-    transition(booking_id,'issued',100)
-    state=MemoryState(); message=SimpleNamespace(answer=AsyncMock())
+    transition(booking_id,'ready',100);transition(booking_id,'issued',100)
+    state=MemoryState();message=SimpleNamespace(answer=AsyncMock(),edit_text=AsyncMock())
     query=SimpleNamespace(data=f'cw:askattest:{booking_id}:received',from_user=SimpleNamespace(id=42),answer=AsyncMock(),message=message)
-    asyncio.run(cw.customer_action(query,state))
-    nonce=state.data['receipt_nonce']
-    assert state.data['receipt_partial'] is True
-    with Session.begin() as session:
-        row=session.get(BookingHandover,booking_id)
-        data=dict(row.data);data['exceptions']=[dict(data['exceptions'][0],note='Обновлено')];row.data=data
-    query.data=f'cw:receiptconfirm:{booking_id}:{nonce}'
     asyncio.run(cw.customer_action(query,state))
     assert query.answer.call_args.kwargs['show_alert']
     assert not handover_state(booking_id).get('received_at')
-    query.data=f'cw:askattest:{booking_id}:received';asyncio.run(cw.customer_action(query,state))
-    query.data=f"cw:receiptconfirm:{booking_id}:{state.data['receipt_nonce']}";asyncio.run(cw.customer_action(query,state))
-    assert handover_state(booking_id)['exceptions_acknowledged'] is True
+    assert not state.data
 
 
 def test_chat_dispute_applies_once(monkeypatch):
@@ -50,7 +40,7 @@ def test_chat_dispute_applies_once(monkeypatch):
     booking_id=pending_booking();booking=get_booking(booking_id)
     proposal={'start':(booking.starts_at+timedelta(days=1)).isoformat(),'end':(booking.ends_at+timedelta(days=1)).isoformat(),'lines':[{'article_id':line.article_id,'quantity':line.quantity} for line in booking.lines]}
     change_id=propose_change(booking_id,100,'manager_edit','Проверьте сроки',proposal)
-    state=MemoryState();message=SimpleNamespace(answer=AsyncMock());user=SimpleNamespace(id=42)
+    state=MemoryState();message=SimpleNamespace(answer=AsyncMock(),edit_text=AsyncMock());user=SimpleNamespace(id=42)
     query=SimpleNamespace(data=f'cw:dispute:{booking_id}:{change_id}',from_user=user,answer=AsyncMock(),message=message)
     asyncio.run(cw.customer_action(query,state))
     asyncio.run(cw.customer_dispute_comment(SimpleNamespace(text='Даты не подходят',from_user=user,answer=AsyncMock()),state))
@@ -69,7 +59,7 @@ def test_customer_fix_checks_snapshot_and_preserves_newer_changes(monkeypatch):
     from tests.test_operation_lease import pending_booking
     monkeypatch.setattr(cw,'private',lambda _:True);configure(monkeypatch)
     booking_id=pending_booking();change_id=propose_change(booking_id,100,'client_fix','Уточните состав')
-    state=MemoryState();user=SimpleNamespace(id=42);message=SimpleNamespace(answer=AsyncMock())
+    state=MemoryState();user=SimpleNamespace(id=42);message=SimpleNamespace(answer=AsyncMock(),edit_text=AsyncMock())
     query=SimpleNamespace(data=f'cw:fix:{booking_id}:{change_id}',from_user=user,answer=AsyncMock(),message=message)
     async def prepare():
         await cw.customer_action(query,state)

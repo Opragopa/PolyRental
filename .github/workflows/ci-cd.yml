@@ -73,6 +73,26 @@ jobs:
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/booking-submit-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/rental-purpose-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/frame-style-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/interaction-principles-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/release-0511-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/release-052-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
@@ -142,6 +162,14 @@ jobs:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
       - run: node tests/disclosure-motion-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/settings-return-ui.cjs
+        env:
+          NODE_PATH: ./tools/browser-qa/node_modules
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+      - run: node tests/notification-panel-ui.cjs
         env:
           NODE_PATH: ./tools/browser-qa/node_modules
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}

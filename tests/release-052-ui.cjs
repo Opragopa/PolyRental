@@ -51,7 +51,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    assert.equal(await page.locator('#cart-items img').evaluate(img=>img.complete && img.naturalWidth>0),true);
    await page.locator('#cart-items .plus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'2');
    await page.locator('#cart-items .minus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'1');
-   await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');await page.locator('#main-button').click();
+   await page.locator('#main-button').click();
    await page.clock.runFor(300);
    await page.locator('#range-calendar [data-availability]').first().waitFor();
    assert.equal(await page.locator('#start-date').inputValue(),'','daily colors are available before choosing dates');

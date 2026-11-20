@@ -1,6 +1,6 @@
 """Encrypted identity profiles and document images.
 
-No plaintext identity value is logged or persisted outside the encrypted payload.
+Document details remain encrypted. The submitted name and phone also update the booking contact.
 """
 
 import base64
@@ -35,7 +35,7 @@ class IdentityFieldError(ValueError):
         self.field = field
 
 
-def validate_identity_payload(payload, legacy_institution=None):
+def validate_identity_payload(payload, legacy_institution=None, *, require_phone=False):
     """Validate user-entered identity fields without logging their values."""
     required = {
         "full_name", "birth_date", "passport_series", "passport_number",
@@ -48,9 +48,17 @@ def validate_identity_payload(payload, legacy_institution=None):
     if missing:
         field = sorted(missing)[0]
         raise IdentityFieldError(field, "Заполните это поле")
-    if set(payload) - required - {"student_id_number", "student_institution"}:
+    if set(payload) - required - {"student_id_number", "student_institution", "phone"}:
         raise IdentityFieldError("full_name", "Форма устарела. Перезапустите приложение и повторите отправку")
     payload = {"student_id_number": "", "student_institution": "", **payload}
+    if require_phone and (not isinstance(payload.get('phone'), str) or not payload['phone'].strip()):
+        raise IdentityFieldError('phone', 'Укажите телефон для связи')
+    if 'phone' in payload:
+        from .contact_input import normalize_contact
+        phone = normalize_contact(payload['phone']) if isinstance(payload['phone'], str) else ''
+        if not re.fullmatch(r'\+?[0-9](?:[0-9 ()-]*[0-9])?', phone) or not 10 <= len(re.sub(r'\D', '', phone)) <= 15:
+            raise IdentityFieldError('phone', 'Укажите телефон: от 10 до 15 цифр')
+        payload['phone'] = ('+' if phone.startswith('+') else '') + re.sub(r'\D', '', phone)
     for field, value in payload.items():
         if not isinstance(value, str) or (field in required and not value.strip()):
             raise IdentityFieldError(field, "Заполните это поле")
@@ -383,7 +391,7 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         existing_kinds = {document.kind for document in existing.documents} if existing and existing.status == "needs_changes" else set()
     merged_payload = {**existing_payload, **payload}
     payload = validate_identity_payload(merged_payload,
-                                        legacy_institution=existing_payload.get("student_institution"))
+                                        legacy_institution=existing_payload.get("student_institution"), require_phone=True)
     if existing_payload:
         if not documents and not existing_kinds:
             raise ValueError("Загрузите исправленное изображение документа")
@@ -459,6 +467,8 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
         elif policy_version and text_hash:
             consent.policy_version, consent.text_hash, consent.consented_at = policy_version, text_hash, now()
         booking.identity_status = "submitted"
+        booking.customer_name = payload['full_name']
+        booking.customer_contact = payload['phone']
         session.add(PIIAudit(booking_id=booking.id, actor_id=customer_id, action="submitted"))
 
 
@@ -536,7 +546,7 @@ def review_identity(booking_id, actor_id, approved, comment="", fields=None):
         }:
             raise ValueError("Проверка анкеты недоступна в текущем состоянии")
         identity.status = "verified" if approved else "needs_changes"
-        allowed = {"full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
+        allowed = {"full_name", "phone", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
                    "passport_division_code", "registration_address", "residential_address", "student_id_number",
                    "student_institution", "passport_main", "passport_registration", "student_front"}
         identity.review_comment = _encrypted_review_comment(booking_id, comment.strip()[:500])

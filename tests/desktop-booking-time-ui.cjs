@@ -21,7 +21,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
    await page.clock.install({time:new Date('2026-10-29T10:00:00Z')});
    await page.goto('http://polyrental.test/miniapp?preview=1');
    await page.locator('.item-card .plus').first().click();await page.locator('#main-button').click();
-   await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');await page.locator('#main-button').click();
+   await page.locator('#main-button').click();
    await page.locator('[data-date="2026-10-30"]').click();await page.locator('[data-date="2026-11-02"]').click();
    const start=page.locator('#start-time'),end=page.locator('#end-time');
    assert.equal(await start.getAttribute('type'),'text');assert.equal(await start.inputValue(),'');assert.equal(await end.inputValue(),'');

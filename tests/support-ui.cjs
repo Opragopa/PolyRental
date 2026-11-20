@@ -23,7 +23,21 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     });
     await page.goto('http://polyrental.test/miniapp');
     await page.locator('#tab-orders').click();
-    await page.locator('#profile-header > summary').click();
+    assert.equal(await page.locator('#profile-header').evaluate(el=>el.open),false);
+    const support=page.locator('#profile-support');
+    assert.equal(await support.isVisible(),true,'support is available without expanding settings');
+    for (const width of [320,390,1440]) {
+      await page.setViewportSize({width,height:844});
+      assert.ok(await support.evaluate(el=>el.getBoundingClientRect().height>=48));
+      if(width<=390) { await page.waitForFunction(()=>parseFloat(document.documentElement.style.getPropertyValue('--layout-width'))===document.documentElement.getBoundingClientRect().width); const expected=await page.evaluate(()=>document.documentElement.getBoundingClientRect().width); const box=await support.boundingBox(); assert.ok(Math.abs(box.x)<1,JSON.stringify({width,box})); assert.ok(Math.abs(box.width-expected)<1,JSON.stringify({width,box})); }
+
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    }
+    await page.setViewportSize({width:390,height:844});
+    if (process.env.QA_SCREENSHOTS) {
+      fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});
+      await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,'profile-support.png'),fullPage:true});
+    }
     await page.getByRole('button',{name:'Поддержка',exact:true}).click();
     const dialog=page.locator('#support-dialog'); await dialog.waitFor({state:'visible'});
     const faqSummary=dialog.locator('summary').first();

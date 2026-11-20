@@ -13,14 +13,23 @@ const motion = source.slice(source.indexOf('  // Animate the element'), source.i
       await page.addScriptTag({content: motion});
       const after = page.locator('#after');
       const before = (await after.boundingBox()).y;
+      // Native summary marker metrics differ between engines (WebKit's closed
+      // line is taller). Compare with the real expanded layout, not 180px.
+      const expanded = await page.evaluate(() => {
+        const details = document.querySelector('details');
+        details.open = true;
+        const y = document.querySelector('#after').getBoundingClientRect().y;
+        details.open = false;
+        return y;
+      });
       await page.locator('summary').click();
       if (reducedMotion === 'no-preference') {
         await page.waitForTimeout(90);
         const during = (await after.boundingBox()).y;
-        assert(during > before && during < before + 180, `content should move gradually: ${during-before}`);
+        assert(during > before && during < expanded, `content should move gradually: ${during-before}`);
       }
       await page.waitForTimeout(350);
-      assert((await after.boundingBox()).y >= before + 179);
+      assert(Math.abs((await after.boundingBox()).y - expanded) < 1);
       await page.locator('summary').click();
       await page.waitForTimeout(350);
       assert(Math.abs((await after.boundingBox()).y - before) < 1);

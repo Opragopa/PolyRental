@@ -70,7 +70,7 @@ def test_full_cycle_docx_is_atomic_immutable_and_survives_identity_removal(monke
     with pytest.raises(Conflict): customer_attest(booking_id,42,"received")
     with pytest.raises(ValueError): customer_attest(booking_id,43,"received")
     transition(booking_id,"issued",200, actor_name="Оператор Выдачи")
-    customer_attest(booking_id,42,"received")
+    with pytest.raises(Conflict): customer_attest(booking_id,42,"received")
     assert handover_state(booking_id)["issued_by_name"] == "Оператор Выдачи"
     save_feature(asset_id,"Изменённая карточка",100,feature_id)
     assert customer_receipt_pdf(booking_id,42)[0]==original
@@ -106,7 +106,7 @@ def test_partial_issue_has_appendix_acknowledgement_and_actual_return_count(monk
     paper(booking_id)
     transition(booking_id,"issued",100)
     with pytest.raises(Conflict): customer_attest(booking_id,42,"received",False)
-    customer_attest(booking_id,42,"received",True)
+    with pytest.raises(Conflict): customer_attest(booking_id,42,"received",True)
     returning(booking_id)
     transition(booking_id,"return_inspection",100)
     record_inspection(booking_id,booking.assets[0].equipment_id,"check_in","pass",{},"",100)
@@ -191,6 +191,171 @@ def test_customer_accepts_one_available_camera_added_by_manager(monkeypatch):
     update_request(booking_id, 42, None, None, None, change_id, True)
     assert any(row.article_id == camera and row.quantity == 1 for row in get_booking(booking_id).lines)
     assert change_view(booking_id, 42)["status"] == "accepted"
+
+
+def test_customer_accepts_manager_edit_after_start_and_staff_can_issue(monkeypatch):
+    from app import booking_changes, rental
+    from app.miniapp_server import app
+    from tests.test_operation_lease import pending_booking
+
+    configure(monkeypatch)
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    camera = article_with_assets("LATE-ACCEPT-CAMERA", 1)
+    lines = [{"article_id": camera, "quantity": 1}]
+    monkeypatch.setattr(booking_changes, "now", lambda: booking.starts_at - timedelta(hours=1))
+    change_id = propose_change(booking_id, 100, "manager_edit", "Заменить камеру", {
+        "start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat(), "lines": lines,
+    })
+    after_start = booking.starts_at + timedelta(minutes=30)
+    monkeypatch.setattr(booking_changes, "now", lambda: after_start)
+    monkeypatch.setattr(rental, "now", lambda: after_start)
+
+    response = TestClient(app).post(
+        f"/api/miniapp/bookings/{booking_id}/changes/respond",
+        headers={"X-Telegram-Init-Data": signed_init_data(42)},
+        json={"change_id": change_id, "accept": True},
+    )
+    assert response.status_code == 200, response.text
+    assert change_view(booking_id, 42)["status"] == "accepted"
+    updated = get_booking(booking_id)
+    assert (updated.starts_at, updated.ends_at) == (booking.starts_at, booking.ends_at)
+    assert [row.article_id for row in updated.lines] == [camera]
+    with pytest.raises(ValueError, match="Начало аренды уже прошло"):
+        create_booking(42, "Клиент", "@synthetic", booking.starts_at, booking.ends_at, lines)
+
+    assert transition(booking_id, "confirmed", 100) == "confirmed"
+    verified_identity(booking_id)
+    assign_booking_assets(booking_id, 100)
+    for asset in get_booking(booking_id).assets:
+        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 100)
+    assert transition(booking_id, "ready", 100) == "ready"
+    paper(booking_id)
+    assert transition(booking_id, "issued", 100) == "issued"
+    with pytest.raises(Conflict):
+        update_request(booking_id, 42, None, None, None, change_id)
+
+
+def test_operator_force_edit_supersedes_pending_proposal_and_is_audited(monkeypatch):
+    from app import rental
+    from app.db import BookingEvent, StaffRole
+    from app.miniapp_server import app
+    from tests.test_operation_lease import pending_booking
+
+    configure(monkeypatch)
+    with Session.begin() as session:
+        session.get(StaffRole, 200).role = "operator"
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    article = article_with_assets("FORCE-EDIT", 2)
+    proposal = {"start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat(),
+                "lines": [{"article_id": article, "quantity": 1}]}
+    change_id = propose_change(booking_id, 100, "manager_edit", "Первая правка", proposal)
+    monkeypatch.setattr(rental, "now", lambda: booking.starts_at + timedelta(minutes=30))
+    client = TestClient(app)
+    url = f"/api/miniapp/admin/bookings/{booking_id}/force-edit"
+    staff = {"X-Telegram-Init-Data": signed_init_data(200)}
+    customer = {"X-Telegram-Init-Data": signed_init_data(42)}
+    draft = client.get(url, headers=staff).json()
+    assert draft["draft"]["lines"][0]["article_id"] == article
+    payload = {**proposal, "lines": [{"article_id": article, "quantity": 2}],
+               "revision": draft["revision"], "comment": "Обе камеры нужны"}
+    assert client.put(url, headers=customer, json=payload).status_code == 403
+    stock = client.get(url + "/availability", headers=staff, params={"start": proposal["start"], "end": proposal["end"]})
+    assert stock.status_code == 200, stock.text
+    assert next(row for row in stock.json()["items"] if row["id"] == article)["available_quantity"] == 2
+    unavailable = {**payload, "lines": [{"article_id": article, "quantity": 3}]}
+    assert client.put(url, headers=staff, json=unavailable).status_code == 409
+    assert change_view(booking_id, 42)["status"] == "pending"
+
+    saved = client.put(url, headers=staff, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "pending"
+    response_url = f"/api/miniapp/bookings/{booking_id}/changes/respond"
+    assert client.post(response_url, headers=customer, json={"change_id": change_id, "accept": True}).status_code == 409
+    assert client.put(url, headers=staff, json=payload).status_code == 409
+    with Session() as session:
+        assert session.get(BookingChange, change_id).status == "superseded"
+        event = session.scalar(select(BookingEvent).where(BookingEvent.booking_id == booking_id)
+                               .order_by(BookingEvent.version.desc()).limit(1))
+        assert event.actor_id == 200 and event.actions == ["request_force_edited"]
+        notification = session.scalar(select(NotificationDelivery).where(
+            NotificationDelivery.event_id == event.id, NotificationDelivery.recipient_id == 42,
+            NotificationDelivery.delivery_kind == "push"))
+        assert "Подтверждение от клиента не требуется" in notification.message
+        assert payload["comment"] not in notification.message
+    change = change_view(booking_id, 42)
+    assert change["change_type"] == "staff_edit" and change["comment"] == payload["comment"]
+    assert [(row.article_id, row.quantity) for row in get_booking(booking_id).lines] == [(article, 2)]
+    assert change["deadline"] is None
+    assert transition(booking_id, "confirmed", 200) == "confirmed"
+
+
+def test_operator_adds_position_after_start_on_ready_booking_and_reissues_draft(monkeypatch):
+    from app import rental
+    from app.miniapp_server import app
+
+    booking_id = ready_booking(monkeypatch)
+    transition(booking_id, "ready", 100)
+    booking = get_booking(booking_id)
+    assert handover_state(booking_id)["snapshot"]
+    extra = article_with_assets("ADD-AFTER-START", 1)
+    monkeypatch.setattr(rental, "now", lambda: booking.starts_at + timedelta(minutes=30))
+    client = TestClient(app)
+    staff = {"X-Telegram-Init-Data": signed_init_data(100)}
+    url = f"/api/miniapp/admin/bookings/{booking_id}/force-edit"
+    draft = client.get(url, headers=staff).json()
+    dates = {key: draft["draft"][key] for key in ("start", "end")}
+    listing = client.get(url + "/availability", headers=staff, params=dates)
+    assert listing.status_code == 200, listing.text
+    assert next(row for row in listing.json()["items"] if row["id"] == extra)["available_quantity"] == 1
+    lines = [{"article_id": line.article_id, "quantity": line.quantity} for line in booking.lines]
+    payload = {**dates, "lines": lines + [{"article_id": extra, "quantity": 1}],
+               "revision": draft["revision"], "comment": "Добавлена камера"}
+    response = client.put(url, json=payload, headers=staff)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending"
+    edited = get_booking(booking_id)
+    assert not edited.assets and not edited.inspections
+    assert not handover_state(booking_id).get("snapshot")
+    assert extra in {line.article_id for line in edited.lines}
+    assert edited.identity_status == "verified"
+    with pytest.raises(Conflict):
+        assign_booking_assets(booking_id, 100)
+    assert transition(booking_id, "confirmed", 100) == "confirmed"
+    assign_booking_assets(booking_id, 100)
+    for asset in get_booking(booking_id).assets:
+        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass", {}, "", 100)
+    transition(booking_id, "ready", 100)
+    new_asset = next(asset.equipment_id for asset in get_booking(booking_id).assets if asset.equipment.article_id == extra)
+    assert new_asset in {row["id"] for row in handover_state(booking_id)["snapshot"]}
+    prior_to_issue = client.get(url, headers=staff).json()["revision"]
+    assert transition(booking_id, "issued", 100) == "issued"
+    assert client.put(url, headers=staff, json={**payload, "revision": prior_to_issue}).status_code == 409
+
+
+def test_customer_can_list_and_add_position_to_pending_booking_after_start(monkeypatch):
+    from app import rental
+    from app.miniapp_server import app
+    from tests.test_operation_lease import pending_booking
+
+    configure(monkeypatch)
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    camera = article_with_assets("CUSTOMER-LATE-ADD", 1)
+    monkeypatch.setattr(rental, "now", lambda: booking.starts_at + timedelta(minutes=30))
+    url = f"/api/miniapp/bookings/{booking_id}"
+    dates = {"start": booking.starts_at.isoformat(), "end": booking.ends_at.isoformat()}
+    headers = {"X-Telegram-Init-Data": signed_init_data(42)}
+    client = TestClient(app)
+    response = client.get(url + "/edit-availability", headers=headers, params=dates)
+    assert response.status_code == 200, response.text
+    assert camera in {item["id"] for item in response.json()["items"] if item["available"]}
+    lines = [{"article_id": line.article_id, "quantity": line.quantity} for line in booking.lines]
+    lines.append({"article_id": camera, "quantity": 1})
+    response = client.put(url, headers=headers, json={**dates, "lines": lines})
+    assert response.status_code == 200, response.text
+    assert camera in {item["id"] for item in response.json()["items"]}
 
 
 def test_inventory_permissions_owner_visibility_and_findings(monkeypatch):

@@ -16,7 +16,7 @@ const assets=path.resolve(__dirname,'../app/miniapp_static');
  });
  await page.goto('http://polyrental.test/site');
  await page.getByRole('button',{name:'Выйти'}).waitFor();
- assert.equal(await page.locator('#customer-name').inputValue(),'Ирина');
+ assert.equal(await page.locator('#customer-name,#customer-contact').count(),0);
  const versionBox=await page.locator('#app-version').boundingBox();
  const headerBox=await page.locator('.topbar').boundingBox();
  const logoutBox=await page.getByRole('button',{name:'Выйти'}).boundingBox();

@@ -2,6 +2,7 @@
 (() => {
   "use strict";
   const isolated = new Map();
+  const selector = '[role="dialog"][aria-modal="true"]';
   let active = null;
   let scrollLock = null;
   let opener = null;
@@ -20,29 +21,34 @@
     if (!controls.length) dialog.focus({preventScroll: true});
   }
   function refresh() {
-    for (const [node, inert] of isolated) node.inert = inert;
-    isolated.clear();
-    const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
-      .filter(node => !node.hidden && node.getClientRects().length)
+    const dialogs = [...document.querySelectorAll(selector)]
+      .filter(node => !node.closest('[hidden], [data-modal-closing]') &&
+        !node.closest('details:not([open])') && node.getClientRects().length &&
+        getComputedStyle(node).visibility === 'visible')
       .sort((a, b) => (parseInt(getComputedStyle(a).zIndex) || 0) - (parseInt(getComputedStyle(b).zIndex) || 0));
-    for (const dialog of dialogs) dialog.inert = dialog.hasAttribute('data-modal-closing');
     active = dialogs.at(-1) || null;
+    const outside = new Set();
+    for (let branch = active; branch?.parentElement && branch !== document.body; branch = branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (sibling !== branch && !/^(SCRIPT|STYLE|LINK)$/.test(sibling.tagName)) outside.add(sibling);
+      }
+    }
+    for (const [node, inert] of isolated) {
+      if (outside.has(node)) continue;
+      node.inert = inert;
+      isolated.delete(node);
+    }
+    for (const node of outside) {
+      if (isolated.has(node)) continue;
+      isolated.set(node, node.inert);
+      node.inert = true;
+    }
     if (active) {
       if (!scrollLock) {
         const body = document.body, root = document.documentElement;
         scrollLock = {x: scrollX, y: scrollY, body: body.getAttribute('style'), overflow: root.style.overflow};
         root.style.overflow = 'hidden';
         Object.assign(body.style, {position: 'fixed', top: `${-scrollLock.y}px`, left: `${-scrollLock.x}px`, width: '100%', overflow: 'hidden'});
-      }
-      let branch = active;
-      while (branch.parentElement) {
-        for (const sibling of branch.parentElement.children) {
-          if (sibling === branch || /^(SCRIPT|STYLE|LINK)$/.test(sibling.tagName)) continue;
-          isolated.set(sibling, sibling.inert);
-          sibling.inert = true;
-        }
-        if (branch.parentElement === document.body) break;
-        branch = branch.parentElement;
       }
       if (!active.contains(document.activeElement)) focus(active);
     } else if (scrollLock) {
@@ -54,7 +60,22 @@
       window.scrollTo({left: saved.x, top: saved.y, behavior: 'instant'});
     }
   }
-  new MutationObserver(refresh).observe(document.body, {subtree: true, childList: true, attributes: true, attributeFilter: ['hidden']});
+  const containsDialog = node => node.nodeType === Node.ELEMENT_NODE &&
+    (node.matches(selector) || node.querySelector(selector));
+  new MutationObserver(records => {
+    if (records.some(({type, target, addedNodes, removedNodes}) => type === 'attributes'
+      ? target.contains(active) || containsDialog(target)
+      : (active && target !== active && target.contains(active)) ||
+        [...addedNodes, ...removedNodes].some(containsDialog))) refresh();
+  }).observe(document.documentElement, {subtree: true, childList: true, attributes: true,
+    attributeFilter: ['hidden', 'open', 'role', 'aria-modal', 'data-modal-closing', 'class', 'style']});
+  for (const event of ['transitionend', 'transitioncancel']) {
+    document.addEventListener(event, ({target}) => {
+      if (containsDialog(target)) refresh();
+    }, true);
+  }
+  window.addEventListener('pageshow', refresh);
+  window.addEventListener('resize', refresh);
   document.addEventListener('focusin', event => {
     if (active && !active.contains(event.target)) focus(active);
   });

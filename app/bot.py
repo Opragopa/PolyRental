@@ -20,11 +20,13 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import init_db
 from .booking_messages import booking_status_text
+from .chat_labels import booking_status, equipment_condition
 from .notification_outbox import notify, notify_actionable
 from .miniapp import BookingRequest
 from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config, staff_allows
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 from .rental import resolve_booking_number, ClientBlocked
+from .booking_settings import get_booking_settings, normalize_rental_purpose
 from .support import submit_question, reply as support_reply, deliver_reply, SupportConflict
 from .catalog_titles import catalog_title
 
@@ -67,6 +69,7 @@ class Rent(StatesGroup):
     equipment = State()
     name = State()
     contact = State()
+    purpose = State()
     review = State()
 
 
@@ -121,7 +124,7 @@ def main_keyboard():
     # Reply-keyboard WebApps may lack signed initData. Launch through the
     # message handler's inline WebApp so every role is authenticated by API.
     book_button = KeyboardButton(text="Забронировать")
-    return ReplyKeyboardMarkup(keyboard=[[book_button], [KeyboardButton(text="Бронирование в чате")], [KeyboardButton(text="Мои заявки"), KeyboardButton(text="Связаться с менеджером")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[book_button, KeyboardButton(text="Мои заявки")], [KeyboardButton(text="Сдать оборудование")], [KeyboardButton(text="Бронирование в чате"), KeyboardButton(text="Связаться с менеджером")]], resize_keyboard=True)
 
 
 def flow_keyboard(contact=False):
@@ -169,6 +172,33 @@ async def show_equipment(message, state):
     await message.answer("Доступно на выбранный срок:", reply_markup=equipment_keyboard(available, selected))
 
 
+async def review_account_booking(message, state, user):
+    from .client_profile import booking_identity
+    name, contact = await asyncio.to_thread(booking_identity, user)
+    await state.update_data(name=name, contact=contact)
+    return await review_or_ask_purpose(message, state)
+
+
+async def review_or_ask_purpose(message, state):
+    settings = await asyncio.to_thread(get_booking_settings)
+    data = await state.get_data()
+    if settings['rental_purpose_enabled'] and not data.get('purpose_answered'):
+        return await ask_rental_purpose(message, state)
+    await state.set_state(Rent.review)
+    return await show_review(message, state)
+
+
+async def ask_rental_purpose(message, state):
+    await state.set_state(Rent.purpose)
+    keyboard = flow_keyboard()
+    keyboard.keyboard.insert(0, [KeyboardButton(text='Пропустить')])
+    data = await state.get_data()
+    text = 'Для чего вам оборудование?\nНеобязательно. Например: Съёмка интервью или мероприятия. До 2000 символов.'
+    if data.get('rental_purpose'):
+        text += '\nТекущий ответ: ' + data['rental_purpose']
+    await message.answer(text, reply_markup=keyboard)
+
+
 async def show_review(message, state):
     data = await state.get_data()
     start_at, end_at = datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"])
@@ -182,28 +212,55 @@ async def show_review(message, state):
         await state.set_state(Rent.equipment)
         await message.answer("Выбранное оборудование уже занято. Выберите другое или измените сроки.", reply_markup=flow_keyboard())
         return await show_equipment(message, state)
-    await state.update_data(expected_total=None, editing=None)
+    confirmation_nonce = secrets.token_hex(8)
+    await state.update_data(expected_total=None, editing=None, confirmation_nonce=confirmation_nonce)
     quantities = data.get("quantities", {})
     items_text = "\n".join(f"• {html.escape(item.get('title') or item['name'])} × {quantities.get(str(item['id']), 1)}" for item in chosen)
     text = (f"<b>Проверьте заявку</b>\n\n<u>Период</u>: {start_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} — {end_at.astimezone(MOSCOW):%d.%m.%Y %H:%M} МСК\n"
             f"<u>Оборудование</u>\n{items_text}\n\n<b>Имя:</b> {html.escape(data['name'])}\n<b>Контакт:</b> <tg-spoiler>{html.escape(data['contact'])}</tg-spoiler>\n\n"
-            "<i>После отправки заявка будет ждать решения оператора без ограничения по времени.</i>")
+            "<i>После подтверждения заявки заполните анкету с ФИО и телефоном в приложении.</i>")
+    if data.get('rental_purpose'):
+        text += '\n\nЦель аренды: ' + html.escape(data['rental_purpose'])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подтвердить бронирование", callback_data="rent:confirm")],
+        [InlineKeyboardButton(text="Подтвердить бронирование", callback_data=f"rent:confirm:{confirmation_nonce}")],
         [InlineKeyboardButton(text="Изменить сроки", callback_data="rent:edit:start"), InlineKeyboardButton(text="Изменить оборудование", callback_data="rent:edit:equipment")],
-        [InlineKeyboardButton(text="Изменить имя", callback_data="rent:edit:name"), InlineKeyboardButton(text="Изменить контакт", callback_data="rent:edit:contact")],
         [InlineKeyboardButton(text="Отмена", callback_data="rent:cancel")],
     ])
+    if (await asyncio.to_thread(get_booking_settings))['rental_purpose_enabled']:
+        keyboard.inline_keyboard.insert(-1, [InlineKeyboardButton(text='Изменить цель аренды', callback_data='rent:edit:purpose')])
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    text = "<b>ПолиРентал</b>\nВыберите сроки и оборудование, чтобы оформить аренду."
+    text = "<b>ПолиРентал</b>\nВыберите оборудование, затем сроки аренды. Ниже — ваши заявки и доступные действия."
     if not miniapp_url():
         text += " Приложение бронирования временно недоступно."
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+    if message.chat and message.chat.type == "private" and message.from_user:
+        from .customer_next import next_actions
+        items = await asyncio.to_thread(next_actions, message.from_user.id)
+        if items:
+            rows = []
+            for item in items[:5]:
+                callback = f"cw:askattest:{item['booking_id']}:returning" if item['action']=='return' else f"cw:open:{item['booking_id']}"
+                rows.append([InlineKeyboardButton(text=f"{item['human_number']} · {item['label']}",callback_data=callback)])
+            rows.append([InlineKeyboardButton(text="Все мои заявки",callback_data="cw:page:0")])
+            await message.answer("\n\n".join(f"{item['human_number']}: {item['title']}\n{item['description']}" for item in items[:5]),reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.message(F.text == "Сдать оборудование")
+@router.message(Command("return_equipment"))
+async def return_equipment_menu(message: Message):
+    if not message.chat or message.chat.type != "private":
+        return await message.answer("Откройте личный чат с ботом.")
+    from .customer_next import next_actions
+    items = [item for item in await asyncio.to_thread(next_actions, message.from_user.id) if item["action"] == "return"]
+    if not items:
+        return await message.answer("Сейчас у вас нет выданного оборудования. Статус других заявок можно посмотреть ниже.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Мои заявки", callback_data="cw:page:0")]]))
+    await message.answer("Выберите заявку, по которой передаёте оборудование сотруднику:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"Сдать · {item['human_number']}", callback_data=f"cw:askattest:{item['booking_id']}:returning")] for item in items]))
 
 
 @router.message(Command("book"))
@@ -229,9 +286,12 @@ async def booking_from_miniapp(message: Message, bot: Bot):
         return await message.answer("Заявка слишком большая. Откройте приложение и попробуйте ещё раз.")
     try:
         payload = BookingRequest.model_validate_json(raw)
+        from .client_profile import booking_identity
+        name, contact = await asyncio.to_thread(booking_identity, message.from_user) if not payload.name or not payload.contact else (payload.name.strip(), payload.contact.strip())
         booking_id, created = await asyncio.to_thread(
-            create_booking, message.from_user.id, payload.name.strip(), payload.contact.strip(), payload.start,
+            create_booking, message.from_user.id, name, contact, payload.start,
             payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), payload.expected_total, return_created=True,
+            rental_purpose=payload.rental_purpose,
         )
     except (ValueError, Conflict, ClientBlocked) as exc:
         return await message.answer(f"Не удалось создать заявку: {exc}. Откройте приложение и проверьте сроки, оборудование и контакты.", reply_markup=main_keyboard())
@@ -268,7 +328,11 @@ async def book_chat_button(query: CallbackQuery, state: FSMContext):
 @router.message(F.text == "Отмена")
 @router.message(Command("cancel_booking"))
 async def cancel_flow(message: Message, state: FSMContext):
-    if (await state.get_state()) not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.review.state}:
+    current = await state.get_state()
+    if current == Support.message.state:
+        await state.clear()
+        return await message.answer('Обращение не отправлено. Вы вернулись в главное меню.', reply_markup=main_keyboard())
+    if current not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.purpose.state, Rent.review.state}:
         return await message.answer('Нет незавершённого бронирования.', reply_markup=main_keyboard())
     await ask_cancel(message, state)
 
@@ -286,7 +350,9 @@ async def back_flow(message: Message, state: FSMContext):
     if current == Support.message.state:
         await state.clear()
         return await message.answer("Вы вернулись в главное меню.", reply_markup=main_keyboard())
-    previous = {Rent.end.state: Rent.start, Rent.equipment.state: Rent.end, Rent.name.state: Rent.equipment, Rent.contact.state: Rent.name, Rent.review.state: Rent.contact}
+    previous = {Rent.end.state: Rent.start, Rent.equipment.state: Rent.end, Rent.name.state: Rent.equipment, Rent.contact.state: Rent.name, Rent.purpose.state: Rent.equipment, Rent.review.state: Rent.equipment}
+    if current == Rent.review.state and (await asyncio.to_thread(get_booking_settings))['rental_purpose_enabled']:
+        return await ask_rental_purpose(message, state)
     target = previous.get(current)
     if not target:
         return await message.answer("Вы уже в начале. Выберите дату или нажмите «Отмена».", reply_markup=flow_keyboard())
@@ -348,11 +414,7 @@ async def rental_equipment(message: Message, state: FSMContext):
             return await message.answer("Ничего не найдено. Введите другое название или нажмите «Назад».")
         return await message.answer("Результаты поиска:", reply_markup=equipment_keyboard(found, data.get("quantities", {})))
     await state.update_data(ids=ids, quantities={str(item_id): 1 for item_id in ids})
-    if data.get("editing") in {"start", "equipment"} and data.get("name") and data.get("contact"):
-        await state.set_state(Rent.review)
-        return await show_review(message, state)
-    await state.set_state(Rent.name)
-    await message.answer("Как к вам обращаться? Введите имя для документов:", reply_markup=flow_keyboard())
+    return await review_account_booking(message, state, message.from_user)
 
 
 @router.callback_query(F.data.startswith("rent:info:"))
@@ -445,11 +507,7 @@ async def next_equipment(query: CallbackQuery, state: FSMContext):
     if not data.get("ids"):
         return await query.answer("Выберите хотя бы одну позицию", show_alert=True)
     await query.answer()
-    if data.get("editing") in {"start", "equipment"} and data.get("name") and data.get("contact"):
-        await state.set_state(Rent.review)
-        return await show_review(query.message, state)
-    await state.set_state(Rent.name)
-    await query.message.answer("Как к вам обращаться? Введите имя для документов:", reply_markup=flow_keyboard())
+    return await review_account_booking(query.message, state, query.from_user)
 
 
 @router.message(Rent.name)
@@ -471,7 +529,20 @@ async def rental_contact(message: Message, state: FSMContext):
     if not contact:
         return await message.answer("Укажите телефон или Telegram для связи.")
     await state.update_data(contact=contact)
+    await review_or_ask_purpose(message, state)
+
+
+@router.message(Rent.purpose)
+async def rental_purpose_input(message: Message, state: FSMContext):
+    if message.text is None:
+        return await message.answer('Напишите цель аренды текстом или нажмите «Пропустить».')
+    try:
+        purpose = '' if message.text == 'Пропустить' else normalize_rental_purpose(message.text)
+    except ValueError as exc:
+        return await message.answer(str(exc))
+    await state.update_data(rental_purpose=purpose, purpose_answered=True)
     await state.set_state(Rent.review)
+    await message.answer('Ответ сохранён.' if purpose else 'Цель аренды не указана.', reply_markup=flow_keyboard())
     await show_review(message, state)
 
 
@@ -485,9 +556,14 @@ async def edit_booking_step(query: CallbackQuery, state: FSMContext):
     if await state.get_state() != Rent.review.state:
         return await query.answer("Начните бронирование заново", show_alert=True)
     target = query.data.rsplit(":", 1)[1]
-    states = {"start": Rent.start, "equipment": Rent.equipment, "name": Rent.name, "contact": Rent.contact}
+    if target == 'purpose':
+        if not (await asyncio.to_thread(get_booking_settings))['rental_purpose_enabled']:
+            return await query.answer('Вопрос о цели аренды отключён', show_alert=True)
+        await query.answer()
+        return await ask_rental_purpose(query.message, state)
+    states = {"start": Rent.start, "equipment": Rent.equipment}
     if target not in states:
-        return await query.answer()
+        return await query.answer("Имя и телефон заполняются в анкете после подтверждения заявки.", show_alert=True)
     await state.update_data(editing=target)
     await state.set_state(states[target]); await query.answer()
     if target == "equipment": return await show_equipment(query.message, state)
@@ -508,27 +584,32 @@ async def confirm_cancel_flow(query: CallbackQuery, state: FSMContext):
     current = await state.get_state()
     parts = query.data.split(':')
     data = await state.get_data()
-    if (current not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.review.state}
+    if (current not in {Rent.start.state, Rent.end.state, Rent.equipment.state, Rent.name.state, Rent.contact.state, Rent.purpose.state, Rent.review.state}
             or len(parts) != 4 or parts[2] not in {'yes', 'no'} or not data.get('cancel_nonce') or parts[3] != data['cancel_nonce']):
         return await query.answer('Эта кнопка устарела.', show_alert=True)
     if parts[2] == 'no':
         await state.update_data(cancel_nonce=None)
         await query.answer('Продолжаем оформление')
+        if current == Rent.purpose.state:
+            return await ask_rental_purpose(query.message, state)
         return await query.message.answer('Продолжайте оформление с предыдущего шага.', reply_markup=flow_keyboard(contact=current == Rent.contact.state))
     await state.clear()
     await query.answer('Оформление отменено')
     await query.message.answer('Оформление отменено.', reply_markup=main_keyboard())
 
 
-@router.callback_query(F.data == "rent:confirm")
+@router.callback_query((F.data == "rent:confirm") | F.data.startswith("rent:confirm:"))
 async def confirm_booking(query: CallbackQuery, state: FSMContext, bot: Bot):
     if await state.get_state() != Rent.review.state:
         return await query.answer("Заявка уже отправлена или оформление завершено", show_alert=True)
     data = await state.get_data()
+    nonce = data.get("confirmation_nonce")
+    if not nonce or query.data != f"rent:confirm:{nonce}":
+        return await query.answer("Эта кнопка устарела. Подтвердите последнюю проверенную заявку.", show_alert=True)
     await query.answer("Создаём заявку…")
     try:
         requested = [{"article_id": article_id, "quantity": data.get("quantities", {}).get(str(article_id), 1)} for article_id in data["ids"]]
-        booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), None, return_created=True)
+        booking_id, created = await asyncio.to_thread(create_booking, query.from_user.id, data["name"], data["contact"], datetime.fromisoformat(data["start"]), datetime.fromisoformat(data["end"]), requested, data.get("request_id"), None, return_created=True, rental_purpose=data.get('rental_purpose', ''))
     except (Conflict, ValueError) as exc:
         return await query.message.answer(f"Не удалось создать заявку: {exc}. Измените сроки или оборудование и попробуйте снова.")
     await state.clear()
@@ -561,9 +642,7 @@ async def find_request(message: Message):
         booking = await asyncio.to_thread(get_booking, booking_id)
         if not booking or (booking.customer_id != message.from_user.id and not is_staff(message.from_user.id)):
             raise ValueError("Заявка не найдена")
-        status = {"pending": "ожидает оператора", "confirmed": "подтверждена", "preparing": "подготавливается",
-                  "ready": "готова к выдаче", "issued": "в аренде", "return_inspection": "проверка возврата",
-                  "returned": "завершена", "cancelled": "отменена", "expired": "истекла"}.get(booking.status, "в обработке")
+        status = booking_status(booking.status)
         await message.answer(f"Заявка {html.escape(booking.human_number)} · {status}")
     except ValueError:
         await message.answer("Заявка не найдена. Укажите полный номер или однозначные последние четыре цифры.")
@@ -591,7 +670,7 @@ async def support_message(message: Message, state: FSMContext, bot: Bot):
     except Conflict:
         return await message.answer("Поддержка временно недоступна. Попробуйте позже.")
     if result["owner_id"]:
-        await notify_actionable(None, result["owner_id"], "support_action", f"Новое обращение №{result['id']}. Откройте поддержку в Mini App.")
+        await notify_actionable(None, result["owner_id"], "support_action", f"Новое обращение №{result['id']}. Откройте поддержку в приложении.")
     await state.clear()
     await message.answer("Обращение получено.", reply_markup=main_keyboard())
 
@@ -616,7 +695,7 @@ async def equipment(message: Message):
     if not is_admin(message.from_user.id):
         return
     items = await asyncio.to_thread(list_equipment)
-    await message.answer("\n".join(f"{e.id}: {catalog_title(e.article.name, e.article.kind, e.article.brand, e.article.key_spec) if e.article else e.name} ({e.inventory_number}), {e.condition}" for e in items) or "Пусто")
+    await message.answer("\n".join(f"{e.id}: {catalog_title(e.article.name, e.article.kind, e.article.brand, e.article.key_spec) if e.article else e.name} ({e.inventory_number}), {equipment_condition(e.condition)}" for e in items) or "Пусто")
 
 
 @router.message(Command("add"))
@@ -639,12 +718,14 @@ async def set_equipment(message: Message):
         return
     try:
         _, identifier, number, condition, name = (message.text or "").split(" ", 4)
+        aliases = {"доступен": "available", "ремонт": "maintenance", "списан": "retired"}
+        condition = aliases.get(condition.casefold(), condition)
         item_id = await asyncio.to_thread(save_equipment, number, name, "", 0, condition, int(identifier))
         await message.answer(f"Экземпляр #{item_id} обновлен")
     except IntegrityError:
         await message.answer("Экземпляр с таким серийным номером уже существует.")
     except (ValueError, Conflict, ClientBlocked) as exc:
-        await message.answer(f"Формат: /set ID НОМЕР available|maintenance|retired НАЗВАНИЕ. {exc}")
+        await message.answer(f"Формат: /set НОМЕР_ЭКЗЕМПЛЯРА СЕРИЙНЫЙ_НОМЕР доступен|ремонт|списан НАЗВАНИЕ. {exc}")
 
 
 @router.message(Command("bookings"))
@@ -693,7 +774,8 @@ async def main():
     bot = make_bot(token)
     if miniapp_url():
         try:
-            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Забронировать", web_app=WebAppInfo(url=miniapp_url())))
+            from .frontend_assets import frontend_build
+            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Забронировать", web_app=WebAppInfo(url=f"{miniapp_url()}?build={frontend_build()}")))
         except Exception as exc:
             logging.warning("Не удалось настроить меню Mini App: %s", exc)
     dp = Dispatcher()

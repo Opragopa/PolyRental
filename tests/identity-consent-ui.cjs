@@ -33,7 +33,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if (url.pathname === '/api/miniapp/support/threads') return route.fulfill({json: {items: []}});
       if (url.pathname.startsWith('/api/miniapp/profile/history')) return route.fulfill({json: {items: [{id: 10, human_number: 'ТС0010', status: 'confirmed', identity_status: 'required', starts_at: '2026-11-10T10:00:00+03:00', ends_at: '2026-11-10T12:00:00+03:00', items: [{id: 1, name: 'Камера', quantity: 1}]}], total: 1}});
       if (url.pathname === '/api/miniapp/bookings/10/identity') return route.fulfill({json: {status: 'required', fields: {}, documents: []}});
-      if (url.pathname === '/api/miniapp/bookings/10/identity/reusable-profile') return route.fulfill({json: {reusable: true, fields: {full_name: 'Анна Иванова'}, documents: ['passport_main', 'passport_registration', 'student_front']}});
+      if (url.pathname === '/api/miniapp/bookings/10/identity/reusable-profile') return route.fulfill({json: {reusable: true, fields: {phone:'+79990000000',full_name: 'Анна Иванова'}, documents: ['passport_main', 'passport_registration', 'student_front']}});
       if (url.pathname === '/api/miniapp/privacy-consent') return route.fulfill({json: {text: 'Тестовое согласие', version: 'qa', text_hash: 'hash'}});
       if (url.pathname.startsWith('/api/miniapp/bookings/10/identity/reusable-profile/documents/')) {
         reusableDocumentRequests += 1;

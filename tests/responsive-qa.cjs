@@ -55,8 +55,8 @@ const cases = [[240, 320], [280, 480], [320, 568], [360, 640], [390, 844], [568,
       await page.locator("#main-button").click();
       await page.locator("#step-contact").waitFor({state: "visible"});
       await check("cart");
-      await page.locator("#customer-name").fill("Анна");
-      await page.locator("#customer-contact").fill("@anna_test");
+
+
       await page.locator("#main-button").click();
       await page.locator("#step-dates").waitFor({state: "visible"});
       await check("calendar");
