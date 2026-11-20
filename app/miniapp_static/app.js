@@ -2687,7 +2687,10 @@
         const button = event.currentTarget; button.disabled = true;
         try { await downloadCatalogTemplate(); }
         catch(error) { const message = dialog.querySelector(".csv-download-error"); message.textContent = error.message; }
-        finally { button.disabled = false; }
+        finally {
+          button.disabled = false;
+          window.PolyRentalDialogs?.restoreFocus(button);
+        }
       });
     }, async form => { imported = await api("/api/miniapp/admin/catalog/import-csv", {method:"POST", body:form}); });
     if (!data) return;
