@@ -16,9 +16,11 @@ ACTION_LABELS = {
     "returned": "Заявка завершена", "cancelled": "Заявка отменена",
     "request_rejected": "Заявка отклонена", "request_changes_proposed": "Предложены изменения заявки",
     "request_changes_disputed": "Изменения оспорены клиентом", "request_updated": "Заявка изменена",
+    "request_force_edited": "Сотрудник сохранил изменения. Заявка ожидает повторной проверки. Подтверждение от клиента не требуется",
     "request_changes_unanswered": "Истёк срок ответа на изменения",
     "returned_for_rework": "Заявка возвращена на доработку", "contact_updated": "Контакт обновлён",
     "customer_received": "Клиент подтвердил получение", "customer_returning": "Клиент подтвердил сдачу",
+    "operator_return_confirmed": "Сотрудник подтвердил фактический возврат без отметки клиента",
     "paper_issue_signed": "Отмечена подпись при выдаче", "paper_return_signed": "Отмечена подпись при возврате",
     "inspection_saved": "Сохранена проверка оборудования", "composition_updated": "Изменена комплектация",
     "request_deleted": "Заявка удалена", "request_restored": "Заявка восстановлена",
@@ -181,10 +183,12 @@ def install_booking_events(factory):
 
 
 def claim_notices(user_id):
-    from .db import Session, BookingEvent, BookingEventRecipient
+    from .db import Session, BookingEvent, BookingEventRecipient, Booking
+    from sqlalchemy import and_
     with Session.begin() as session:
-        rows = session.execute(select(BookingEventRecipient, BookingEvent).join(BookingEvent).where(
-            BookingEventRecipient.recipient_id == user_id, BookingEventRecipient.shown_at.is_(None))
+        rows = session.execute(select(BookingEventRecipient, BookingEvent).join(BookingEvent).join(Booking).where(
+            BookingEventRecipient.recipient_id == user_id, BookingEventRecipient.shown_at.is_(None),
+            ~and_(Booking.customer_id == user_id, BookingEvent.actions.contains(["ready"])))
             .order_by(BookingEvent.version).limit(50)
             .with_for_update(of=BookingEventRecipient, skip_locked=True)).all()
         result = []

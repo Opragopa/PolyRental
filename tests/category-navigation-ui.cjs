@@ -6,7 +6,8 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
 (async()=>{const engine=process.env.PLAYWRIGHT_BROWSER==='webkit'?webkit:chromium; const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{
  const page=await browser.newPage({viewport:{width:390,height:844}}), errors=[]; page.on('pageerror',e=>errors.push(e.message));
  const categories=[{code:'camera',name:'Камеры',icon:'camera'},{code:'cinema',name:'Кинокамеры',parent_code:'camera',icon:'camera'},{code:'light',name:'Свет',icon:'light'}];
- const article={id:1,sku:'A',name:'Sony FX3',title:'Sony FX3',category:'cinema',available:true,available_quantity:2,active:true,equipment:[{id:1,condition:'available',asset_code:'A1'}]};
+ const article={id:1,sku:'A',name:'Sony FX3',title:'Sony FX3',category:'cinema',available:true,available_quantity:2,active:true,equipment:[{id:1,condition:'available',asset_code:'A1'},{id:2,condition:'available',asset_code:'A2'}]};
+ let categoryAttempts=0, openedAsset=null;
  let cart={start:'2026-11-01T10:00',end:'2026-11-02T10:00',lines:[],version:0};
  let delayNextCatalog=false, releaseCatalog, inboxRead=false; const heldCatalog=new Promise(resolve=>{releaseCatalog=resolve});
  await page.route('**/*',async route=>{const u=new URL(route.request().url()),p=u.pathname,m=route.request().method();
@@ -18,11 +19,13 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  if(p==='/api/miniapp/release/seen')return route.fulfill({json:{ok:true}});
  if(p==='/api/miniapp/notifications/inbox/read'){inboxRead=true;return route.fulfill({json:{ok:true}});}
  if(p==='/api/miniapp/notifications/inbox')return route.fulfill({json:{items:[{id:'d:1',message:'Заявка обновлена',created_at:'2026-11-01T10:00:00Z'}],unread:!inboxRead,has_more:false}});
+ if(p==='/api/miniapp/admin/notification-preferences')return route.fulfill({json:{quiet_start:'21:00',quiet_end:'08:00'}});
  if(p==='/api/miniapp/cart'&&m==='GET')return route.fulfill({json:cart});
  if(p==='/api/miniapp/cart'&&m==='PUT'){cart={...route.request().postDataJSON(),version:cart.version+1};return route.fulfill({json:cart});}
  if(p==='/api/miniapp/catalog/categories')return route.fulfill({json:{items:categories}});
  if(p==='/api/miniapp/availability'||p==='/api/miniapp/catalog'){if(delayNextCatalog){delayNextCatalog=false;await heldCatalog;} const category=u.searchParams.get('category'); const items=category==='light'?[]:[article];return route.fulfill({json:{items,all_items:items,selected_items:u.searchParams.getAll('selected').length?[article]:[],total:items.length,page:0,page_size:20,unavailable:[],unavailable_count:0}});}
- if(p==='/api/miniapp/admin/catalog/categories/camera/edit'&&m==='POST'){categories[0].name='Фотоаппараты';categories[0].image_data='data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/vtV4/+lwf/S4P/pcH/pcH8bss4bpAAA=';return route.fulfill({json:{ok:true}});}
+ if(p==='/api/miniapp/admin/catalog/categories/camera/edit'&&m==='POST'){if(++categoryAttempts===1)return route.fulfill({status:413,contentType:'text/html',body:'<h1>Request Entity Too Large</h1>'});categories[0].name='Фотоаппараты';categories[0].image_data='data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/vtV4/+lwf/S4P/pcH/pcH8bss4bpAAA=';return route.fulfill({json:{ok:true}});}
+ if(p.endsWith('/equipment/2/blocks')&&m==='GET'){openedAsset=2;return route.fulfill({json:{items:[]}});}
  if(p==='/api/miniapp/admin/catalog'){const rows=u.searchParams.get('category')==='light'?[]:[article];return route.fulfill({json:{categories,articles:rows,dependencies:[],total:rows.length,page:0,page_size:20}});}
  if(p.startsWith('/api/'))return route.fulfill({json:{items:[]}});
  return route.fulfill({body:html,contentType:'text/html'});
@@ -87,6 +90,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('#client-catalog-back').click(); await page.locator('#catalog-page-title').getByText('Каталог оборудования').waitFor();
  await page.locator('#tab-admin').click(); await page.locator('[data-mode="catalog"]').click();
  await page.locator('#admin-settings-open').click(); assert.equal(await page.locator('#admin-heading').innerText(),'Настройки'); assert(await page.locator('#settings-notifications').isVisible()); assert(await page.locator('#settings-tab-staff').isVisible());
+ await page.waitForFunction(()=>document.querySelector('#operator-quiet-form input[name="quiet_start"]').value==='21:00');
  await page.locator('#operator-quiet-form input[name="quiet_start"]').fill('22:00'); await page.locator('#settings-tab-calendar').click(); assert(await page.locator('#settings-calendar').isVisible()); await page.locator('#settings-tab-notifications').click(); assert.equal(await page.locator('#operator-quiet-form input[name="quiet_start"]').inputValue(),'22:00');
  await page.evaluate(()=>window.__telegramBack()); assert.equal(await page.locator('#admin-heading').innerText(),'Управление'); assert.equal(await page.locator('[data-mode="catalog"]').getAttribute('aria-pressed'),'true');
  assert.equal(await page.locator('#admin-panel > .panel-head h2').innerText(),'Управление'); assert(await page.locator('#admin-back-button').isVisible()); assert(await page.locator('#admin-back-button').isDisabled());
@@ -114,6 +118,20 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); assert(await page.locator('#admin-back-button').isEnabled()); await page.locator('#admin-back-button').click(); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor(); assert(await page.locator('#admin-panel').isVisible());
  await page.emulateMedia({reducedMotion:'reduce'}); await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры',{exact:true}).waitFor(); assert.equal(await page.locator('.category-level-transition').count(),0); assert.equal(await page.locator('.category-morph-surface, .category-morph-label').count(),0);
  await page.locator('#admin-catalog-level .product-layout').getByRole('button',{name:'Плитка'}).click(); assert(await page.locator('.admin-catalog-items').evaluate(el=>el.classList.contains('tiles'))); assert.equal(await page.locator('.catalog-search-row .notification-bell').evaluate(el=>Boolean(el.closest('.catalog-search-input'))),false);
+ const articleHeader=page.locator('.article-card-head'), toggle=articleHeader.locator('.article-toggle');
+ await articleHeader.getByText('Sony FX3',{exact:true}).click();
+ assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+ await toggle.press('Enter');
+ assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+ await articleHeader.getByRole('button',{name:'Занятость вне сервиса',exact:true}).click();
+ const picker=page.getByRole('dialog',{name:'Выберите экземпляр'});
+ await picker.getByLabel('Экземпляр оборудования').selectOption('2');
+ await picker.getByRole('button',{name:'Открыть занятость'}).click();
+ const occupancy=page.getByRole('dialog',{name:'Занятость вне сервиса'});
+ await occupancy.waitFor();
+ assert.equal(openedAsset,2);
+ assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+ await occupancy.getByRole('button',{name:'Отмена'}).click();
  await page.evaluate(()=>window.__telegramBack()); await page.evaluate(()=>window.__telegramBack());
  await page.locator('#admin-catalog-heading').getByText('Каталог оборудования').waitFor();
  await page.locator('.admin-categories').getByRole('button',{name:'Свет'}).click();
@@ -124,6 +142,14 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.getByRole('button',{name:'Изменить категорию: Камеры'}).click();
  const dialog=page.locator('.workflow-dialog'); await dialog.locator('input[name=name]').fill('Фотоаппараты');
  await dialog.locator('input[name=photo]').setInputFiles({name:'test.png',mimeType:'image/png',buffer:Buffer.from('89504e470d0a1a0a','hex')});
+ await dialog.getByRole('button',{name:'Сохранить',exact:true}).click();
+ const uploadError=dialog.getByRole('alert');
+ await uploadError.getByText('Фото не прошло проверку размера.',{exact:false}).waitFor();
+ const errorBounds=await uploadError.boundingBox();
+ assert(errorBounds.y>=0 && errorBounds.y+errorBounds.height<=844);
+ assert(await uploadError.evaluate(el=>getComputedStyle(el).color===getComputedStyle(el).borderTopColor));
+ assert.equal(await dialog.locator('input[name=name]').inputValue(),'Фотоаппараты');
+ assert.equal(await dialog.locator('input[name=photo]').evaluate(el=>el.files[0].name),'test.png');
  await dialog.getByRole('button',{name:'Сохранить',exact:true}).click();
  await page.locator('.admin-categories').getByRole('button',{name:'Фотоаппараты',exact:true}).waitFor();
  assert.equal(await page.locator('.admin-categories img.category-card-photo').count(),1);

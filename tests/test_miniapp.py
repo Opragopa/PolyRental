@@ -124,7 +124,7 @@ def test_encrypted_identity_upload_role_boundary_and_review(monkeypatch):
     with TestClient(app) as client:
         booking_id = create_confirmed(client, customer)
         consent = client.get("/api/miniapp/privacy-consent", headers=customer).json()
-        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+        fields = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Москва",
                   "residential_address": "Москва", "student_id_number": "12345678",
@@ -191,7 +191,7 @@ def test_bad_mime_rejected(monkeypatch):
 
 
 def test_identity_sensitive_fields_are_validated():
-    valid = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+    valid = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
              "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
              "passport_division_code": "770-001", "registration_address": "Москва",
              "residential_address": "Москва", "student_id_number": "12345678",
@@ -217,7 +217,7 @@ def test_identity_submit_returns_student_field_error(monkeypatch):
     headers = {"X-Telegram-Init-Data": signed_init_data(42)}
     with TestClient(app) as client:
         booking_id = create_confirmed(client, headers)
-        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+        fields = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
                   "residential_address": "Санкт-Петербург", "student_id_number": "123456789",
@@ -233,7 +233,7 @@ def test_identity_age_and_passport_date_boundaries(monkeypatch):
     from datetime import datetime, timezone
     from app import pii
     monkeypatch.setattr(pii, "now", lambda: datetime(2026, 10, 28, 12, tzinfo=timezone.utc))
-    valid = {"full_name": "Анна Иванова", "birth_date": "2010-10-28", "passport_series": "4510",
+    valid = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2010-10-28", "passport_series": "4510",
              "passport_number": "123456", "passport_issued_at": "2024-10-28", "passport_issuer": "ОВД",
              "passport_division_code": "770-001", "registration_address": "Москва",
              "residential_address": "Москва"}
@@ -249,7 +249,7 @@ def test_identity_submit_returns_bad_photo_field(monkeypatch):
     headers = {"X-Telegram-Init-Data": signed_init_data(42)}
     with TestClient(app) as client:
         booking_id = create_confirmed(client, headers)
-        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+        fields = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
                   "residential_address": "Санкт-Петербург", "student_id_number": "12345678",
@@ -275,7 +275,7 @@ def test_name_correction_omits_consent_fields_and_keeps_uploaded_photos(monkeypa
     with TestClient(app) as client:
         booking_id = create_confirmed(client, headers)
         consent = client.get("/api/miniapp/privacy-consent", headers=headers).json()
-        fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+        fields = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                   "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                   "passport_division_code": "770-001", "registration_address": "Санкт-Петербург",
                   "residential_address": "Санкт-Петербург", "student_id_number": "12345678",
@@ -378,7 +378,7 @@ def test_retention_purge_keeps_only_audit(monkeypatch):
         consent = client.get("/api/miniapp/privacy-consent", headers=customer).json()
         files = {kind: (f"{kind}.png", image_bytes(), "image/png") for kind in
                  ("passport_main", "passport_registration", "student_front")}
-        identity_fields = {"full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
+        identity_fields = {"phone": "+79990000000", "full_name": "Анна Иванова", "birth_date": "2000-01-01", "passport_series": "4510",
                            "passport_number": "123456", "passport_issued_at": "2020-01-01", "passport_issuer": "ОВД",
                            "passport_division_code": "770-001", "registration_address": "Москва",
                            "residential_address": "Москва", "student_id_number": "12345678",

@@ -29,6 +29,7 @@
     control?.focus({preventScroll: true});
   }
   function revealDisclosure(element, control) {
+    if (element.closest('#admin-settings, #profile-header')) return;
     if (!element.isConnected || (control && document.activeElement !== control)) return;
     const viewportHeight = window.visualViewport?.height || window.innerHeight;
     const tall = element.getBoundingClientRect().height > viewportHeight - 32;
@@ -39,12 +40,16 @@
     if (opening && focus) focusDisclosure(summary);
     const previous = disclosureAnimations.get(details);
     const startHeight = details.getBoundingClientRect().height;
+    previous?.observer?.disconnect();
     previous?.animation.cancel();
-    if (reducedMotion?.matches || typeof details.animate !== "function") {
+    // Management cards contain the page's main content. Keep them in normal
+    // flow: a clipped, animated details becomes a nested scrolling surface in
+    // mobile WebViews, and revealing it can override the user's scroll gesture.
+    if (details.matches(".request-accordion") || reducedMotion?.matches || typeof details.animate !== "function") {
       disclosureAnimations.delete(details);
       details.style.overflow = previous?.overflow ?? details.style.overflow;
       details.open = opening;
-      if (opening && focus) requestAnimationFrame(() => revealDisclosure(details, summary));
+      if (opening && focus && !details.matches(".request-accordion")) requestAnimationFrame(() => revealDisclosure(details, summary));
       return;
     }
     const overflow = previous?.overflow ?? details.style.overflow;
@@ -65,6 +70,7 @@
     disclosureAnimations.set(details, state);
     animation.onfinish = () => {
       if (disclosureAnimations.get(details) !== state) return;
+      state.observer?.disconnect();
       if (!opening) details.open = false;
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
@@ -72,9 +78,18 @@
     };
     animation.oncancel = () => {
       if (disclosureAnimations.get(details) !== state) return;
+      state.observer?.disconnect();
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
     };
+    if (opening && details.closest('#admin-settings, #profile-header') && typeof ResizeObserver === 'function') {
+      const heights = new Map([...details.children].map(child=>[child,child.getBoundingClientRect().height]));
+      state.observer = new ResizeObserver(entries=>{
+        const changed = entries.some(({target})=>heights.get(target)!==target.getBoundingClientRect().height);
+        if (changed && disclosureAnimations.get(details) === state) setDisclosureOpen(details, true);
+      });
+      for (const child of details.children) state.observer.observe(child);
+    }
   }
   document.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -107,6 +122,17 @@
   const draftKey = `polyrental-booking-draft-v2:${tg?.initDataUnsafe?.user?.id || siteProfile?.id || "local"}`;
   const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || siteProfile?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
+  let rentalPurposeEnabled = true;
+  async function refreshBookingQuestion() {
+    try {
+      if (!preview) {
+        const settings = await api('/api/miniapp/booking-settings');
+        if (typeof settings.rental_purpose_enabled === 'boolean') rentalPurposeEnabled = settings.rental_purpose_enabled;
+      }
+    } catch (_) { /* An optional question must not block booking during a read failure. */ }
+    $('rental-purpose-field').hidden = !rentalPurposeEnabled;
+  }
+  $('rental-purpose').addEventListener('input', persistCurrentCart);
   function showLoading(host, message = "Загружаем…", rows = 3) {
     host.replaceChildren();
     if (message) { const status = document.createElement("p"); status.className = "loading-label"; status.setAttribute("role", "status"); status.textContent = message; host.append(status); }
@@ -137,10 +163,10 @@
   let addressSuggestTimer = null;
   let addressSuggestController = null;
   let addressSuggestSequence = 0;
-  let contactEdited = false;
   let rangeCalendar = null;
   let schedulePolicy = null;
   let availabilityFresh = false;
+  let bookingSubmitting = false;
   const identityPhotoDrafts = new Map();
   let identitySession = null;
   let identityGeneration = 0;
@@ -188,10 +214,16 @@
     const data = await workflowDialog("Изменить категорию", `<label class="field"><span>Название категории</span><input name="name" maxlength="100" value="${escapeHtml(category.name)}" required></label><label class="field"><span>Новое фото категории</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>${category.image_data ? '<label class="check-row"><input name="remove_photo" type="checkbox"><span>Удалить текущее фото</span></label>' : ''}<p class="supporting">JPEG, PNG или WebP, не более 8 МБ.</p>`, "Сохранить", null, async values => {
       const file = values.get("photo");
       if (file instanceof File && file.size && values.get("remove_photo")) throw new Error("Выберите новое фото или удалите текущее.");
+      if (file instanceof File && file.size > 8 * 1024 * 1024) throw new Error("Фото больше 8 МБ. Выберите файл меньшего размера.");
       const upload = new FormData(); upload.set("name", values.get("name"));
       if (file instanceof File && file.size) upload.set("photo", file);
       if (values.get("remove_photo")) upload.set("remove_photo", "true");
-      await api(`${path}/edit`, {method:"POST", body:upload});
+      try {
+        await api(`${path}/edit`, {method:"POST", body:upload});
+      } catch (error) {
+        if (error.status === 413) throw new Error("Фото не прошло проверку размера. Выберите файл до 8 МБ и повторите загрузку.");
+        throw error;
+      }
     });
     if (data) await showAdmin("catalog");
   }
@@ -205,7 +237,7 @@
   function catalogMedia(item, className) {
     const meta = categoryMeta[item.category] || categoryMeta.generic || ["Оборудование", "equipment"];
     const src = /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(item.image_data || "") ? item.image_data : /^https:\/\//i.test(item.image_url || "") ? item.image_url : "";
-    return `<div class="catalog-media ${className}-media" data-photo-state="${src ? "loading" : "empty"}" aria-busy="${Boolean(src)}"><div class="${className}-placeholder catalog-photo-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><small>${escapeHtml(meta[0])}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy"><span class="catalog-photo-progress" role="status" aria-label="Загрузка фото"><span class="photo-spinner" aria-hidden="true"></span></span><button class="catalog-photo-retry" type="button" aria-label="Повторить загрузку фото: ${escapeHtml(item.name)}"><span aria-hidden="true">↻</span><small>Повторить</small></button>` : ""}</div>`;
+    return `<div class="catalog-media ${className}-media" data-photo-state="${src ? "loading" : "empty"}" aria-busy="${Boolean(src)}"><div class="${className}-placeholder catalog-photo-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><svg class="frame-placeholder-icon icon" aria-hidden="true"><use href="#icon-category-${categoryIcon({code:item.category, icon:meta[1]})}"></use></svg><small>${escapeHtml(meta[0])}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy"><span class="catalog-photo-progress" role="status" aria-label="Загрузка фото"><span class="photo-spinner" aria-hidden="true"></span></span><button class="catalog-photo-retry" type="button" aria-label="Повторить загрузку фото: ${escapeHtml(item.name)}"><span aria-hidden="true">↻</span><small>Повторить</small></button>` : ""}</div>`;
   }
   function photoState(image, state) {
     const media = image.closest(".catalog-media"); if (!media) return;
@@ -406,7 +438,7 @@
   }
   function readPendingCart() { try { return normalizedCart(JSON.parse(localStorage.getItem(pendingCartKey) || "null")); } catch (_) { return null; } }
   function persistCurrentCart() {
-    try { localStorage.setItem(draftKey, JSON.stringify({ start:$("start").value, end:$("end").value, quantities:[...state.quantities] })); } catch (_) { /* storage can be disabled */ }
+    try { localStorage.setItem(draftKey, JSON.stringify({ start:$("start").value, end:$("end").value, quantities:[...state.quantities], rental_purpose:$('rental-purpose').value })); } catch (_) { /* storage can be disabled */ }
   }
   function applyCartSnapshot(cart) {
     $("start").value = cart.start; $("end").value = cart.end;
@@ -488,38 +520,13 @@
       const draft = JSON.parse(localStorage.getItem(draftKey) || "{}");
       if (typeof draft.start === "string") $("start").value = draft.start;
       if (typeof draft.end === "string") $("end").value = draft.end;
+      if (typeof draft.rental_purpose === 'string') $('rental-purpose').value = draft.rental_purpose.slice(0, 2000);
       if (Array.isArray(draft.quantities)) state.quantities = new Map(draft.quantities.filter((row) => Array.isArray(row) && Number.isInteger(row[0]) && row[0] > 0 && Number.isInteger(row[1]) && row[1] > 0 && row[1] <= 30));
       return Boolean(draft.start || draft.end || draft.quantities?.length);
     } catch (_) { /* start with an empty form */ }
     return false;
   }
-  function clearDraft() { try { localStorage.removeItem(draftKey); } catch (_) { /* no persistent draft */ } }
-  function saveContact() {
-    try {
-      localStorage.setItem(contactKey, JSON.stringify({ name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim() }));
-    } catch (_) { /* storage can be disabled */ }
-  }
-  function restoreContact() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(contactKey) || "null");
-      if (!saved || typeof saved.name !== "string" || typeof saved.contact !== "string") return false;
-      $("customer-name").value = saved.name.slice(0, 200);
-      $("customer-contact").value = saved.contact.slice(0, 200);
-      return Boolean(saved.name || saved.contact);
-    } catch (_) { return false; }
-  }
-  async function restoreLastBookingContact(hasSavedContact) {
-    if (!authorized || hasSavedContact) return;
-    try {
-      const result = await api("/api/miniapp/bookings");
-      const recent = result.items?.[0];
-      if (!recent || contactEdited) return;
-      if (recent.customer_name) $("customer-name").value = recent.customer_name;
-      if (recent.customer_contact) $("customer-contact").value = recent.customer_contact;
-      saveContact();
-    } catch (_) { /* Telegram profile remains available as a fallback */ }
-  }
-
+  function clearDraft() { $('rental-purpose').value = ''; try { localStorage.removeItem(draftKey); } catch (_) { /* no persistent draft */ } }
   function openPhotoDraftDb() {
     if (!window.indexedDB) return Promise.reject(new Error("Хранилище временных фото недоступно"));
     return new Promise((resolve, reject) => {
@@ -640,9 +647,14 @@
       signal:options.signal || controller.signal,
       headers: { "X-Telegram-Init-Data": tg?.initData || "", ...((options.body && !(options.body instanceof FormData)) ? { "Content-Type": "application/json" } : {}) },
       cache: "no-store",
-    }); } catch(error) { if(error.name==="AbortError")throw new Error("Сервер не ответил вовремя. Повторите попытку.");throw error; } finally {clearTimeout(timer);}
+    }); } catch(error) { if(error.name==="AbortError")throw new Error("Сервер не ответил вовремя. Повторите попытку."); if(error instanceof TypeError)throw new Error("Не удалось связаться с сервером. Проверьте интернет и повторите попытку."); throw error; } finally {clearTimeout(timer);}
     let body;
-    try { body = await response.json(); } catch (_) { throw new Error("Сервер вернул неожиданный ответ. Попробуйте ещё раз."); }
+    try { body = await response.json(); } catch (_) {
+      const error = new Error(response.status === 413 ? "Размер файла превышает допустимый лимит." :
+        "Сервер вернул неожиданный ответ. Попробуйте ещё раз.");
+      error.status = response.status;
+      throw error;
+    }
     if (!response.ok) {
       const detail = typeof body.detail === "string" ? body.detail
         : Array.isArray(body.detail) ? body.detail.map((item) => item.msg || item.message || "").filter(Boolean).join("; ")
@@ -650,7 +662,7 @@
       const structured = body.detail && typeof body.detail === "object" && !Array.isArray(body.detail) ? body.detail : null;
       const error = new Error(structured?.message || detail || "Не удалось выполнить запрос. Попробуйте ещё раз.");
       error.status = response.status;
-      const formFields = new Set(["full_name", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution", "passport_main", "passport_registration", "student_front"]);
+      const formFields = new Set(["full_name", "phone", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution", "passport_main", "passport_registration", "student_front"]);
       const invalidField = Array.isArray(body.detail) ? body.detail.map((item) => item.loc?.at(-1)).find((field) => formFields.has(field)) : null;
       if (typeof structured?.field === "string") error.field = structured.field;
       else if (invalidField) error.field = invalidField;
@@ -661,7 +673,8 @@
 
   function updateMainAction(total) {
     const labels = [`В корзину · ${total}`, "Выбрать даты", "Проверить заявку", "Отправить заявку"];
-    $("main-button").textContent = state.busy ? "Подождите…" : labels[state.step] || "Продолжить";
+    $("main-button").textContent = state.busy ? (bookingSubmitting ? "Отправляем заявку…" : "Проверяем доступность…") : labels[state.step] || "Продолжить";
+    $("main-button").setAttribute("aria-busy", String(state.busy));
     $("main-button").disabled = state.busy || cartLocked || (state.step === 3 && (exceedsStock() || !availabilityFresh || unavailableSelection().length > 0)) || (state.step === 2 &&
       (!$("start-date").value || !$("end-date").value || ($("start-time").value && $("end-time").value && Boolean(dateValidationMessage())))) || (!authorized && !keyboardMode && !preview);
     $("clear-cart").hidden = !(state.view === "flow" && state.step === 0);
@@ -688,6 +701,7 @@
   }
 
   function openCartView() {
+    if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     clearError();
     if (state.profile?.client_allowed === false) { state.view = "blocked"; render(); return; }
@@ -698,7 +712,7 @@
     render();
   }
 
-  let renderedMainView = null, mainViewAnimation = null;
+  let renderedMainView = null, mainViewAnimation = null, renderedFlowStep = null;
   let cachedCatalogKey = null, cachedCatalogData = null, renderedCatalogQuantities = null, cachedProfileKey = null, cachedProfileData = null;
   function render() {
     const oldMainView = renderedMainView;
@@ -713,20 +727,32 @@
       availabilityCheck = null; availabilitySequence++; state.busy = false;
     }
     if (state.view !== "orders") {
-      profileIdentitySequence++; profileIdentityData = null;
-      $("profile-identity-fields").replaceChildren(); $("profile-identity-fields").hidden = true;
-      $("profile-identity-toggle").setAttribute("aria-expanded", "false"); $("profile-identity-toggle").textContent = "Показать данные"; $("profile-identity-edit").hidden = true;
+      resetProfileIdentity();
+      const disclosure = $("profile-disclosure"), motion = disclosureAnimations.get(disclosure);
+      if (motion) {
+        disclosureAnimations.delete(disclosure); motion.animation.cancel(); disclosure.style.overflow = motion.overflow;
+      }
+      disclosure.open = false;
     }
     if (state.view !== "admin") document.querySelectorAll(".request-card").forEach(clearRequestReview);
     document.body.classList.toggle("dates-view", state.view === "flow" && state.step === 2);
     const done = state.step === 4;
+    const progress = $("frame-progress");
+    progress.hidden = state.view !== "flow" || done;
+    [...progress.children].forEach((step, index) => {
+      if (index === state.step) step.setAttribute("aria-current", "step"); else step.removeAttribute("aria-current");
+      step.classList.toggle("completed", index < state.step);
+    });
     const backButton = $("top-back-button");
     backButton.hidden = (state.view === 'flow' && state.step === 0) || state.view === 'admin';
-    backButton.disabled = state.view === "flow" && state.step === 0 && !clientCatalog.category;
+    backButton.disabled = bookingSubmitting || (state.view === "flow" && state.step === 0 && !clientCatalog.category);
     $("client-catalog-back").disabled = backButton.disabled;
     backButton.title = backButton.disabled ? "Вы на первом экране" : "Назад";
     $("booking-flow").hidden = state.view !== "flow";
-    $("booking-flow").inert = cartLocked; $("cart-sync-notice").hidden = !cartLocked;
+    $("customer-next").hidden = state.view !== "flow" || state.step !== 0 || !$("customer-next").children.length;
+    $("booking-flow").inert = cartLocked || bookingSubmitting; $("cart-sync-notice").hidden = !cartLocked;
+    $("booking-flow").setAttribute("aria-busy", String(bookingSubmitting));
+    for (const id of ["tab-new", "tab-orders", "tab-admin", "floating-cart-button"]) if ($(id)) $(id).disabled = bookingSubmitting;
     $("booking-blocked").hidden = state.view !== "blocked";
     $("orders-panel").hidden = state.view !== "orders";
     $("identity-panel").hidden = state.view !== "identity";
@@ -759,6 +785,16 @@
     if (tg && (authorized || keyboardMode)) {
       if (done) tg.disableClosingConfirmation?.(); else tg.enableClosingConfirmation?.();
     }
+    if (state.view === "flow" && !cartLocked && !bookingSubmitting) {
+      if (renderedFlowStep !== null && renderedFlowStep !== state.step) {
+        const panel = $(sections[state.step] || "step-done"), heading = panel.querySelector("h2");
+        if (heading) { heading.tabIndex = -1; heading.focus({preventScroll:true}); }
+        scrollElementIntoView(panel, {block:"start"});
+        window.PolyRentalMotion?.stage(panel, state.step > renderedFlowStep ? 1 : -1);
+        if (done) window.PolyRentalMotion?.result(panel.querySelector('.success-mark'));
+      }
+      renderedFlowStep = state.step;
+    } else if (state.view !== "flow") renderedFlowStep = null;
     showPendingRelease();
   }
 
@@ -769,16 +805,6 @@
       if ($("start-time").value && $("end-time").value) showError(dateValidationMessage());
       document.querySelector('#step-dates [aria-invalid="true"]')?.focus(); render(); return false;
     }
-    return true;
-  }
-  function validateContacts() {
-    fieldError("customer-name", ""); fieldError("customer-contact", "");
-    if (!$("customer-name").value.trim()) { fieldError("customer-name", "Укажите имя для заявки и документов."); return false; }
-    const contact = $("customer-contact").value.trim();
-    const digits = (contact.match(/[0-9]/g) || []).length;
-    const phone = /^\+?[0-9](?:[0-9 ()-]*[0-9])?$/.test(contact) && digits >= 10 && digits <= 15;
-    const username = /^@?[A-Za-z][A-Za-z0-9_]{4,31}$/.test(contact);
-    if (!phone && !username) { fieldError("customer-contact", "Укажите телефон (10–15 цифр) или Telegram username (5–32 символа: латиница, цифры, _)."); return false; }
     return true;
   }
 
@@ -986,6 +1012,7 @@
     });
   }, {passive:true});
   async function navigateClientCategory(code, origin = null) {
+    if (code) { try { localStorage.setItem(`${draftKey}:recent-category`, code); } catch (_) {} }
     cancelCategoryScroll();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
     const snapshot = window.PolyRentalMotion?.captureCategoryView($("client-catalog-level"));
@@ -1041,6 +1068,11 @@
     $("items-grid").replaceChildren();
     const categoryHost = $("client-categories"); categoryHost.replaceChildren();
     const queryText = $("client-catalog-search").value.trim();
+    let recentCode = ""; try { recentCode = localStorage.getItem(`${draftKey}:recent-category`) || ""; } catch (_) {}
+    const recent = clientCatalog.categories.find(category => category.code === recentCode);
+    $("recent-category").hidden = Boolean(clientCatalog.category || queryText || !recent);
+    $("recent-category").textContent = recent ? `Снова открыть: ${recent.name}` : "";
+    $("recent-category").onclick = () => { if (recent) void navigateClientCategory(recent.code, $("recent-category")); };
     const parent = clientCatalog.categories.find(c => c.code === clientCatalog.category);
     $("catalog-page-title").textContent = parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования");
     $("client-catalog-path").textContent = categoryPath(clientCatalog.category);
@@ -1067,7 +1099,7 @@
       card.className = `item-card${selected ? " selected" : ""}`;
       const media = catalogMedia(item, "item");
       const typeNote = item.description && item.description !== catalogType(item) ? `<span class="item-type">${escapeHtml(item.description)}</span>` : "";
-      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div>${typeNote}<h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3><span class="available-badge">${escapeHtml(stockWarning(item.id, quantity))}</span><div class="item-notes"></div></div></div><div class="quantity-control" role="group" aria-label="Количество: ${escapeHtml(catalogTitle(item))}"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong class="quantity-value" aria-live="polite" aria-atomic="true">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div>`;
+      card.innerHTML = `${media}<div class="item-main"><div class="item-top"><div><h3 class="item-name">${escapeHtml(catalogTitle(item))}</h3>${typeNote}<span class="available-badge">${escapeHtml(stockWarning(item.id, quantity))}</span><div class="item-notes"></div></div></div><div class="quantity-control" role="group" aria-label="Количество: ${escapeHtml(catalogTitle(item))}"><button type="button" class="button ghost minus" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${quantity === 0 ? "disabled" : ""}>−</button><strong class="quantity-value" aria-live="polite" aria-atomic="true">${quantity}</strong><button type="button" class="button ghost plus" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${quantity >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div>`;
       const changeQuantity = (delta) => {
         const current = state.quantities.get(item.id) || 0;
         if (delta > 0 && current >= quantityLimit(item.id)) return;
@@ -1080,6 +1112,7 @@
         card.querySelector(".minus").disabled = next === 0;
         card.querySelector(".plus").disabled = next >= quantityLimit(item.id);
         card.querySelector(".available-badge").textContent = stockWarning(item.id, next);
+        window.PolyRentalMotion?.quantityFeedback(card.querySelector('.quantity-value'), $("main-button"));
         if (delta > 0 && next > current) window.PolyRentalMotion?.flyToCart(card, $("main-button"));
         renderedCatalogQuantities = JSON.stringify([...state.quantities]);
         updateCartCounters(); saveDraft();
@@ -1140,7 +1173,7 @@
         if (sequence !== calendarSequence) return;
         calendarAvailability = data; calendarAvailabilityKey = dailyKey; rangeCalendar.render();
         const selected = startDate && endDate && bookingTimeValue("start") && bookingTimeValue("end") ? `${availabilityLabels[data.selected] || ""} на выбранный срок. ` : "";
-        status.textContent = `${selected}Зелёный — хватает всего, жёлтый — хватает части, красный — нет свободных экземпляров. Цвет каждой ячейки относится только к этому полному дню; выбранные даты и время проверяются отдельно.`;
+        status.textContent = selected.trim();
       } catch (_) { if (sequence === calendarSequence) status.textContent = "Не удалось подсветить даты. Нажмите «Проверить заявку», чтобы повторить проверку."; }
     }, 250);
   }
@@ -1188,6 +1221,7 @@
           updateCartCounters(); saveDraft(); return;
         }
         controls.querySelector("strong").textContent = String(next);
+        window.PolyRentalMotion?.quantityFeedback(controls.querySelector("strong"));
         controls.querySelector(".plus").disabled = next >= quantityLimit(id);
         const warning = row.querySelector('[role="status"]');
         if (warning) { if (next <= quantityLimit(id)) warning.remove(); else warning.textContent = stockWarning(id, next); }
@@ -1206,7 +1240,15 @@
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
     const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
-    $("review-content").innerHTML = `<section class="review-group"><h3 class="review-heading">Срок аренды</h3>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><p class="supporting">${escapeHtml(stockWarning(item.id, state.quantities.get(item.id)))}</p><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><section class="review-group"><h3 class="review-heading">Контакт для связи</h3>${reviewRow("Имя", $("customer-name").value.trim())}${reviewRow("Телефон или Telegram", $("customer-contact").value.trim())}</section>`;
+    $("review-content").innerHTML = `<section class="review-group"><div class="review-group-head"><h3 class="review-heading">Срок аренды</h3><button type="button" class="button ghost review-edit" data-step="2" aria-label="Изменить срок аренды">Изменить</button></div>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><div class="review-group-head"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><button type="button" class="button ghost review-edit" data-step="1" aria-label="Изменить оборудование">Изменить</button></div><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><p class="supporting">${escapeHtml(stockWarning(item.id, state.quantities.get(item.id)))}</p><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><p class="supporting">Заявка привязана к вашему Telegram. ФИО и телефон вы укажете в анкете после подтверждения.</p>`;
+    $("review-content").querySelectorAll(".review-edit").forEach(button => button.addEventListener("click", () => {
+      if (bookingSubmitting) return;
+      clearError(); state.step = Number(button.dataset.step);
+      if (state.step === 1) renderCart();
+      render();
+      const target = button.dataset.focus ? $(button.dataset.focus) : state.step === 2 ? $("range-calendar") : $("cart-items");
+      if (target) { scrollElementIntoView(target, {block:"start"}); if (button.dataset.focus) target.focus({preventScroll:true}); }
+    }));
     $("review-content").querySelectorAll(".review-minus, .review-plus").forEach((button) => button.addEventListener("click", () => {
       const id = Number(button.dataset.id), quantity = state.quantities.get(id) || 0;
       if (button.classList.contains("review-plus") && quantity >= quantityLimit(id)) return;
@@ -1228,7 +1270,6 @@
       state.step = 1; renderCart(); render();
     } else if (state.step === 1) {
       if (!state.quantities.size) return showError("Подборка пуста. Добавьте оборудование в каталоге.");
-      if (!validateContacts()) return;
       $("availability-result").hidden = true; $("availability-edit-cart").hidden = true; $("nearest-period").hidden = true;
       state.step = 2; render(); queueCalendarAvailability();
     } else if (state.step === 2) {
@@ -1245,6 +1286,9 @@
         showAvailabilityShortage(missing); render(); return;
       }
       $("availability-result").hidden = true; $("availability-edit-cart").hidden = true; $("nearest-period").hidden = true;
+      state.busy = true; render();
+      await refreshBookingQuestion();
+      state.busy = false;
       state.step = 3; renderReview(); render();
     } else if (state.step === 3) {
       await submit();
@@ -1252,6 +1296,7 @@
   }
 
   function back() {
+    if (bookingSubmitting) return;
     clearError();
     if (state.view === "admin" && !guardStaffNavigation()) return;
     if (catalogBack()) return;
@@ -1263,14 +1308,25 @@
   }
 
   async function submit() {
+    if (bookingSubmitting || cartLocked) return;
+    bookingSubmitting = true; state.busy = true; render();
+    let closing = false;
+    try { closing = await submitBooking() === "sent-to-chat"; }
+    finally { if (!closing) { bookingSubmitting = false; state.busy = false; render(); } }
+  }
+
+  async function submitBooking() {
     if (exceedsStock() || !availabilityFresh || unavailableSelection().length) { state.step = 2; render(); return showError("Проверьте доступность оборудования на выбранный срок."); }
     if (authorized && (cartDirty || cartSaving)) { try { await flushCart(); } catch (error) { return showError(`Не удалось сохранить подборку: ${error.message}`); } }
+    if (cartLocked || state.step !== 3) return;
     if (preview) return showError("Это демонстрация интерфейса. Отправка заявки доступна из Telegram.");
     if (!state.requestId) state.requestId = newRequestId();
-    const payload = { request_id: state.requestId, start: toIso($("start").value), end: toIso($("end").value), lines: [...state.quantities].map(([article_id, quantity]) => ({ article_id, quantity })), name: $("customer-name").value.trim(), contact: $("customer-contact").value.trim() };
+    const payload = { request_id: state.requestId, start: toIso($("start").value), end: toIso($("end").value), lines: [...state.quantities].map(([article_id, quantity]) => ({ article_id, quantity })) };
+    payload.rental_purpose = $('rental-purpose').value.trim();
     if (keyboardMode) {
+      if (new TextEncoder().encode(JSON.stringify(payload)).length > 4096) return showError('Заявка слишком большая для отправки через чат. Сократите цель аренды или откройте приложение кнопкой в сообщении бота.');
       state.busy = true; render();
-      try { tg.sendData(JSON.stringify(payload)); }
+      try { tg.sendData(JSON.stringify(payload)); clearDraft(); return "sent-to-chat"; }
       catch (_) { state.busy = false; render(); showError("Не удалось передать заявку боту. Попробуйте ещё раз."); }
       return;
     }
@@ -1278,12 +1334,15 @@
     try {
       const booking = await api("/api/miniapp/bookings", { method: "POST", body: JSON.stringify(payload) });
       state.booking = booking; state.step = 4; clearDraft();
+      state.quantities.clear(); state.requestId = null; availabilityFresh = false;
+      $("start").value = ""; $("end").value = "";
+      syncDateFields("start"); syncDateFields("end"); rangeCalendar.setRange("", "");
       if (Number.isInteger(state.cartVersion)) {
         try { const result = await api("/api/miniapp/cart", { method: "PUT", body: JSON.stringify({start:"", end:"", lines:[], version:state.cartVersion}) }); state.cartVersion = result.version; cartConfirmed = normalizedCart(result); cartDirty = false; rememberPendingCart(null); }
         catch (_) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Заявка отправлена, но очистить подборку на сервере не удалось."; }
       }
       $("done-title").textContent = `Заявка ${booking.human_number || `№${booking.id}`} создана`;
-      $("done-description").textContent = "Заявка будет ждать решения оператора без ограничения по времени. Статус доступен в профиле.";
+      $("done-description").textContent = "Статус заявки доступен в профиле. Оборудование будет зарезервировано после подтверждения сотрудником; затем потребуется заполнить анкету.";
       tg?.HapticFeedback?.notificationOccurred("success");
     } catch (error) {
       const changed = error.message.includes("Цена изменилась") || error.message.includes("занято") || error.message.includes("недоступно") || error.message.includes("Недостаточно свободных единиц");
@@ -1306,9 +1365,6 @@
       try {
         const data = new FormData(form);
         await api(`/api/miniapp/bookings/${order.id}/contact`, { method: "PATCH", body: JSON.stringify({ name: data.get("name"), contact: data.get("contact") }) });
-        $("customer-name").value = String(data.get("name") || "").trim();
-        $("customer-contact").value = String(data.get("contact") || "").trim();
-        saveContact();
         await showOrders();
       } catch (error) { showError(error.message); button.disabled = false; }
     });
@@ -1329,6 +1385,7 @@
   }
 
   async function showOrders() {
+    if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const sequence = ++profileLoadSequence;
     clearError(); state.view = "orders"; render();
@@ -1370,6 +1427,7 @@
         const toggle = document.createElement("summary"); toggle.className = "customer-order-toggle";
         toggle.innerHTML = `<span class="order-head"><strong>№ ${escapeHtml(order.human_number || String(order.id))}</strong><span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusNames[order.status] || order.status)}</span></span><span class="customer-order-period">${escapeHtml(`${shortRequestDateTime(order.starts_at)} — ${shortRequestDateTime(order.ends_at)} МСК`)}</span><span class="customer-order-items">${order.items.map((item) => `${escapeHtml(item.title || item.name)} × ${item.quantity}`).join(", ")}</span>`;
         const card = document.createElement("div"); card.className = "customer-order-body";
+        appendRentalPurpose(card, order);
         if (order.estimated_until) { const estimate = document.createElement("p"); estimate.textContent = `В обработке, ориентировочно до ${dateText(order.estimated_until)} МСК`; card.append(estimate); }
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
         help.addEventListener("click", () => openSupport("request", order.id)); card.append(help);
@@ -1388,6 +1446,7 @@
           state.quantities = new Map(order.items.map((item) => [item.id, item.quantity]));
           state.items = order.items.map((item) => ({ ...item, available_quantity: 0 }));
           state.requestId = null; state.booking = null; state.view = "flow"; state.step = 1;
+          $('rental-purpose').value = '';
           $("start").value = ""; $("end").value = "";
           syncDateFields("start"); syncDateFields("end");
           rangeCalendar.setRange("", ""); applyBookingDateLimits(); saveDraft(); renderCart(); render(); void loadItems();
@@ -1421,11 +1480,12 @@
         const statusTitle = document.createElement('strong'); statusTitle.textContent = ({pending:'Заявка на проверке',needs_changes:'Нужно исправить заявку',confirmed:'Заявка подтверждена',preparing:'Заказ комплектуется',ready:'Готова к выдаче',issued:'Оборудование у вас',return_inspection:'Возврат на проверке',returned:'Аренда завершена',cancelled:'Заявка отменена',expired:'Срок удержания истёк'})[order.status] || statusNames[order.status] || 'Статус заявки';
         const statusDetail = document.createElement('p'); statusDetail.className = 'customer-status-detail';
         statusDetail.textContent = order.status === 'pending' ? 'Ожидайте подтверждения оператора.' : order.status === 'confirmed' && order.identity_status === 'required' ? 'Заполните документы.' : order.identity_status === 'verified' && order.status === 'confirmed' ? 'Документы проверены.' : '';
+        if (order.next_action) { statusTitle.textContent=order.next_action.title; statusDetail.textContent=order.next_action.description; }
         statusPanel.append(statusLabel,statusTitle); if (statusDetail.textContent) statusPanel.append(statusDetail);
         const customerActions = document.createElement('details'); customerActions.className = 'request-more-actions customer-actions';
         const customerActionsTitle = document.createElement('summary'); customerActionsTitle.textContent = 'Действия с заявкой'; customerActions.append(customerActionsTitle);
-        const customerPrimaryLabels = new Set(['Внести изменения', 'Посмотреть изменения', 'Заполнить документы', 'Исправить данные', 'Получил', 'Сдаю оборудование']);
-        for (const node of [...card.childNodes]) { if (node.nodeType === 1 && (node.matches('button.primary, .stage-notice, .handover-progress') || (node.tagName === 'BUTTON' && customerPrimaryLabels.has(node.textContent)))) statusPanel.append(node); else customerActions.append(node); }
+        const customerPrimaryLabels = new Set(['Внести изменения', 'Посмотреть изменения', 'Заполнить документы', 'Исправить данные', 'Сдать оборудование']);
+        for (const node of [...card.childNodes]) { if (node.nodeType === 1 && (node.matches('button.primary, .stage-notice, .handover-progress, .equipment-features') || (node.tagName === 'BUTTON' && customerPrimaryLabels.has(node.textContent)))) statusPanel.append(node); else customerActions.append(node); }
         statusPanel.append(customerActions); card.append(statusPanel);
         const customerPeriod = reviewSection('Период аренды', 'request-summary'); customerPeriod.dataset.rentalStart = order.starts_at; customerPeriod.dataset.rentalEnd = order.ends_at; customerPeriod.dataset.rentalClosed = String(['returned','cancelled','expired'].includes(order.status));
         const customerDates = document.createElement('div'); customerDates.className = 'rental-period'; for (const date of [order.starts_at,order.ends_at]) { const value = document.createElement('span'); value.textContent = dateText(date); customerDates.append(value); } customerPeriod.append(customerDates); updateRentalProgress(customerPeriod); card.append(customerPeriod);
@@ -1573,7 +1633,7 @@
           const status = input?.closest(".field")?.querySelector(".file-draft-status");
           if (status) status.textContent = "Оператор запросил новое фото — загрузите замену.";
         }
-        const labels = { full_name: "ФИО", birth_date: "дата рождения", passport_combined: "серия и номер паспорта", passport_issued_at: "дата выдачи", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "учебное заведение", passport_main: "фото паспорта", passport_registration: "страница регистрации", student_front: "лицевая сторона студенческого" };
+        const labels = { full_name: "ФИО", phone: "телефон для связи", birth_date: "дата рождения", passport_combined: "серия и номер паспорта", passport_issued_at: "дата выдачи", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "учебное заведение", passport_main: "фото паспорта", passport_registration: "страница регистрации", student_front: "лицевая сторона студенческого" };
         feedback.innerHTML = `<strong>Нужно исправить:</strong> ${(current.review_fields || []).map((field) => escapeHtml(labels[field] || field)).join(", ") || "проверьте данные по комментарию оператора"}.<br>${escapeHtml(current.review_comment || "")}`;
         feedback.hidden = false; $("consent-step").hidden = true; $("identity-form").hidden = false;
         for (const field of current.review_fields || []) { const input = document.querySelector(`[name="${field}"]`); input?.closest(".field")?.classList.add("needs-fix"); }
@@ -1606,12 +1666,13 @@
     const bookingId = session.bookingId;
     const form = event.currentTarget; const button = $("identity-submit");
     const data = new FormData(form); const fields = {};
-    const textFields = ["full_name", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"];
+    const textFields = ["full_name", "phone", "birth_date", "passport_issued_at", "passport_issuer", "passport_division_code", "registration_address", "residential_address", "student_id_number", "student_institution"];
     for (const name of textFields) {
       const value = String(data.get(name) || ""); fields[name] = name === "student_id_number" ? value : value.trim();
     }
-    const labels = { full_name: "ФИО", birth_date: "дату рождения", passport_issued_at: "дату выдачи паспорта", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "вуз" };
+    const labels = { full_name: "ФИО", phone: "телефон для связи", birth_date: "дату рождения", passport_issued_at: "дату выдачи паспорта", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "вуз" };
     for (const name of textFields) if (!["student_id_number", "student_institution"].includes(name) && !fields[name]) { showIdentityFieldError(name, `Укажите ${labels[name]}.`); return; }
+    if (!/^\+?[0-9](?:[0-9 ()-]*[0-9])?$/.test(fields.phone) || fields.phone.replace(/\D/g, '').length < 10 || fields.phone.replace(/\D/g, '').length > 15) { showIdentityFieldError("phone", "Укажите телефон: от 10 до 15 цифр."); return; }
     const passportCombined = String(data.get("passport_combined") || "").replace(/\D/g, "");
     if (!/^\d{10}$/.test(passportCombined)) { showIdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера."); return; }
     fields.passport_series = passportCombined.slice(0, 4); fields.passport_number = passportCombined.slice(4);
@@ -1704,7 +1765,11 @@
   function clearRequestReview(card) {
     card.querySelector(".identity-check-review")?.remove();
     const host = card.querySelector(".request-form-host");
-    if (host) { host.dataset.reviewSequence = String(Number(host.dataset.reviewSequence || 0) + 1); host.querySelector(".review-loading")?.remove(); }
+    if (host) {
+      host.dataset.reviewSequence = String(Number(host.dataset.reviewSequence || 0) + 1); host.querySelector(".review-loading")?.remove();
+      const toggle = host.querySelector('.request-review-button');
+      if (toggle) { toggle.textContent = toggle.dataset.closedLabel; toggle.setAttribute('aria-label', toggle.dataset.closedLabel); toggle.setAttribute('aria-expanded', 'false'); }
+    }
     if (documentViewerBookingId === Number(card.dataset.bookingId)) closeDocumentViewer();
   }
 
@@ -1774,7 +1839,7 @@
       const result = await api(`/api/miniapp/admin/bookings/${order.id}/history?page=${page}&page_size=20`);
       if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
       body.replaceChildren();
-      const names = { customer_change_requested: "Клиент запросил изменения", customer_change_approved: "Запрос клиента на изменения одобрен", customer_change_rejected: "Запрос клиента на изменения отклонён", pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
+      const names = { operator_return_confirmed: "Сотрудник подтвердил фактический возврат без отметки клиента", customer_change_requested: "Клиент запросил изменения", customer_change_approved: "Запрос клиента на изменения одобрен", customer_change_rejected: "Запрос клиента на изменения отклонён", pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_force_edited: "Сотрудник применил изменения заявки", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
       if (!result.items?.length) { body.textContent = "Записей пока нет."; return; }
       const list = document.createElement("ol"); list.className = "request-history-list";
       for (const event of result.items) {
@@ -1838,6 +1903,7 @@
 
   let adminTabAnimations = [];
   async function showAdmin(mode = "orders") {
+    if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const changingAdminTab = state.view === "admin" && state.adminMode !== mode;
     const adminOrder = ['orders','catalog','repairs','support'];
@@ -1950,6 +2016,7 @@
         owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ${order.assignee_name || "Сотрудник"}`) : "Ответственный не назначен";
         toggle.append(owner);
         const body = document.createElement("div"); body.className = "request-body";
+        appendRentalPurpose(body, order);
         const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
         const summary = reviewSection("Период аренды", "request-summary");
         if (order.actionable_count) { const count = document.createElement("p"); count.textContent = `Требуют действия: ${order.actionable_count}`; summary.append(count); }
@@ -1982,7 +2049,7 @@
           mainBar.append(thumb, info);
           if (order.status === "pending") {
             const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact request-equipment-remove";
-            remove.textContent = "×"; remove.title = `Удалить позицию ${line.title || line.name}`; remove.setAttribute("aria-label", `Удалить позицию ${line.title || line.name}`);
+            remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>'; remove.title = `Удалить позицию ${line.title || line.name}`; remove.setAttribute("aria-label", `Удалить позицию ${line.title || line.name}`);
             remove.addEventListener("click", (event) => { event.stopPropagation(); beginRequestDeletion(order, row, line.id); }); mainBar.append(remove);
           }
           row.append(mainBar);
@@ -2064,6 +2131,13 @@
           }, order.id, ["manager","admin"].includes(state.role?.staff_role)?"secondary lock-exempt":"secondary"));
         }
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
+        if (order.status === 'issued' && !order.handover?.returning_at) {
+          nextStep.textContent = 'Примите оборудование, когда клиент его вернёт';
+          actions.append(actionButton('Принять без отметки клиента', async () => {
+            await workflowDialog('Начать приёмку', '<p>Оборудование фактически возвращено. Начать приёмку без отметки клиента?</p>', 'Начать приёмку', null,
+              async () => api(`/api/miniapp/admin/bookings/${order.id}/return-without-customer`, {method:'POST'}));
+          }, order.id, 'primary workflow-next'));
+        }
         if (order.status === "confirmed") {
           if (order.customer_change_request?.status === "pending") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент запросил изменения. Рассмотрите запрос до начала подготовки."; actions.append(note); }
           else if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
@@ -2092,7 +2166,15 @@
           actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
-          formHost.append(actionButton(order.identity_status === 'verified' ? "Посмотреть анкету" : "Проверить анкету", () => reviewIdentity(order, card), order.id, "primary workflow-next lock-exempt request-review-button", false));
+          const label = order.identity_status === 'verified' ? "Посмотреть анкету" : "Проверить анкету";
+          const reviewToggle = actionButton(label, () => {
+            if (formHost.querySelector('.identity-check-review, .review-loading')) {
+              clearRequestReview(card); reviewToggle.disabled = false; reviewToggle.focus({preventScroll:true});
+            }
+            else return reviewIdentity(order, card);
+          }, order.id, "primary workflow-next lock-exempt request-review-button", false);
+          reviewToggle.dataset.closedLabel = label; reviewToggle.setAttribute('aria-expanded', 'false');
+          formHost.append(reviewToggle);
         }
         if (["pending", "needs_changes", "confirmed", "preparing", "ready", "returned"].includes(order.status)) actions.append(actionButton("Отменить заявку", async () => { if (await confirmCancel(order.human_number || "", order.status === "returned")) await transitionAction("cancelled")(); }, order.id, "ghost danger"));
 
@@ -2248,7 +2330,7 @@
       rowActions.append(defect);
       if (order.status === "preparing" && !state.role?.pii_only) {
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost danger compact request-equipment-remove";
-        remove.textContent = "×"; remove.title = `Удалить экземпляр ${asset.name}`; remove.setAttribute("aria-label", `Удалить экземпляр ${asset.name}`);
+        remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>'; remove.title = `Удалить экземпляр ${asset.name}`; remove.setAttribute("aria-label", `Удалить экземпляр ${asset.name}`);
         remove.addEventListener("click", (event) => { event.stopPropagation(); beginRequestDeletion(order, row, null, asset.id); });
         rowActions.append(remove);
       }
@@ -2386,11 +2468,11 @@
       }, bookingId, "secondary lock-exempt", false));
     } else actions.append(changes);
     if (!canReview) { const note = document.createElement("p"); note.textContent = "Решение по анкете доступно на этапах подтверждения, подготовки и готовности к выдаче."; decision.append(note); }
-    const close = document.createElement("button"); close.className = "button ghost"; close.type = "button"; close.textContent = "Закрыть";
-    close.addEventListener("click", () => { clearRequestReview(requestCard); host.querySelector('.request-review-button')?.focus({ preventScroll: true }); });
     if (order.identity_status !== 'verified') { decision.append(actions); card.append(personal, documentSection, decision); }
     else card.append(personal, documentSection);
-    card.append(close); host.append(card);
+    host.append(card);
+    const toggle = host.querySelector('.request-review-button');
+    if (toggle) { toggle.textContent = 'Скрыть анкету'; toggle.setAttribute('aria-label', 'Скрыть анкету'); toggle.setAttribute('aria-expanded', 'true'); }
     card.focus({preventScroll:true}); requestAnimationFrame(() => scrollElementIntoView(card, {block:'start', inline:'nearest'}));
   }
 
@@ -2398,7 +2480,7 @@
     const dialog = $("identity-review-dialog");
     const form = $("identity-review-form");
     const fields = [
-      ["full_name", "ФИО"], ["birth_date", "Дата рождения"], ["passport_combined", "Серия и номер паспорта"],
+      ["full_name", "ФИО"], ["phone", "Телефон"], ["birth_date", "Дата рождения"], ["passport_combined", "Серия и номер паспорта"],
       ["passport_issued_at", "Дата выдачи паспорта"], ["passport_issuer", "Кем выдан паспорт"],
       ["passport_division_code", "Код подразделения"], ["registration_address", "Адрес регистрации"],
       ["residential_address", "Адрес проживания"], ["student_id_number", "Номер студенческого"],
@@ -2605,7 +2687,10 @@
         const button = event.currentTarget; button.disabled = true;
         try { await downloadCatalogTemplate(); }
         catch(error) { const message = dialog.querySelector(".csv-download-error"); message.textContent = error.message; }
-        finally { button.disabled = false; }
+        finally {
+          button.disabled = false;
+          window.PolyRentalDialogs?.restoreFocus(button);
+        }
       });
     }, async form => { imported = await api("/api/miniapp/admin/catalog/import-csv", {method:"POST", body:form}); });
     if (!data) return;
@@ -2696,7 +2781,7 @@
       tile.append(edit);
       if (category.code !== "generic") {
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "category-delete";
-        remove.setAttribute("aria-label", `Удалить категорию: ${category.name}`); remove.textContent = "×";
+        remove.setAttribute("aria-label", `Удалить категорию: ${category.name}`); remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>';
         remove.addEventListener("click", async () => {
           clearError();
           if (!window.confirm(`Удалить категорию «${category.name}»?`)) return;
@@ -2717,7 +2802,7 @@
     const categoryHeading = document.createElement("h3"); categoryHeading.id = "admin-catalog-heading"; categoryHeading.tabIndex = -1; categoryHeading.className = "catalog-screen-heading";
     categoryHeading.textContent = currentCategory?.name || (catalogView.query.trim() ? "Результаты поиска" : "Каталог оборудования");
     const categoryHeadingRow = document.createElement("div"); categoryHeadingRow.className = "catalog-heading-row";
-    const backButton = document.createElement('button'); backButton.type='button'; backButton.className='catalog-search-back'; backButton.setAttribute('aria-label','Назад'); backButton.textContent='←'; backButton.disabled = !catalogView.category; backButton.addEventListener('click',back);
+    const backButton = document.createElement('button'); backButton.type='button'; backButton.className='catalog-search-back'; backButton.setAttribute('aria-label','Назад'); backButton.innerHTML='<svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>'; backButton.disabled = !catalogView.category; backButton.addEventListener('click',back);
     const manageCategories = plainButton("", () => {
       catalogView.editingCategories = !catalogView.editingCategories;
       if (catalogView.query.trim()) { catalogView.query = ""; catalogView.page = 0; if (result.page != null) { void reloadCatalogPage(); return; } }
@@ -2749,6 +2834,7 @@
       const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
       card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><h3>${escapeHtml(catalogTitle(article))}</h3><p class="article-type">${escapeHtml(categoryLabel(article.category))}</p><button type="button" class="button ghost compact article-toggle" aria-expanded="${catalogView.expanded.has(article.id)}">${catalogView.expanded.has(article.id) ? "Скрыть" : "Подробнее"}</button></div><div class="article-head-actions"><span class="article-count" aria-label="Всего экземпляров: ${article.equipment.length}">${article.equipment.length} шт.</span></div></div><div class="article-collapse"><div class="article-collapse-inner"><details class="article-details"><summary>Параметры модели и комплектация</summary><p>${escapeHtml(article.name)}</p><p>Артикул: ${escapeHtml(article.sku)}</p><p class="composition-text">Комплектация: ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div></div></div>`;
       const collapse = card.querySelector(".article-collapse");
+      const header = card.querySelector(".article-card-head");
       const toggle = card.querySelector(".article-toggle");
       const setExpanded = expanded => {
         collapse.classList.toggle("is-open", expanded); collapse.inert = !expanded;
@@ -2757,7 +2843,25 @@
         if (expanded) catalogView.expanded.add(article.id); else catalogView.expanded.delete(article.id);
       };
       setExpanded(catalogView.expanded.has(article.id));
-      toggle.addEventListener("click", () => { const opening = !catalogView.expanded.has(article.id); setExpanded(opening); if (opening) card.scrollIntoView({block:"center", behavior:window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); });
+      const toggleDetails = () => setExpanded(!catalogView.expanded.has(article.id));
+      toggle.addEventListener("click", toggleDetails);
+      header.addEventListener("click", event => {
+        if (!event.target.closest("button, a, input, select, textarea, summary")) toggleDetails();
+      });
+      if (canManageItems && article.equipment.length) {
+        const occupancy = plainButton("Занятость вне сервиса", async () => {
+          if (!guardStaffNavigation()) return;
+          const assets = article.equipment;
+          if (assets.length === 1) return externalOccupancyDialog(assets[0]);
+          const options = assets.map(asset => `<option value="${asset.id}">${escapeHtml(asset.serial || asset.asset_code || String(asset.id))}</option>`).join("");
+          const data = await workflowDialog("Выберите экземпляр", `<label class="field"><span>Экземпляр оборудования</span><select name="equipment" required>${options}</select></label>`, "Открыть занятость");
+          if (data) await externalOccupancyDialog(assets.find(asset => String(asset.id) === data.get("equipment")));
+        }, "secondary compact article-occupancy");
+        const actions = document.createElement("div");
+        actions.className = "article-summary-actions";
+        toggle.before(actions);
+        actions.append(toggle, occupancy);
+      }
       const cardActions = document.createElement("div"); cardActions.className = "action-row";
       const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact icon-action"; editArticle.textContent = "✎"; editArticle.setAttribute("aria-label", `Изменить артикул: ${article.name}`); editArticle.title = "Изменить артикул";
       editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
@@ -2875,14 +2979,14 @@
   }
   function catalogDraftKey(editor) { return `polyrental-staff-catalog-draft-v1:${editor.type}:${editor.value?.id || "new"}:${editor.value?.article_id || ""}`; }
   function guardStaffNavigation() {
-    const forms = [...document.querySelectorAll("#admin-content form")].filter(staffFormDirty);
+    const forms = [...document.querySelectorAll("#admin-content form, #handover-settings-form, #booking-settings-form")].filter(form=>form.getClientRects().length&&staffFormDirty(form));
     if (!forms.length) return true;
     if (!window.confirm("Есть несохранённые изменения. Текстовые поля и файлы не восстанавливаются. Перейти в другой раздел?")) return false;
     forms.forEach(registerStaffForm);
     return true;
   }
   window.addEventListener("beforeunload", event => {
-    if ([...document.querySelectorAll("#admin-content form, .workflow-dialog form")].some(staffFormDirty)) { event.preventDefault(); event.returnValue = ""; }
+    if ([...document.querySelectorAll("#admin-content form, .workflow-dialog form, #handover-settings-form, #booking-settings-form")].some(staffFormDirty)) { event.preventDefault(); event.returnValue = ""; }
   });
   function installCatalogDraft(form, editor) {
     const key = catalogDraftKey(editor), baseline = safeCatalogFields(form);
@@ -3030,8 +3134,6 @@
         try { await api(`/api/miniapp/admin/catalog/equipment/${value.id}/owner`, {method:"PUT", body:JSON.stringify({name:data.get("name"), contact:data.get("contact")})}); registerStaffForm(ownerForm); ownerForm.querySelector('[role="status"]').textContent = "Владелец сохранён"; } catch (error) { showError(error.message); } finally { button.disabled = false; }
       });
       extras.append(ownerForm);
-      const externalSection = document.createElement("section"); externalSection.innerHTML = "<h4>Занятость вне сервиса</h4>";
-      externalSection.append(plainButton("Указать или изменить занятость", () => { if (guardStaffNavigation()) return externalOccupancyDialog(value); }, "secondary")); extras.append(externalSection);
       wrapper.append(extras); registerStaffForm(ownerForm); registerStaffForm(extras.querySelector(".feature-add")); void refreshFeatures().catch(error => showError(error.message));
     }
     return wrapper;
@@ -3146,8 +3248,25 @@
         if (!onSubmit) { finish(data);return; }
         pending=true;const buttons=[...form.querySelectorAll(dialog.classList.contains("catalog-photo-dialog") ? "button, input" : "button")], disabled=buttons.map(button=>button.disabled);buttons.forEach(button=>button.disabled=true);
         form.setAttribute("aria-busy", "true"); window.PolyRentalDialogs?.focus(dialog);
+        const previousError = form.querySelector(".workflow-error");
+        if (previousError) previousError.hidden = true;
         try { await onSubmit(data);pending=false;finish(data); }
-        catch(error) {pending=false;form.removeAttribute("aria-busy");buttons.forEach((button,index)=>button.disabled=disabled[index]);let message=form.querySelector(".workflow-error");if(!message){message=document.createElement("p");message.className="workflow-error field-error";message.setAttribute("role","alert");form.append(message);}message.textContent=error.message;window.PolyRentalDialogs?.focus(dialog);}
+        catch (error) {
+          pending = false;
+          form.removeAttribute("aria-busy");
+          buttons.forEach((button, index) => button.disabled = disabled[index]);
+          const message = previousError || document.createElement("p");
+          if (!previousError) {
+            message.className = "workflow-error";
+            message.setAttribute("role", "alert");
+            message.tabIndex = -1;
+            form.querySelector(".workflow-cancel").parentElement.before(message);
+          }
+          message.hidden = false;
+          message.textContent = error.message;
+          message.scrollIntoView({block:"nearest", behavior:"instant"});
+          message.focus({preventScroll:true});
+        }
       });
       document.body.append(dialog); window.PolyRentalDialogs?.refresh(); if (setup) setup(dialog);
       registerStaffForm(dialog.querySelector("form"));
@@ -3173,9 +3292,10 @@
     const list = document.createElement("ul");
     const isDone = status === "returned";
     let steps;
-    if (status === "ready") steps = [[false, "Сотрудник подтверждает выдачу"], [Boolean(handover.received_at), "Клиент подтверждает получение"]];
+    if (status === "ready") steps = [[false, "Сотрудник подтверждает выдачу"], ];
     else {
-      steps = [[Boolean(handover.returning_at) || isDone, "Клиент отметил сдачу оборудования"]];
+      steps = [[Boolean(handover.returning_at || handover.operator_return) || isDone,
+        handover.operator_return ? "Сотрудник подтвердил фактический возврат" : "Клиент отметил сдачу оборудования"]];
       if (admin) {
         const assets = order.assets || [];
         const checked = assets.length > 0 && assets.every(asset => Boolean(inspectionFor(order, asset, "check_in")));
@@ -3188,7 +3308,7 @@
   }
 
   function workflowSnapshot(result) {
-    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, customer_change_request: order.customer_change_request, can_request_changes: order.can_request_changes, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
+    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, change_type: order.change_type, customer_change_request: order.customer_change_request, can_request_changes: order.can_request_changes, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
   }
 
   function workflowRefreshSafe() {
@@ -3243,21 +3363,52 @@
     if (!authorized || preview || document.hidden) return;
     try { const result = await api('/api/miniapp/notifications/inbox?offset=0'); inboxUnread = result.unread; updateInboxDots(); } catch (_) { /* Retry on the next poll. */ }
   }
+  function notificationTime(value) {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+    if (minutes < 1) return 'Только что';
+    const relative = new Intl.RelativeTimeFormat('ru', {numeric:'auto'});
+    if (minutes < 60) return relative.format(-minutes, 'minute');
+    if (minutes < 1440) return relative.format(-Math.floor(minutes / 60), 'hour');
+    if (minutes < 10080) return relative.format(-Math.floor(minutes / 1440), 'day');
+    return new Intl.DateTimeFormat('ru', {day:'numeric', month:'short', timeZone:'Europe/Moscow'}).format(date);
+  }
+  function appendInboxItem(item) {
+    const row = document.createElement('article'); row.className = 'notification-item';
+    const icon = document.createElement('span'); icon.className = 'notification-item-icon'; icon.setAttribute('aria-hidden','true');
+    const symbol = ({booking:'box', support:'info'})[item.kind] || 'info';
+    icon.innerHTML = `<svg class="icon"><use href="#icon-${symbol}"></use></svg>`;
+    const copy = document.createElement('div'); copy.className = 'notification-item-copy';
+    const title = document.createElement('strong');
+    const lines = String(item.message || '').split('\n').map(line=>line.trim()).filter(line=>line && !line.startsWith('Автор:') && line !== 'Открыть заявку');
+    title.textContent = item.title ?? lines.shift() ?? 'Уведомление';
+    copy.append(title);
+    const summary = item.summary ?? lines.join(' ');
+    if (summary) { const message = document.createElement('p'); message.textContent = summary; copy.append(message); }
+    const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = notificationTime(item.created_at); date.title = dateText(item.created_at);
+    copy.append(date); row.append(icon, copy); $('notification-items').append(row);
+  }
   async function loadInboxPage(reset = false) {
     if (inboxBusy) return;
     inboxBusy = true;
+    $('notification-items').setAttribute('aria-busy','true');
+    $('notification-more').disabled = true; $('notification-retry').hidden = true;
     try {
       if (reset) { inboxOffset = 0; $('notification-items').replaceChildren(); }
       $('notification-status').textContent = 'Загрузка…';
       const result = await api(`/api/miniapp/notifications/inbox?offset=${inboxOffset}`);
-      for (const item of result.items) { const row = document.createElement('article'); row.className = 'notification-item'; const message = document.createElement('p'); message.textContent = item.message; const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = dateText(item.created_at); row.append(message, date); $('notification-items').append(row); }
+      for (const item of result.items) appendInboxItem(item);
       inboxOffset += result.items.length;
       $('notification-more').hidden = !result.has_more;
       $('notification-status').textContent = inboxOffset ? '' : 'Пока нет уведомлений';
       if (result.items.length) await api('/api/miniapp/notifications/inbox/read', {method:'POST',body:JSON.stringify({ids:result.items.map(item=>item.id)})});
       await refreshInbox();
-    } catch (_) { $('notification-status').textContent = 'Не удалось загрузить уведомления. Попробуйте ещё раз.'; }
-    finally { inboxBusy = false; }
+    } catch (_) {
+      $('notification-status').textContent = 'Не удалось загрузить уведомления';
+      $('notification-retry').hidden = false; $('notification-more').hidden = true;
+    }
+    finally { inboxBusy = false; $('notification-items').setAttribute('aria-busy','false'); $('notification-more').disabled = false; }
   }
   document.addEventListener('click', event => {
     const button = event.target.closest?.('.notification-bell'); if (!button) return;
@@ -3265,10 +3416,134 @@
     inboxOpener = button; setDialogHidden($('notification-dialog'), false); $('notification-title').focus({preventScroll:true}); void loadInboxPage(true);
   });
   $('notification-more').addEventListener('click', () => void loadInboxPage());
+  $('notification-retry').addEventListener('click', () => void loadInboxPage(inboxOffset === 0));
   $('notification-close').addEventListener('click', () => { setDialogHidden($('notification-dialog'), true); window.PolyRentalDialogs?.restoreFocus(inboxOpener); });
   $('notification-dialog').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); $('notification-close').click(); } });
   if (authorized && !preview) { void refreshInbox(); setInterval(() => void refreshInbox(), 15000); }
   function showStageNotice() { void claimStageNotices(); }
+  let customerHomeBusy = false, customerHomeData = '', readyInvitationBusy = false;
+  let readyInvitations = [];
+  const acknowledgedInvitations = new Set(), pendingInvitationAcks = new Set();
+  async function acknowledgeInvitation(id) {
+    acknowledgedInvitations.add(id); pendingInvitationAcks.add(id);
+    try { await api(`/api/miniapp/notifications/${id}/ack`, {method:'POST',body:'{}'}); pendingInvitationAcks.delete(id); }
+    catch (_) { /* Retry while open; unacknowledged invitations are never lost. */ }
+  }
+  function openCustomerBooking(id) {
+    selectedCustomerOrderId=id; state.profileTargetId=id;state.profileFilter='all';$('profile-filter').value='all';return showOrders();
+  }
+  async function startCustomerReturn(id) {
+    const order = await api(`/api/miniapp/bookings/${id}`);
+    if (order.status !== 'issued' && !(order.status === 'return_inspection' && order.handover?.legacy_issue && !order.handover?.returning_at)) {
+      await refreshCustomerHome(); return showError('Сдача уже отмечена или техника ещё не выдана. Откройте актуальную заявку.');
+    }
+    if (await workflowDialog('Сдать оборудование', `<p>Заявка ${escapeHtml(order.human_number || String(id))}. Вы уже передаёте оборудование сотруднику?</p><p>После подтверждения начнётся приёмка. Аренду завершит сотрудник после проверки.</p>${receiptSummary(order)}`, 'Да, передаю сотруднику', null,
+      async()=>api(`/api/miniapp/bookings/${id}/attest`,{method:'POST',body:JSON.stringify({action:'returning',issued_at:order.handover?.issued_at || null})}))) {
+      await refreshCustomerHome(); await openCustomerBooking(id);
+    }
+  }
+  async function refreshCustomerHome() {
+    if (!authorized || preview || document.hidden || customerHomeBusy) return;
+    customerHomeBusy=true;
+    try {
+      for (const id of [...pendingInvitationAcks]) await acknowledgeInvitation(id);
+      const result=await api('/api/miniapp/customer/next-actions');
+      const serialized=JSON.stringify(result.items || []);
+      if(serialized!==customerHomeData){
+        customerHomeData=serialized;$('customer-next').replaceChildren();
+        for(const item of result.items || []){
+          const card=document.createElement('article');card.className='customer-next-card';card.dataset.bookingId=String(item.booking_id);
+          const title=document.createElement('h3');title.textContent=`${item.human_number}: ${item.title}`;card.append(title);
+          if(item.equipment?.length){const summary=document.createElement('p');summary.className='supporting';summary.textContent=item.equipment.slice(0,5).map(row=>`${row.name} × ${row.quantity}`).join(', ')+(item.equipment.length>5?` и ещё ${item.equipment.length-5} поз.`:'');card.append(summary);}
+          for(const text of [item.description,item.pickup_location,item.pickup_instructions])if(text){const p=document.createElement('p');p.textContent=text;card.append(p);}
+          const action=plainButton(item.label,async()=>{
+            if(item.action==='return')await startCustomerReturn(item.booking_id);
+            else if(item.action==='identity')await openIdentity(item.booking_id);
+            else if(item.action==='support')await openSupport('request',item.booking_id);
+            else await openCustomerBooking(item.booking_id);
+          },'primary');card.append(action);
+          if(item.status==='ready'&&!item.pickup_location)card.append(plainButton('Уточнить место у оператора',()=>openSupport('request',item.booking_id),'ghost'));
+          $('customer-next').append(card);
+        }
+        $('customer-next').hidden=state.view!=='flow'||state.step!==0||!$('customer-next').children.length;
+      }
+      const pending=await api('/api/miniapp/notifications/pending');
+      readyInvitations=(pending.items||[]).filter(item=>!acknowledgedInvitations.has(item.event_id));
+    } catch (_) { /* Keep the last useful state; retry on the next activation. */ }
+    finally {customerHomeBusy=false;void showReadyInvitation();}
+  }
+  function readyDisplayAllowed(){
+    return !document.hidden&&!state.busy&&['flow','orders'].includes(state.view)&&(state.view!=='flow'||state.step===0)&&
+       !document.querySelector('.dialog-backdrop:not([hidden]), .contact-editor:not([hidden])')&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'');
+  }
+  async function showReadyInvitation(){
+    if(readyInvitationBusy||!readyInvitations.length||!readyDisplayAllowed())return;
+    const item=readyInvitations.shift();if(acknowledgedInvitations.has(item.event_id))return;
+    readyInvitationBusy=true;
+    try {
+      const current=await api(`/api/miniapp/bookings/${item.booking_id}`);
+      if(current.status!=='ready'||current.identity_status!=='verified'||new Date(current.ends_at)<=new Date())return;
+      if(!readyDisplayAllowed()){readyInvitations.unshift(item);return;}
+      const content=[`Заявка ${item.human_number}`,item.description,item.pickup_location,item.pickup_instructions].filter(Boolean).map(text=>`<p>${escapeHtml(text)}</p>`).join('');
+      const opened=await workflowDialog('Всё готово к выдаче',content,'Открыть заявку',dialog=>{dialog.classList.add('ready-invitation');dialog.querySelector('.workflow-cancel').textContent='Понятно';});
+      await acknowledgeInvitation(item.event_id);if(opened)await openCustomerBooking(item.booking_id);
+    } catch (_) { /* Remains pending on the server and will be retried. */ }
+    finally {readyInvitationBusy=false;}
+  }
+  function appendEquipmentFeatures(parent, order){
+    const items=order.equipment_details || order.handover?.snapshot || [];if(!items.length)return;
+    const section=document.createElement('section');section.className='equipment-features';
+    const heading=document.createElement('h4');heading.textContent='Особенности и комплектация';section.append(heading);
+    items.forEach((item,index)=>{
+      const title=document.createElement('strong');title.textContent=`${item.name} · экземпляр ${index+1}`;section.append(title);
+      const rows=(item.features||[]).map(feature=>`Особенность: ${feature.description}`);
+      if(!rows.length)rows.push('Известных особенностей нет.');
+      for(const component of item.components||[])rows.push(`${component.replacement_name||component.name}${['missing','faulty'].includes(component.state)?' — не выдано':''}`);
+      const p=document.createElement('p');p.textContent=rows.join('\n');section.append(p);
+    });
+    if(order.handover?.exceptions?.length){
+      const label=document.createElement('strong');label.textContent='Частичная выдача';section.append(label);
+      for(const item of order.handover.exceptions){const p=document.createElement('p');p.textContent=`${item.name}${item.component?` / ${item.component}`:''}: ${item.reason==='replacement'?'заменено':'не выдано'}${item.replacement_name?` — ${item.replacement_name}`:''}`;section.append(p);}
+    }
+    parent.append(section);
+  }
+  async function loadHandoverSettings(){
+    const form=$('handover-settings-form');form.inert=true;form.querySelector('button').disabled=true;
+    try{const data=await api('/api/miniapp/admin/handover-settings');for(const key of ['pickup_location','pickup_instructions'])form.elements[key].value=data[key]||'';registerStaffForm(form);form.querySelector('button').disabled=false;}
+    catch(error){$('handover-settings-status').textContent=error.message;}
+    finally{form.inert=false;}
+  }
+  function appendRentalPurpose(parent, order) {
+    if (!order.rental_purpose) return;
+    const section = reviewSection('Цель аренды', 'rental-purpose-summary');
+    const text = document.createElement('p'); text.textContent = order.rental_purpose;
+    text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere'; section.append(text); parent.append(section);
+  }
+  async function loadBookingSettings() {
+    const form = $('booking-settings-form'), button = form.querySelector('button'); form.inert = true; button.disabled = true;
+    try {
+      const data = await api('/api/miniapp/admin/booking-settings');
+      form.elements.rental_purpose_enabled.checked = data.rental_purpose_enabled;
+      registerStaffForm(form); button.disabled = false;
+    } catch (error) { $('booking-settings-status').textContent = error.message; }
+    finally { form.inert = false; }
+  }
+  $('booking-settings-form').addEventListener('submit', async event => {
+    event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button'); button.disabled = true;
+    try {
+      await api('/api/miniapp/admin/booking-settings', {method:'PUT', body:JSON.stringify({rental_purpose_enabled:form.elements.rental_purpose_enabled.checked})});
+      registerStaffForm(form); $('booking-settings-status').textContent = 'Настройки оформления сохранены';
+    } catch (error) { $('booking-settings-status').textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  $('handover-settings-form').addEventListener('submit',async event=>{
+    event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');button.disabled=true;
+    try{await api('/api/miniapp/admin/handover-settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(form)))});registerStaffForm(form);$('handover-settings-status').textContent='Настройки выдачи сохранены';}
+    catch(error){$('handover-settings-status').textContent=error.message;}finally{button.disabled=false;}
+  });
+  setInterval(()=>{if(!state.busy)void refreshCustomerHome();},15000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshCustomerHome();});
+  tg?.onEvent?.('activated',()=>void refreshCustomerHome());
   async function claimStageNotices() {
     if (!authorized || stageNoticesBusy || document.hidden) return;
     stageNoticesBusy = true;
@@ -3338,10 +3613,15 @@
 
   function moscowInput(value) { return new Date(new Date(value).getTime() + 3*3600000).toISOString().slice(0,16); }
 
-  async function editRequestDialog(order, manager = false, change = null) {
-    const values = change?.after || {start:order.starts_at,end:order.ends_at,lines:order.items.map(item=>({article_id:item.id,quantity:item.quantity,name:item.title||item.name}))};
-    const content=`<p>Время по МСК. Начало — с текущего дня, в рабочее время.</p><label class="field"><span>Начало</span><input name="start" type="datetime-local" min="${minimumBookingDate()}T00:00" value="${moscowInput(values.start)}" required></label><label class="field"><span>Возврат</span><input name="end" type="datetime-local" value="${moscowInput(values.end)}" required></label><div class="request-edit-lines">${values.lines.map(line=>`<label class="field"><span>${escapeHtml(line.name||order.items.find(item=>item.id===line.article_id)?.name||String(line.article_id))}</span><input name="quantity-${line.article_id}" type="number" min="0" max="30" value="${line.quantity}" required></label>`).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>Клиенту придёт уведомление. На подтверждение — 24 часа.</p>':""}`;
-    const data=await workflowDialog(manager?"Изменить заявку":"Исправить заявку",content,manager?"Подтвердить":"Подтверждаю",dialog=>{
+  async function editRequestDialog(order, manager = false, change = null, force = false) {
+    const forceUrl = `/api/miniapp/admin/bookings/${order.id}/force-edit`;
+    const edit = force ? await api(forceUrl) : null;
+    const values = edit?.draft || change?.after || {start:order.starts_at,end:order.ends_at,lines:order.items.map(item=>({article_id:item.id,quantity:item.quantity,name:item.title||item.name}))};
+    const catalogUrl = manager ? forceUrl + "/availability" : `/api/miniapp/bookings/${order.id}/edit-availability`;
+    const resetPreparation = ["preparing", "ready"].includes(order.status);
+    const notice = force ? (resetPreparation ? "Правки сохранятся сразу. Подтвердите заявку заново, затем соберите и проверьте комплект." : "Правки сохранятся сразу. Подтвердите заявку заново. Если клиенту уже отправлено предложение, оно закроется.") : "Клиенту придёт уведомление. На подтверждение — 24 часа.";
+    const content=`<p>Укажите сроки аренды по МСК.</p><label class="field"><span>Начало</span><input name="start" type="datetime-local" value="${moscowInput(values.start)}" required></label><label class="field"><span>Возврат</span><input name="end" type="datetime-local" value="${moscowInput(values.end)}" required></label><div class="request-edit-lines">${values.lines.map(line=>`<label class="field"><span>${escapeHtml(line.name||order.items.find(item=>item.id===line.article_id)?.name||String(line.article_id))}</span><input name="quantity-${line.article_id}" type="number" min="0" max="30" value="${line.quantity}" required></label>`).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>'+notice+'</p>':""}`;
+    const data=await workflowDialog(force ? "Изменить без согласования" : manager ? "Изменить заявку" : "Исправить заявку", content, force ? "Применить изменения" : manager ? "Подтвердить" : "Подтверждаю",dialog=>{
       const add=dialog.querySelector(".request-add-position");
       add.addEventListener("click",async()=>{
         const start=dialog.querySelector('[name="start"]').value, end=dialog.querySelector('[name="end"]').value;
@@ -3369,7 +3649,7 @@
             }
             const quantity=[...selected.values()].reduce((a,b)=>a+b,0);total.textContent=quantity ? `Выбрано: ${quantity} шт.` : 'Ничего не выбрано'; submit.disabled=!quantity;
           };
-          const load=async()=>{retry.hidden=true;status.textContent='';showLoading(host,'');submit.disabled=true;try {const result=await api(`/api/miniapp/availability?${new URLSearchParams({start:start+":00+03:00",end:end+":00+03:00"})}`);items=result.all_items||result.items||[];render();}catch(error){host.replaceChildren();status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
+          const load=async()=>{retry.hidden=true;status.textContent='';showLoading(host,'');submit.disabled=true;try {const result=await api(`${catalogUrl}?${new URLSearchParams({start:start+":00+03:00",end:end+":00+03:00"})}`);items=result.all_items||result.items||[];render();}catch(error){host.replaceChildren();status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
           search.addEventListener('input',render);retry.addEventListener('click',load);void load();
         },async()=>{
           for(const [id,quantityValue] of selected){
@@ -3383,7 +3663,8 @@
       });
     },async data=>{
       const proposed={start:`${data.get("start")}:00+03:00`,end:`${data.get("end")}:00+03:00`,lines:[...data].filter(([key])=>key.startsWith("quantity-")).map(([key,value])=>({article_id:Number(key.slice(9)),quantity:Number(value)})).filter(line=>line.quantity>0)};
-      if(manager)await api(`/api/miniapp/admin/bookings/${order.id}/changes`,{method:"POST",body:JSON.stringify({change_type:"manager_edit",comment:data.get("comment"),proposed})});
+      if (force) await api(forceUrl, {method:"PUT", body:JSON.stringify({...proposed, comment:data.get("comment"), revision:edit.revision})});
+      else if(manager)await api(`/api/miniapp/admin/bookings/${order.id}/changes`,{method:"POST",body:JSON.stringify({change_type:"manager_edit",comment:data.get("comment"),proposed})});
       else if(change)await api(`/api/miniapp/bookings/${order.id}/changes/respond`,{method:"POST",body:JSON.stringify({change_id:change.id,accept:true,corrected:proposed})});
       else await api(`/api/miniapp/bookings/${order.id}`,{method:"PUT",body:JSON.stringify(proposed)});
     });
@@ -3417,10 +3698,14 @@
       const change=await api(`/api/miniapp/bookings/${order.id}/changes`);
       await workflowDialog("Заявка отклонена",`<p>${escapeHtml(change?.comment || "")}</p>`,"Закрыть");
     }));
-    if (order.status === "needs_changes" || order.change_status === "unanswered") {
+    if (order.change_type === "staff_edit" || order.status === "needs_changes" || order.change_status === "unanswered") {
       card.append(plainButton(order.change_status === "unanswered" ? "Клиент не ответил: решение у менеджера" : request?.status === "approved" ? "Внести изменения" : "Посмотреть изменения", async () => {
         const change = await api(`/api/miniapp/bookings/${order.id}/changes`);
         if (!change) return;
+        if (change.change_type === "staff_edit") {
+          await workflowDialog("Изменения заявки", `<p>Сотрудник уже применил изменения.</p><p>${escapeHtml(change.comment || "")}</p>${changeDetailsHtml(equipmentComparison(change.before, change.after))}`, "Закрыть");
+          return;
+        }
         if (change.change_type === "client_fix") { const data = await workflowDialog("Нужно исправить", `<p>${escapeHtml(change.comment)}</p>`, "Перейти к исправлению"); if (data) await editRequestDialog(order,false,change); return; }
         const diff = `<p>${escapeHtml(change.comment || "")}</p>${changeDetailsHtml(equipmentComparison(change.before, change.after))}<p>${change.deadline ? `Ответить до ${escapeHtml(dateText(change.deadline))} МСК` : ""}</p>`;
         const response = await workflowDialog("Изменения заявки", `${diff}<label class="field"><span>Решение</span><select name="decision"><option value="accept">Подтверждаю</option><option value="dispute">Оспорить</option></select></label><label class="field"><span>Комментарий при оспаривании</span><textarea name="comment" maxlength="2000"></textarea></label>`, "Подтверждаю", (dialog) => { dialog.querySelector("select").addEventListener("change", (event) => { dialog.querySelector("textarea").required = event.target.value === "dispute"; }); }, async data=>api(`/api/miniapp/bookings/${order.id}/changes/respond`,{method:"POST",body:JSON.stringify({change_id:change.id,accept:data.get("decision")==="accept",comment:data.get("comment")})}));
@@ -3428,17 +3713,12 @@
         await showOrders();
       }));
     }
+    appendEquipmentFeatures(card, order);
     appendHandoverProgress(card, order, false);
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
     if (order.receipt_available || order.receipt_preview_available) card.append(plainButton("Предпросмотр расписки",()=>previewReceipt(order)));
     if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.docx`)));
-    if (order.status === "issued" && !order.handover?.received_at) card.append(plainButton("Получил", async () => {
-      const data = await workflowDialog("Получение оборудования", receiptSummary(order) + (order.partial_issue ? '<label class="check-row"><input name="acknowledged" type="checkbox" required><span>С перечнем ознакомлен</span></label>' : ""), "Подтверждаю",null,async data=>api(`/api/miniapp/bookings/${order.id}/attest`,{method:"POST",body:JSON.stringify({action:"received",acknowledged:data.get("acknowledged")==="on"})}));
-      if (data) await showOrders();
-    },"primary"));
-    if ((order.status === "issued" || (order.status === "return_inspection" && order.handover?.legacy_issue)) && !order.handover?.returning_at) card.append(plainButton("Сдаю оборудование", async () => {
-      if (await workflowDialog("Сдаю оборудование", receiptSummary(order), "Подтверждаю",null,async()=>api(`/api/miniapp/bookings/${order.id}/attest`,{method:"POST",body:JSON.stringify({action:"returning"})}))) await showOrders();
-    },"primary"));
+    if ((order.status === "issued" || (order.status === "return_inspection" && order.handover?.legacy_issue)) && !order.handover?.returning_at) card.append(plainButton("Сдать оборудование", () => startCustomerReturn(order.id),"primary"));
   }
 
   function appendAdminWorkflow(actions, order) {
@@ -3456,6 +3736,10 @@
     }
     if (manager && ["pending","needs_changes","confirmed","preparing","ready","issued","return_inspection"].includes(order.status)) actions.append(actionButton(order.assignee_id ? "Передать заявку" : "Назначить ответственного", () => chooseAssignee(order), order.id, "secondary lock-exempt"));
     if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; actions.append(badge); }
+    if (state.role?.staff_role && ["pending","needs_changes","confirmed","preparing","ready"].includes(order.status)) {
+      const style = order.status === "needs_changes" ? "primary workflow-next" : "secondary";
+      actions.append(actionButton("Изменить без согласования", () => editRequestDialog(order, true, null, true), order.id, style, false));
+    }
     if (manager && ["pending","confirmed"].includes(order.status)) {
       actions.append(actionButton("Изменить заявку", () => editRequestDialog(order,true), order.id,"secondary",false));
       actions.append(actionButton("Запросить исправление заявки", async () => {
@@ -3806,6 +4090,7 @@
   $("clear-cart").addEventListener("click", () => {
     if (cartLocked || state.busy || !state.quantities.size || !window.confirm("Очистить корзину? Все выбранные позиции будут удалены.")) return;
     state.quantities.clear(); state.requestId = null; availabilityFresh = false; nearestProposal = null;
+    $('rental-purpose').value = '';
     queueCalendarAvailability(); renderItems(); renderCart(); saveDraft(); render();
   });
   $("client-search-hide-keyboard").addEventListener("click", () => $("client-catalog-search").blur());
@@ -3863,26 +4148,38 @@
   $("availability-edit-cart").addEventListener("click", () => { state.step = 1; renderCart(); render(); });
   $("top-back-button").addEventListener("click", back);
   let settingsReturnScroll = 0;
+  function settingsTransition(host, change) {
+    if (window.PolyRentalMotion?.surface) window.PolyRentalMotion.surface(host, change); else change();
+  }
   function selectSettingsTab(name) {
-    for (const key of ['notifications', 'calendar', 'staff']) {
-      const selected = key === name, tab = $(`settings-tab-${key}`);
-      tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
-      $(`settings-${key}`).hidden = !selected;
-    }
+    settingsTransition($('admin-settings'), () => {
+      for (const key of ['notifications', 'calendar', 'booking', 'handover', 'staff']) {
+        const selected = key === name, tab = $(`settings-tab-${key}`);
+        tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
+        $(`settings-${key}`).hidden = !selected;
+      }
+    });
   }
   function closeAdminSettings() {
-    $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open');
-    $('admin-heading').textContent = 'Управление'; syncCatalogBackButton();
+    window.PolyRentalMotion?.cancelSurface($('admin-settings'));
+    settingsTransition($('admin-panel'), () => {
+      $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open');
+      changeHeading($('admin-heading'), 'Управление'); syncCatalogBackButton();
+    });
     window.scrollTo(0, settingsReturnScroll); $('admin-settings-open').focus({preventScroll:true});
   }
   $('admin-settings-open').addEventListener('click', () => {
     if (!guardStaffNavigation() || state.role?.pii_only) return;
-    settingsReturnScroll = window.scrollY; $('settings-tab-staff').hidden = state.role?.staff_role !== 'admin';
-    selectSettingsTab('notifications'); $('admin-settings').hidden = false; $('admin-panel').classList.add('settings-open');
-    $('admin-heading').textContent = 'Настройки'; $('operator-notification-settings').open = true;
+    settingsReturnScroll = window.scrollY; $('settings-tab-handover').hidden = state.role?.staff_role !== 'admin'; if (state.role?.staff_role === 'admin') void loadHandoverSettings(); $('settings-tab-staff').hidden = state.role?.staff_role !== 'admin';
+    $('settings-tab-booking').hidden = state.role?.staff_role !== 'admin'; if (state.role?.staff_role === 'admin') void loadBookingSettings();
+    window.PolyRentalMotion?.cancelSurface($('admin-settings'));
+    settingsTransition($('admin-panel'), () => {
+      selectSettingsTab('notifications'); $('admin-settings').hidden = false; $('admin-panel').classList.add('settings-open');
+      changeHeading($('admin-heading'), 'Настройки'); $('operator-notification-settings').open = true;
+    });
     syncCatalogBackButton(); window.scrollTo(0, 0); $('admin-heading').focus({preventScroll:true});
   });
-  for (const name of ['notifications', 'calendar', 'staff']) $('settings-tab-' + name).addEventListener('click', () => selectSettingsTab(name));
+  for (const name of ['notifications', 'calendar', 'booking', 'handover', 'staff']) $('settings-tab-' + name).addEventListener('click', () => selectSettingsTab(name));
   $('admin-settings').querySelector('[role="tablist"]').addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden);
@@ -4069,6 +4366,7 @@
     finally { state.onboardingLoading = false; showPendingRelease(); }
   }
   function enterClientMode() {
+    if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     clearError();
     if (state.role?.admin && state.view === "admin") {
@@ -4105,27 +4403,62 @@
   $("profile-number").addEventListener("input", () => { clearTimeout(profileSearchTimer); profileLoadSequence += 1; profileSearchTimer = setTimeout(applyProfileSearch, 350); });
   $("profile-search").addEventListener("submit", (event) => { event.preventDefault(); applyProfileSearch(); });
   $("profile-avatar-image").addEventListener("error", () => { $("profile-avatar-image").hidden = true; $("profile-avatar-fallback").hidden = false; });
-  $("profile-identity-toggle").addEventListener("click", async () => {
-    const button = $("profile-identity-toggle"), fields = $("profile-identity-fields");
-    if (button.getAttribute("aria-expanded") === "true") { profileIdentitySequence++; profileIdentityData = null; fields.replaceChildren(); fields.hidden = true; button.setAttribute("aria-expanded", "false"); button.textContent = "Показать данные"; $("profile-identity-edit").hidden = true; return; }
-    const sequence = ++profileIdentitySequence; button.disabled = true;
+  const profileFieldLabels = {full_name:"ФИО", phone:"Телефон для связи", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
+  function resetProfileIdentity() {
+    profileIdentitySequence++; profileIdentityData = null;
+    const fields = $("profile-identity-fields"), toggle = $("profile-identity-toggle");
+    fields.replaceChildren(); fields.hidden = false; fields.classList.add('profile-fields-masked'); fields.setAttribute('aria-busy','false');
+    $("profile-identity-edit").hidden = true; toggle.hidden = true; toggle.disabled = false; toggle.setAttribute('aria-expanded','false');
+    $("profile-identity-hint").textContent = 'Нажмите на любое скрытое поле, чтобы показать все данные.';
+  }
+  function setProfileIdentityMasked(masked) {
+    const fields = $("profile-identity-fields"), toggle = $("profile-identity-toggle");
+    fields.classList.toggle('profile-fields-masked',masked);
+    for (const row of fields.querySelectorAll('.profile-identity-row')) {
+      row.querySelector('.profile-identity-value').setAttribute('aria-hidden',String(masked));
+      if (masked) { row.setAttribute('role','button'); row.tabIndex=0; row.setAttribute('aria-label',`Показать все данные: ${row.dataset.label}`); }
+      else { row.removeAttribute('role'); row.removeAttribute('tabindex'); row.removeAttribute('aria-label'); }
+    }
+    const hasData=Boolean(Object.keys(profileIdentityData || {}).length);
+    toggle.hidden=!hasData; toggle.textContent=masked?'Показать данные':'Скрыть данные'; toggle.setAttribute('aria-expanded',String(!masked));
+    $("profile-identity-edit").hidden=!hasData; $("profile-identity-edit").disabled=masked;
+  }
+  function revealProfileIdentity() { if (profileIdentityData) setProfileIdentityMasked(false); }
+  async function loadProfileIdentity(masked=true) {
+    const fields=$("profile-identity-fields"),sequence=++profileIdentitySequence;
+    fields.setAttribute('aria-busy','true'); fields.textContent='Загружаем данные анкеты…';
     try {
-      const result = await api("/api/miniapp/profile/identity");
-      if (sequence !== profileIdentitySequence || state.view !== "orders") return;
-      fields.replaceChildren(); profileIdentityData = result.fields || {};
-      const labels = {full_name:"ФИО", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
-      for (const [key, label] of Object.entries(labels)) { if (!result.fields?.[key]) continue; const row = document.createElement("p"); const title = document.createElement("strong"); title.textContent = `${label}: `; row.append(title, document.createTextNode(String(result.fields[key]))); fields.append(row); }
-      if (!fields.childElementCount) fields.textContent = "Сохранённой анкеты пока нет.";
-      fields.hidden = false; button.setAttribute("aria-expanded", "true"); button.textContent = "Скрыть данные"; $("profile-identity-edit").hidden = !Object.keys(result.fields || {}).length;
-    } catch (error) { if (sequence === profileIdentitySequence && state.view === "orders") showError(error.message); }
-    finally { button.disabled = false; }
-  });
+      const result=await api('/api/miniapp/profile/identity');
+      if(sequence!==profileIdentitySequence || state.view!=='orders' || !$("profile-disclosure").open)return;
+      fields.replaceChildren(); profileIdentityData=result.fields || {};
+      for(const [key,label] of Object.entries(profileFieldLabels)) {
+        if(!profileIdentityData[key])continue;
+        const row=document.createElement('p'),title=document.createElement('strong'),value=document.createElement('span');
+        row.className='profile-identity-row'; row.dataset.label=label; title.textContent=`${label}:`;
+        value.className='profile-identity-value'; value.textContent=String(profileIdentityData[key]);
+        row.append(title,value);
+        row.addEventListener('click',()=>{if(fields.classList.contains('profile-fields-masked'))revealProfileIdentity();});
+        row.addEventListener('keydown',event=>{if(fields.classList.contains('profile-fields-masked')&&['Enter',' '].includes(event.key)){event.preventDefault();revealProfileIdentity();}});
+        fields.append(row);
+      }
+      if(!fields.childElementCount)fields.textContent='Сохранённой анкеты пока нет.';
+      $("profile-identity-hint").textContent=Object.keys(profileIdentityData).length?'Нажмите на поле, чтобы показать данные. Их можно скрыть кнопкой ниже.':'Анкета заполняется после подтверждения заявки.';
+      setProfileIdentityMasked(masked);
+    }catch(error){
+      if(sequence===profileIdentitySequence&&state.view==='orders'){
+        fields.replaceChildren(); const retry=document.createElement('button'); retry.type='button';retry.className='button secondary';retry.textContent='Повторить загрузку';retry.addEventListener('click',()=>loadProfileIdentity());fields.append(retry);showError(error.message);
+      }
+    }finally{if(sequence===profileIdentitySequence)fields.setAttribute('aria-busy','false');}
+  }
+  $("profile-disclosure").addEventListener('toggle',()=>{if($("profile-disclosure").open)void loadProfileIdentity();else resetProfileIdentity();});
+  $("profile-identity-toggle").addEventListener('click',()=>setProfileIdentityMasked(!$("profile-identity-fields").classList.contains('profile-fields-masked')));
+  resetProfileIdentity();
   $("profile-identity-edit").addEventListener("click", async () => {
     if (!profileIdentityData) return;
-    const labels = {full_name:"ФИО", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
+    const labels = {full_name:"ФИО", phone:"Телефон для связи", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
     const form = Object.entries(labels).map(([name, label]) => `<label class="field"><span>${escapeHtml(label)}</span><input name="${name}" type="${["birth_date", "passport_issued_at"].includes(name) ? "date" : "text"}" maxlength="500" value="${escapeHtml(profileIdentityData[name] || "")}" ${name.startsWith("student_") ? "" : "required"}></label>`).join("");
     const result = await workflowDialog("Редактировать личные данные", `<p>Изменения будут использованы при заполнении следующих заявок.</p>${form}`, "Сохранить", null, async data => api("/api/miniapp/profile/identity", {method:"PUT", body:JSON.stringify(Object.fromEntries(Object.keys(labels).map(key => [key, data.get(key) || ""])))}));
-    if (result && state.view === "orders") { $("profile-identity-toggle").click(); $("profile-identity-toggle").click(); }
+    if (result && state.view === "orders") { resetProfileIdentity(); await loadProfileIdentity(false); }
   });
   $("profile-sort").addEventListener("change", (event) => { state.profileSort = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-filter").addEventListener("change", (event) => { state.profileTargetId = null; state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
@@ -4181,6 +4514,7 @@
       if (!identitySessionCurrent(session)) return;
       const version = (session.photoVersions.get(input.name) || 0) + 1; session.photoVersions.set(input.name, version);
       input.value="";
+      window.PolyRentalFileDrop?.clear(input);
       input.required=true;
       if (!state.identityRequiredPhotos.includes(input.name)) state.identityRequiredPhotos.push(input.name);
       const status=input.closest(".field").querySelector(".file-draft-status"); if (status) status.textContent="Фото удалено. Загрузите новое перед отправкой.";
@@ -4199,7 +4533,7 @@
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
   for (const id of ["start", "end"]) $(`${id}-time`).addEventListener("input", periodChanged);
-  for (const id of ["customer-name", "customer-contact"]) $(id).addEventListener("input", () => { state.requestId = null; contactEdited = true; fieldError(id, ""); saveContact(); });
+
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
   passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });
   const divisionInput = document.querySelector('[name="passport_division_code"]');
@@ -4211,7 +4545,7 @@
   registrationInput?.addEventListener("input", () => { if (sameAddressInput?.checked) residentialInput.value = registrationInput.value; });
 
   const hasDraft = restoreDraft();
-  const hasSavedContact = restoreContact();
+  try { localStorage.removeItem(contactKey); } catch (_) {}
   void pruneExpiredIdentityPhotos();
   installKeyboardBookingTimes();
   syncDateFields("start"); syncDateFields("end");
@@ -4243,10 +4577,6 @@
     img.src = url.href; tabAvatar.append(img);
   } catch (_) { tabAvatar.classList.remove("avatar-loading"); }
   if (!preview) void api("/api/miniapp/catalog/categories").then(result => { setCategories(result.items || []); render(); if (state.view === "flow" && state.step === 0) renderItems(); }).catch(() => {});
-  if (authorized && profile && !$("customer-name").value) {
-    $("customer-name").value = [profile.first_name, profile.last_name].filter(Boolean).join(" ").slice(0, 200);
-  }
-  void restoreLastBookingContact(hasSavedContact);
   if (preview) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Демонстрация интерфейса: можно пройти шаги, но заявка не отправляется."; }
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
@@ -4276,8 +4606,11 @@
         const pending = readPendingCart();
         if (pending) { cartPending = pending; showCartSyncProblem("Не удалось проверить серверную подборку. Подключитесь к сети для выбора действия."); }
       }
+      void refreshCustomerHome();
       void claimStageNotices();
       const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
+      const linkedIdentity = /^identity_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("identity");
+      if (linkedIdentity && /^\d+$/.test(linkedIdentity)) { clearIdentityRestoreKey(); return openIdentity(Number(linkedIdentity)); }
       const linkedBooking = /^booking_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("booking");
       if (linkedBooking && /^\d+$/.test(linkedBooking)) {
         clearIdentityRestoreKey();

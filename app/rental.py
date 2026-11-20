@@ -156,8 +156,8 @@ def active_operation_leases():
 _HISTORY_STATUS_ACTIONS = {"created", "pending", "confirmed", "preparing", "ready", "issued",
                            "return_inspection", "returned", "cancelled", "expired"}
 _HISTORY_OPERATION_ACTIONS = {"act_signed", "contact_updated", "repair_closed", "request_deleted", "request_restored", "assignee_cleared", "test_hidden", "test_unhidden", "test_flag_on", "test_flag_off", "delete_failed", "returned_for_rework"}
-_HISTORY_OPERATION_ACTIONS.update({"customer_received", "customer_returning", "paper_issue_signed", "paper_return_signed",
-    "request_changes_proposed", "request_changes_disputed", "request_changes_unanswered", "request_updated",
+_HISTORY_OPERATION_ACTIONS.update({"operator_return_confirmed", "customer_received", "customer_returning", "paper_issue_signed", "paper_return_signed",
+    "request_changes_proposed", "request_changes_disputed", "request_changes_unanswered", "request_updated", "request_force_edited",
     "return_finding_existing", "return_finding_damage", "return_finding_lost", "legacy_receipt_migrated"})
 _HISTORY_OPERATION_ACTIONS.add("request_rejected")
 _HISTORY_OPERATION_ACTIONS.update({"customer_change_requested", "customer_change_approved", "customer_change_rejected"})
@@ -234,14 +234,14 @@ def validated_rate(value):
         raise ValueError("Укажите корректную ставку") from exc
 
 
-def validate_interval(start, end, enforce_booking_notice=False):
+def validate_interval(start, end, enforce_booking_notice=False, *, allow_past_start=False):
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("Укажите корректные дату и время начала и возврата")
     if enforce_booking_notice:
         from .schedule import validate_planned_slot
         validate_planned_slot(start, "Выдача")
         validate_planned_slot(end, "Приём")
-    if start < now() - timedelta(minutes=1):
+    if not allow_past_start and start < now() - timedelta(minutes=1):
         raise ValueError("Начало аренды уже прошло")
 
 
@@ -356,7 +356,7 @@ def _nearest_free_start(session, article, start, end, capacity):
 class AvailabilitySnapshot:
     """Batch the equipment and reservation data used for availability queries."""
 
-    def __init__(self, session, article_ids, start, end):
+    def __init__(self, session, article_ids, start, end, *, exclude_booking_id=None):
         from .db import BookingHandover, EquipmentBlock, EquipmentOwner
         from .inventory import MAIN_OWNER
         self.capacities = defaultdict(int)
@@ -381,6 +381,8 @@ class AvailabilitySnapshot:
         booking_conditions = (Booking.status.in_(RESERVING_STATUSES),
             or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"), Booking.starts_at < end,
             Booking.ends_at > start)
+        if exclude_booking_id is not None:
+            booking_conditions += (Booking.id != exclude_booking_id,)
         bookings = session.execute(select(Booking.id, Booking.status, Booking.starts_at, Booking.ends_at, BookingHandover.data)
             .outerjoin(BookingHandover, BookingHandover.booking_id == Booking.id).where(*booking_conditions)).all()
         if not bookings:
@@ -438,12 +440,12 @@ class AvailabilitySnapshot:
         return sorted(dates)
 
 
-def _availability_rows(session, articles, start, end):
+def _availability_rows(session, articles, start, end, *, exclude_booking_id=None):
     from .catalog_images import image_data
     previews = image_data(session, [article.id for article in articles])
     article_ids = [article.id for article in articles]
     horizon = end + timedelta(days=366)
-    snapshot = AvailabilitySnapshot(session, article_ids, start, horizon)
+    snapshot = AvailabilitySnapshot(session, article_ids, start, horizon, exclude_booking_id=exclude_booking_id)
     result = []
     for article in articles:
         owners = sorted(snapshot.owners[article.id])
@@ -476,12 +478,12 @@ def _availability_rows(session, articles, start, end):
     return result
 
 
-def availability(start, end):
-    validate_interval(start, end)
+def availability(start, end, *, allow_past_start=False, exclude_booking_id=None):
+    validate_interval(start, end, allow_past_start=allow_past_start)
     with Session.begin() as session:
         expire_holds(session)
         articles = session.scalars(select(Article).where(Article.is_active.is_(True), Article.archived_at.is_(None)).order_by(Article.name, Article.id)).all()
-        return _availability_rows(session, articles, start, end)
+        return _availability_rows(session, articles, start, end, exclude_booking_id=exclude_booking_id)
 
 
 def availability_page(start, end, page=0, page_size=20, query="", selected_ids=(), category=""):
@@ -637,7 +639,7 @@ def _normalize_lines(session, requested):
 
 
 def create_booking(customer_id, customer_name, customer_contact, start, end, requested,
-                   request_id=None, expected_total=None, return_created=False):
+                   request_id=None, expected_total=None, return_created=False, rental_purpose=""):
     try:
         with Session.begin() as session:
             if request_id:
@@ -647,6 +649,8 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                     Booking.customer_id == customer_id, Booking.client_request_id == request_id))
                 if previous:
                     return (previous, False) if return_created else previous
+            from .booking_settings import normalize_rental_purpose
+            rental_purpose = normalize_rental_purpose(rental_purpose)
             session.execute(text("INSERT INTO client_profiles (telegram_id, created_at) VALUES (:id, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT DO NOTHING"), {"id": customer_id})
             client_profile = session.get(ClientProfile, customer_id, with_for_update=True)
             if client_profile and client_profile.client_blocked:
@@ -677,6 +681,7 @@ def create_booking(customer_id, customer_name, customer_contact, start, end, req
                 human_number=format_request_number(year, sequence), created_at=created_at,
                 is_test=all(article.is_test for article, _, _, _, _ in normalized),
                 customer_name=customer_name.strip(), customer_contact=customer_contact.strip(),
+                rental_purpose=rental_purpose,
                 starts_at=start, ends_at=end, status="pending",
                 hold_expires_at=None, identity_status="not_required",
             )
@@ -1450,7 +1455,7 @@ def return_for_rework(booking_id, target, comment, actor_id, actor_name=""):
             from .db import BookingHandover
             handover = session.get(BookingHandover, booking.id)
             if handover:
-                handover.data = {key: value for key, value in handover.data.items() if key not in {"return_signature", "returning_at"}}
+                handover.data = {key: value for key, value in handover.data.items() if key not in {"return_signature", "returning_at", "operator_return"}}
         lease = session.get(BookingOperationLease, (booking.id, previous))
         if lease:
             session.delete(lease)
@@ -1476,7 +1481,14 @@ def rework_reason(booking_id,actor_id):
         return {"target":row.to_status,"comment":comment}
 
 
-def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
+def start_return_without_customer(booking_id, actor_id, actor_name=""):
+    return transition(booking_id, "return_inspection", actor_id, actor_name=actor_name,
+                      operator_return=True)
+
+
+def transition(booking_id, action, actor_id, customer_id=None, actor_name="", *, operator_return=False):
+    if operator_return and (customer_id is not None or action != "return_inspection"):
+        raise Conflict("Подтверждение сотрудника доступно только для начала приёмки")
     if customer_id is None:
         from .inventory import require_role
         require_role(actor_id, "operator")
@@ -1544,6 +1556,20 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name=""):
             validate_issue(session, booking, actor_id, actor_name)
         elif action == "return_inspection":
             from .handover import validate_return_start
+            if operator_return:
+                from .db import BookingHandover
+                row = session.get(BookingHandover, booking.id)
+                if row is None:
+                    raise Conflict("Для старой заявки сначала подготовьте расписку через перенос выдачи")
+                if row.data.get("recipient_id") != booking.customer_id:
+                    raise Conflict("Получатель заявки изменился")
+                if not row.data.get("returning_at"):
+                    from .user_names import user_name
+                    row.data = {**row.data, "operator_return": {
+                        "at": now().isoformat(), "actor_id": actor_id,
+                        "actor_name": user_name(session, actor_id, saved=actor_name)}}
+                    session.add(Audit(booking_id=booking.id, actor_id=actor_id,
+                                      action="operator_return_confirmed"))
             validate_return_start(session, booking)
             booking.inspection_cycle_started_at = now()
         elif action == "returned":

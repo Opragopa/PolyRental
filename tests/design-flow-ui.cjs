@@ -38,8 +38,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       const layoutEpsilon = 0.001;
       assert.ok(dimensions.width >= 44 - layoutEpsilon && dimensions.height >= 44 - layoutEpsilon, JSON.stringify(dimensions));
       await page.locator("#main-button").tap();
-      await page.locator("#customer-name").fill("Анна");
-      await page.locator("#customer-contact").fill("@anna_example");
+
+
       await page.locator("#main-button").tap();
       await page.locator('[data-date="2026-10-30"]').tap();
       await page.locator('[data-date="2026-11-02"]').tap();
@@ -47,8 +47,9 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       await page.locator("#end-time").fill("16:00");
       await page.locator("#main-button").tap();
       await page.locator("#step-review").waitFor();
-      assert.match(await page.locator("#review-content").innerText(), /Анна/);
-      assert.match(await page.locator("#review-content").innerText(), /@anna_example/);
+      assert.match(await page.locator("#review-content").innerText(), /ФИО и телефон вы укажете в анкете после подтверждения/);
+      assert.equal(await page.locator("#customer-name, #customer-contact").count(), 0);
+      assert(await page.getByLabel("Для чего вам оборудование?", { exact: false }).isVisible());
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `overflow at ${width}`);
       assert.deepEqual(errors, []);
       await page.close();

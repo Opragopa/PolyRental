@@ -32,7 +32,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
    return route.fulfill({body:html,contentType:'text/html'});
   });
   await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});await page.goto('http://polyrental.test/miniapp');await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
-  return {page,errors,release,requestReceived,getServer:()=>server,getWrites:()=>writes,setOnline:()=>{offline=false}};
+  return {page,errors,release,requestReceived,getServer:()=>server,setOnline:()=>{offline=false}};
  }
  {
   const f=await setup('success'), {page}=f;
@@ -47,7 +47,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
     const actual=await card.locator(`.${control}`).evaluate(button=>{button.click();return document.querySelector('#main-button').textContent;});
     assert.equal(actual,`В корзину · ${expected}`,'footer must change in the same click handler, before cart sync');
     assert.equal(await card.locator('.quantity-value').innerText(),String(expected));
-    assert.equal(f.getWrites(),0,'the update must not wait for the server or debounce');
+    assert.deepEqual(f.getServer().lines,[],'the update must not wait for a server acknowledgement');
    }
    assert.equal(await card.locator('.minus').isDisabled(),true);
    await card.locator('.plus').evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('.item-card .plus').click();});

@@ -1,0 +1,68 @@
+/* Functional interaction rules shared by all three visual styles. */
+/* Icon-only controls have no text baseline or asymmetric native padding. */
+:is(.catalog-search-back, .notification-bell, .icon-action, .catalog-layout-icon,
+    #client-search-hide-keyboard, .admin-search-hide-keyboard, .catalog-manage-categories,
+    .category-edit, .category-delete, .calendar-nav) {
+  display:inline-grid; place-items:center; box-sizing:border-box; padding:0; line-height:1;
+}
+:is(.catalog-search-back, .notification-bell, .icon-action, .catalog-layout-icon,
+    #client-search-hide-keyboard, .admin-search-hide-keyboard, .catalog-manage-categories, .category-edit, .category-delete, .calendar-nav,
+    .category-card-icon, .panel-icon, .success-mark, .placeholder-icon) > svg {
+  display:block; margin:0; justify-self:center; align-self:center; flex-shrink:0;
+}
+.button > .icon, .tab > .icon { display:block; flex-shrink:0; align-self:center; }
+:root {
+  --motion-ease:cubic-bezier(.22,1,.36,1);
+  --motion-fast:100ms; --motion-normal:220ms; --motion-exit:160ms;
+  --surface-raised-shadow:0 16px 48px rgba(8,20,40,.2),0 2px 8px rgba(8,20,40,.08);
+}
+.frame-progress:not([hidden]) {
+  display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px;
+  list-style:none; padding:0; margin:0 0 20px;
+}
+.frame-progress li { display:flex; align-items:center; gap:6px; min-width:0; padding:8px 0 10px; border-bottom:2px solid var(--line); color:var(--muted); font-size:11px; }
+.frame-progress li[aria-current] { color:var(--accent); border-color:var(--accent); font-weight:700; }
+.frame-progress li.completed { border-color:var(--accent); }
+.frame-step-number { display:grid; place-items:center; flex:none; width:20px; height:20px; border-radius:50%; background:var(--soft); color:var(--muted); font-size:11px; }
+.frame-progress li[aria-current] .frame-step-number,
+.frame-progress li.completed .frame-step-number { background:var(--accent); color:var(--on-accent); }
+.recent-category { margin:0 0 16px; max-width:100%; min-height:44px; text-align:left; white-space:normal; color:var(--accent); }
+/* Preserve familiar fixed navigation and generously sized reachable actions. */
+#app-version, .catalog-search-back, .notification-bell, .icon-action,
+.catalog-layout-icon, #client-search-hide-keyboard, .category-edit {
+  min-width:44px; min-height:44px;
+}
+#client-search-hide-keyboard { right:2px; width:44px; height:44px; }
+.catalog-layout .catalog-layout-icon { min-width:44px; min-height:44px; width:44px; height:44px; }
+.catalog-search-input input { padding-right:48px; }
+details > summary { min-height:44px; align-content:center; }
+.check-row { min-height:48px; cursor:pointer; }
+.theme-switch span { min-height:44px; display:flex; align-items:center; justify-content:center; }
+.dialog-card { box-shadow:var(--surface-raised-shadow); transform-origin:50% 15%; backface-visibility:hidden; }
+.quantity-control { isolation:isolate; }
+.quantity-control strong { display:inline-block; transform-origin:center; }
+.button[aria-busy="true"]::before {
+  content:""; display:inline-block; width:14px; height:14px; margin-right:8px;
+  border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px;
+  animation:action-working .7s linear infinite;
+}
+@keyframes action-working { to { transform:rotate(360deg); } }
+.press-feedback { position:fixed; z-index:1001; pointer-events:none; background:var(--accent); opacity:.12; transform-origin:center; }
+.success-mark { box-shadow:0 8px 28px color-mix(in srgb,var(--accent) 18%,transparent); }
+/* Interaction targets stay put: motion belongs to ink, numbers and surfaces. */
+.button:not(:disabled):active, .tab:not(:disabled):active,
+.category-card:not(:disabled):active, .icon-action:not(:disabled):active,
+.calendar-nav:not(:disabled):active { transform:none; }
+@media (hover:hover) and (pointer:fine) {
+  .category-card:hover, .item-card:hover { transform:none; }
+  .button:not(:disabled):hover, .icon-action:not(:disabled):hover,
+  .calendar-nav:not(:disabled):hover { transform:none; }
+}
+@media (max-width:360px) {
+  .frame-progress li { flex-direction:column; align-items:flex-start; gap:6px; }
+}
+@media (min-width:900px) { .frame-progress { max-width:580px; } }
+@media (prefers-reduced-motion:reduce) {
+  .press-feedback { display:none; }
+  .button[aria-busy="true"]::before { animation:none; border-right-color:currentColor; }
+}

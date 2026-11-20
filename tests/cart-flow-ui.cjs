@@ -45,8 +45,8 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
     await page.getByRole('button',{name:'Увеличить количество: Камера Sony'}).click();
     await page.locator('#main-button').click();
-    await page.locator('#customer-name').fill('Анна');
-    await page.locator('#customer-contact').fill('@anna_user');
+
+
     await page.locator('#main-button').click();
     assert.equal(await page.locator('#step-dates').isVisible(), true);
     await page.locator('[data-date="2026-11-03"]').click();

@@ -17,14 +17,14 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    await page.locator('#tab-new').click();
    await page.locator('#client-categories .category-card').filter({hasText:'Оборудование'}).click();
    await page.locator('.item-card .plus').first().click();await page.locator('#main-button').click();
-   await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_qa');
+
    await page.locator('#main-button').click();
    await page.locator('[data-date="2026-11-03"]').click();await page.locator('[data-date="2026-11-04"]').click();
    await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('18:00');
    const started=page.waitForRequest(r=>new URL(r.url()).pathname==='/api/miniapp/availability');
    await page.locator('#main-button').click();await started;
    await page.locator('#top-back-button').click();
-   await page.locator('#customer-name').fill('Исправленное имя');
+
    // Returning to dates before the old response arrives must not revive its navigation.
    await page.locator('#main-button').click();
    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/miniapp/availability');
@@ -32,7 +32,7 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    assert.equal(await page.locator('#step-dates').isVisible(),true,'old response must not advance a re-entered step');
    assert.equal(await page.locator('#main-button').isEnabled(),true,'abandoned check releases busy state');
    await page.locator('#main-button').click();await page.locator('#step-review').waitFor();
-   assert.match(await page.locator('#review-content').innerText(),/Исправленное имя/);
+   assert.match(await page.locator('#review-content').innerText(),/ФИО и телефон вы укажете в анкете/);
    assert.deepEqual(errors,[]);await page.close();
   }
   {
@@ -40,20 +40,20 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    const {page,errors}=await fixture(browser,{order});
    const response=gate();let calls=0;
    await page.route('**/api/miniapp/bookings/7/attest',async route=>{calls++;await response.promise;await route.fulfill({status:503,json:{detail:'Тестовая ошибка отправки'}});});
-   await page.getByRole('button',{name:'Сдаю оборудование',exact:true}).click();
+   await page.getByRole('button',{name:'Сдать оборудование',exact:true}).click();
    const dialog=page.locator('.workflow-dialog');
-   await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();
+   await dialog.getByRole('button',{name:'Да, передаю сотруднику',exact:true}).click();
    for(const key of ['Tab','Tab','Shift+Tab','Tab']) {
     await page.keyboard.press(key);
     assert.equal(await page.evaluate(()=>!!document.activeElement.closest('.workflow-dialog')),true,'pending dialog owns focus');
    }
    assert.equal(await page.locator('#tab-new').evaluate(el=>!!el.closest('[inert]')),true,'background navigation is inert');
    response.resolve();await dialog.locator('.workflow-error').waitFor();
-   assert.equal(await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).isEnabled(),true);
+   assert.equal(await dialog.getByRole('button',{name:'Да, передаю сотруднику',exact:true}).isEnabled(),true);
    assert.equal(calls,1);await dialog.getByRole('button',{name:'Отмена',exact:true}).click();
    await dialog.waitFor({state:'detached'});
-   await page.waitForFunction(()=>document.activeElement.textContent==='Сдаю оборудование',{},{timeout:3000});
-   assert.equal(await page.evaluate(()=>document.activeElement.textContent==='Сдаю оборудование'),true);
+   await page.waitForFunction(()=>document.activeElement.textContent==='Сдать оборудование',{},{timeout:3000});
+   assert.equal(await page.evaluate(()=>document.activeElement.textContent==='Сдать оборудование'),true);
    assert.equal(await page.locator('#tab-new').evaluate(el=>!!el.closest('[inert]')),false);
    assert.deepEqual(errors,[]);await page.close();
   }

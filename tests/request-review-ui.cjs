@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
-const assets = path.join(root, "app", "miniapp_static");
+const assets = process.env.POLYRENTAL_QA_ASSETS || path.join(root, "app", "miniapp_static");
 const version = fs.readFileSync(path.join(root, "VERSION"), "utf8").trim();
 const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll("__APP_VERSION__", version);
 const now = new Date("2026-10-26T10:00:00Z");
@@ -61,9 +61,9 @@ const waitUntil = async (predicate, message) => {
   assert.fail(message);
 };
 
-async function fixture(browser, { pii = true, width = 390, dark = false, orders = [order(7), order(8)], delayIdentity, delayReveal, inspectionFailEquipment } = {}) {
+async function fixture(browser, { pii = true, width = 390, dark = false, orders = [order(7), order(8)], delayIdentity, delayReveal, inspectionFailEquipment, staffRole = "admin", forceDraft } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: width < 768, hasTouch: width < 768, colorScheme: dark ? "dark" : "light" });
-  const errors = [], requests = [], reviews = [];
+  const errors = [], requests = [], reviews = [], forceEdits = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("dialog", dialog => dialog.accept());
   await page.clock.install({ time: now });
@@ -75,9 +75,21 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const file = path.join(assets, path.basename(url.pathname));
       return route.fulfill({ body: fs.readFileSync(file), contentType: file.endsWith("css") ? "text/css" : "text/javascript" });
     }
-    if (url.pathname === "/api/miniapp/me") return route.fulfill({ json: { id: 200, admin: true, staff_role: "admin", pii_admin: pii } });
+    if (url.pathname === "/api/miniapp/me") return route.fulfill({ json: { id: 200, admin: true, staff_role: staffRole, pii_admin: pii } });
     if (url.pathname === "/api/miniapp/admin/bookings") return route.fulfill({ json: { items: orders } });
     const bookingId = Number(url.pathname.match(/\/bookings\/(\d+)/)?.[1]);
+    if (url.pathname.endsWith("/force-edit/availability") && forceDraft) {
+      assert.equal(url.searchParams.get("start"), forceDraft.draft.start);
+      return route.fulfill({ json: { items: [{ id: 32, name: "Дополнительная камера", available_quantity: 1 }] } });
+    }
+    if (url.pathname.endsWith("/force-edit") && forceDraft) {
+      if (route.request().method() === "GET") return route.fulfill({ json: forceDraft });
+      const payload = route.request().postDataJSON();
+      forceEdits.push(payload);
+      const selected = orders.find(item => item.id === bookingId);
+      Object.assign(selected, { status: "pending", change_status: "accepted", change_type: "staff_edit" });
+      return route.fulfill({ json: { status: "pending" } });
+    }
     if (url.pathname.endsWith("/rework")) {
       const payload = route.request().postDataJSON();
       orders.find(item => item.id === bookingId).status = payload.target;
@@ -116,7 +128,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
   });
   await page.goto("http://polyrental.test/miniapp");
   await card(page, orders[0].id).waitFor();
-  return { page, errors, requests, reviews, orders };
+  return { page, errors, requests, reviews, orders, forceEdits };
 }
 
 (async () => {
@@ -126,6 +138,35 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
   const browser = await engine.launch({ headless: true, ...(engineName === "chromium" && process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) });
   const passed = [];
   try {
+    if (!process.env.REQUEST_CARD_LAYOUT_QA) {
+      const waiting = order(7, {status: "needs_changes", change_status: "pending", identity_status: "missing",
+        starts_at: "2026-10-23T10:00:00+03:00", ends_at: "2026-10-27T18:00:00+03:00"});
+      const draft = {start: waiting.starts_at, end: waiting.ends_at, lines: [{article_id: 31, name: "Камера из предложения", quantity: 2}]};
+      const revision = "a".repeat(64);
+      const {page, errors, forceEdits} = await fixture(browser, {orders: [waiting], staffRole: "operator", pii: false, forceDraft: {draft, revision}});
+      await card(page, 7).locator(".request-toggle").click();
+      const force = card(page, 7).getByRole("button", {name: "Изменить без согласования", exact: true});
+      await force.click();
+      const dialog = page.getByRole("dialog", {name: "Изменить без согласования"});
+      await dialog.waitFor();
+      const quantity = dialog.getByLabel("Камера из предложения");
+      assert.equal(await quantity.inputValue(), "2");
+      await quantity.fill("3");
+      await dialog.getByRole("button", {name: "Добавить позицию", exact: true}).click();
+      const picker = page.getByRole("dialog", {name: "Добавить оборудование"});
+      await picker.getByRole("button", {name: "Добавить: Дополнительная камера"}).click();
+      await picker.getByRole("button", {name: "Добавить выбранное"}).click();
+      await picker.waitFor({state: "hidden"});
+      assert.equal(await dialog.getByLabel("Дополнительная камера").inputValue(), "1");
+      await dialog.getByLabel("Комментарий для клиента").fill("Нужна ещё одна камера");
+      await dialog.getByRole("button", {name: "Применить изменения", exact: true}).click();
+      await dialog.waitFor({state: "hidden"});
+      assert.deepEqual(forceEdits, [{start: draft.start, end: draft.end, lines: [{article_id: 31, quantity: 3}, {article_id: 32, quantity: 1}], comment: "Нужна ещё одна камера", revision}]);
+      assert.deepEqual(errors, []);
+      await page.close();
+      console.log("Operator force edit: passed");
+      if (process.env.FORCE_EDIT_QA) return;
+    }
     if (process.env.REQUEST_CARD_LAYOUT_QA) {
       const lines = Array.from({length: 7}, (_, i) => ({id:i+1, article_id:i+1, name:`QA equipment ${i+1}`, quantity:1}));
       const {page, errors} = await fixture(browser, {orders:[order(7,{identity_status:'missing',lines})]});
@@ -188,6 +229,13 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       await page.keyboard.press("Escape");
       assert.equal(await page.locator("#document-viewer").isHidden(), true);
       assert.equal(await page.locator("#document-viewer-image").getAttribute("src"), null, "Closing the preview releases the image");
+      await page.waitForFunction(() => document.body.style.position !== 'fixed' && document.documentElement.style.overflow !== 'hidden');
+      if (width >= 1024) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.mouse.move(10, 300); await page.mouse.wheel(0, 300);
+        await page.clock.runFor(300);
+        await page.waitForFunction(() => scrollY > 0);
+      }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
       assert.equal(overflow, false, `No horizontal overflow at ${width}px`);
       const touch = await review.getByRole("button").evaluateAll(buttons => buttons.filter(button => button.getBoundingClientRect().height > 0).every(button => { const box = button.getBoundingClientRect(); return box.width >= 44 && box.height >= 44; }));
@@ -204,7 +252,10 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.deepEqual(reviews[0], { bookingId: 8, payload: { approved: true, comment: "", fields: [] } });
       await card(page, 8).getByRole("button", { name: "Посмотреть анкету" }).click();
       assert.equal(await card(page, 8).locator('.review-decision').count(),0);
-      await card(page, 8).locator('.identity-check-review').getByRole('button',{name:'Закрыть',exact:true}).click();
+      assert.equal(await card(page,8).getByRole('button',{name:'Скрыть анкету',exact:true}).getAttribute('aria-expanded'),'true');
+      assert.equal(await card(page,8).locator('.identity-check-review').getByRole('button',{name:'Закрыть',exact:true}).count(),0);
+      await card(page,8).getByRole('button',{name:'Скрыть анкету',exact:true}).click();
+      assert.equal(await card(page,8).locator('.identity-check-review').count(),0);
       assert.equal(await card(page, 8).getByRole('button',{name:'Посмотреть анкету'}).evaluate(el=>el===document.activeElement),true);
       await openCard(page, 7);
       await waitUntil(async () => await card(page, 8).locator(".request-accordion").getAttribute("open") === null, "Previous request did not close after its animation");

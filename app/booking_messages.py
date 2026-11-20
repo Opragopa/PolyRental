@@ -5,7 +5,7 @@ import html
 
 STATUS_LABELS = {
     "pending": "возвращена на проверку менеджера",
-    "confirmed": "подтверждена — заполните документы в Mini App",
+    "confirmed": "подтверждена — заполните документы в приложении",
     "preparing": "передана в подготовку",
     "ready": "готова к выдаче",
     "issued": "оборудование выдано",
@@ -13,7 +13,7 @@ STATUS_LABELS = {
     "returned": "Заявка завершена",
     "cancelled": "отменена",
     "identity_verified": "документы проверены",
-    "identity_needs_changes": "документы требуют исправления — откройте Mini App",
+    "identity_needs_changes": "документы требуют исправления — откройте приложение",
 }
 
 STAGE_LABELS = {
@@ -32,8 +32,8 @@ STAGE_LABELS = {
 
 def booking_status_text(booking_id: int, status: str, operator_name: str) -> str:
     """Name the completed workflow step and the operator who performed it."""
-    stage = html.escape(STAGE_LABELS.get(status, status))
-    state = html.escape(STATUS_LABELS.get(status, status))
+    stage = html.escape(STAGE_LABELS.get(status, "Обновление заявки"))
+    state = html.escape(STATUS_LABELS.get(status, "статус уточняется"))
     if status == "cancelled":
         state = f"<s>{state}</s>"
     operator = html.escape(" ".join(operator_name.split())[:160] or "не указан")

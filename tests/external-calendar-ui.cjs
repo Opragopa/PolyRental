@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {fixture,base} = require('./completion-ui.cjs');
 (async()=>{
- const browser=await chromium.launch({headless:true,channel:'chrome'});
+ const browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL || 'chrome'});
  try {
   for(const width of [320,390]) {
    const {page,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending'),width});
@@ -18,12 +18,7 @@ const {fixture,base} = require('./completion-ui.cjs');
    await page.route('**/api/miniapp/admin/catalog/equipment/*/schedule',route=>route.fulfill(failSchedule?{status:503,json:{detail:'offline'}}:{json:{items:[busy]}}));
    await page.route('**/api/miniapp/admin/catalog/blocks/8',route=>{writes.push({released:8});return route.fulfill({json:{status:'released'}});});
    await page.locator('[data-mode="catalog"]').click();await page.getByRole('button',{name:'Камера',exact:true}).click();
-   const openExternal = async () => {
-    const toggle = page.locator('.article-toggle').first();
-    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-    await page.getByRole('button',{name:/Изменить экземпляр:/}).first().click();
-    await page.getByRole('button',{name:'Указать или изменить занятость'}).click();
-   };
+   const openExternal = () => page.getByRole('button',{name:'Занятость вне сервиса',exact:true}).click();
    await openExternal();
    let dialog=page.getByRole('dialog',{name:'Занятость вне сервиса'});
    await dialog.locator('[data-date="2026-10-30"].calendar-day-busy').waitFor();

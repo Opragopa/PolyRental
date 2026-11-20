@@ -261,6 +261,74 @@ def operator_name(user):
     return telegram_name(user, "Сотрудник")
 
 
+@router.get("/api/miniapp/customer/next-actions")
+async def customer_next_actions(user=Depends(require_customer)):
+    from .customer_next import next_actions
+    return {"items": await asyncio.to_thread(next_actions, user["id"])}
+
+
+@router.get("/api/miniapp/bookings/{booking_id}")
+async def customer_booking_detail(booking_id: int, user=Depends(require_customer)):
+    booking = await asyncio.to_thread(get_booking, booking_id)
+    if booking is None or booking.customer_id != user["id"]:
+        raise HTTPException(404, "Заявка не найдена")
+    return booking_view(booking)
+
+
+@router.get("/api/miniapp/notifications/pending")
+async def customer_ready_notifications(user=Depends(require_customer)):
+    from .customer_next import pending_ready
+    return {"items": await asyncio.to_thread(pending_ready, user["id"])}
+
+
+@router.post("/api/miniapp/notifications/{event_id}/ack")
+async def acknowledge_ready_notification(event_id: str, user=Depends(require_customer)):
+    from .customer_next import acknowledge_ready
+    await workflow_call(acknowledge_ready, user["id"], event_id)
+    return {"status": "acknowledged"}
+
+
+class HandoverSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pickup_location: str = Field(default="", max_length=500)
+    pickup_instructions: str = Field(default="", max_length=2000)
+
+
+class BookingSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rental_purpose_enabled: bool = Field(strict=True)
+
+
+@router.get("/api/miniapp/booking-settings")
+async def customer_booking_settings():
+    from .booking_settings import get_booking_settings
+    return await asyncio.to_thread(get_booking_settings)
+
+
+@router.get("/api/miniapp/admin/booking-settings")
+async def read_booking_settings(user=Depends(require_system_admin)):
+    from .booking_settings import get_booking_settings
+    return await asyncio.to_thread(get_booking_settings)
+
+
+@router.put("/api/miniapp/admin/booking-settings")
+async def update_booking_settings(payload: BookingSettingsRequest, user=Depends(require_system_admin)):
+    from .booking_settings import save_booking_settings
+    return await workflow_call(save_booking_settings, user["id"], payload.rental_purpose_enabled)
+
+
+@router.get("/api/miniapp/admin/handover-settings")
+async def read_handover_settings(user=Depends(require_system_admin)):
+    from .customer_next import get_settings
+    return await asyncio.to_thread(get_settings)
+
+
+@router.put("/api/miniapp/admin/handover-settings")
+async def update_handover_settings(payload: HandoverSettingsRequest, user=Depends(require_system_admin)):
+    from .customer_next import save_settings
+    return await workflow_call(save_settings, user["id"], payload.pickup_location, payload.pickup_instructions)
+
+
 def require_pii_admin(user=Depends(require_customer)):
     if user["id"] not in pii_admin_ids():
         raise HTTPException(403, "Нет доступа к персональным данным")
@@ -299,6 +367,7 @@ def booking_article_media(session, article_ids):
 
 def booking_view(booking):
     from .handover import handover_state
+    from .customer_next import public_features, next_action, get_settings
     handover = handover_state(booking.id)
     # Customer JSON never includes manufacturer serials or internal asset codes.
     handover = {**handover,
@@ -318,8 +387,11 @@ def booking_view(booking):
         "customer_change_request": summary(client_request),
         "rework_available":bool(rework and rework.to_status==booking.status),
         "change_status": change.status if change else None,
+        "change_type": change.change_type if change else None,
         "receipt_preview_available":booking.status=="ready" and bool(handover.get("snapshot")),
         "handover": handover,
+        "equipment_details": public_features(booking.id),
+        "next_action": next_action(booking, get_settings()),
         "partial_issue": bool(handover.get("exceptions")),
         "id": booking.id,
         "is_test": booking.is_test,
@@ -330,6 +402,7 @@ def booking_view(booking):
         "hold_expires_at": booking.hold_expires_at.isoformat() if booking.hold_expires_at else None,
         "customer_name": booking.customer_name,
         "customer_contact": booking.customer_contact,
+        "rental_purpose": booking.rental_purpose,
         "identity_status": booking.identity_status,
         "estimated_until": request_sla(booking)["deadline"],
         "items": [{"id": line.article_id, "name": line.article.name,
@@ -350,18 +423,20 @@ class BookingRequest(BaseModel):
     start: datetime
     end: datetime
     lines: list[BookingLineRequest] = Field(min_length=1, max_length=30)
-    name: str = Field(min_length=1, max_length=200)
-    contact: str = Field(min_length=1, max_length=200)
+    name: str = Field(default="", max_length=200)
+    contact: str = Field(default="", max_length=200)
     expected_total: Decimal | None = Field(default=None, ge=0)
+    rental_purpose: str = Field(default="", max_length=2000)
 
     @field_validator("contact")
     @classmethod
     def validate_contact(cls, value):
-        return validate_contact_value(value)
+        return validate_contact_value(value) if value else ""
 
 
 def validate_contact_value(value):
-    value = value.strip()
+    from .contact_input import normalize_contact
+    value = normalize_contact(value)
     phone = bool(re.fullmatch(r"\+?[0-9](?:[0-9 ()-]*[0-9])?", value)) and 10 <= len(re.sub(r"\D", "", value)) <= 15
     username = value.removeprefix("@")
     telegram = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username))
@@ -421,7 +496,9 @@ def miniapp_page():
 
 
 def miniapp_html():
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
+    from .frontend_assets import versioned_html
+    document = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
+    return versioned_html(document, STATIC_DIR)
 
 
 @router.get("/calendar/{token}.ics")
@@ -566,10 +643,13 @@ async def handover_schedule():
 @router.post("/api/miniapp/bookings", status_code=201)
 async def create_customer_booking(payload: BookingRequest, background_tasks: BackgroundTasks, user=Depends(require_customer)):
     try:
+        from .client_profile import booking_identity
+        name, contact = await asyncio.to_thread(booking_identity, user) if not payload.name or not payload.contact else (payload.name.strip(), payload.contact.strip())
         booking_id, created = await asyncio.to_thread(
             create_booking,
-            user["id"], payload.name.strip(), payload.contact.strip(), payload.start,
+            user["id"], name, contact, payload.start,
             payload.end, [line.model_dump() for line in payload.lines], str(payload.request_id), None, return_created=True,
+            rental_purpose=payload.rental_purpose,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -1037,7 +1117,7 @@ async def customer_identity_submit(
         fields = json.loads(payload)
         current = await asyncio.to_thread(identity_status, booking_id, user["id"])
         legacy_institution = (current.get("fields") or {}).get("student_institution") if current.get("status") == "needs_changes" else None
-        fields = validate_identity_payload(fields, legacy_institution=legacy_institution)
+        fields = validate_identity_payload(fields, legacy_institution=legacy_institution, require_phone=True)
         uploads = {
             "passport_main": passport_main, "passport_registration": passport_registration,
             "student_front": student_front,
@@ -1638,6 +1718,20 @@ class TransitionRequest(BaseModel):
     action: str
 
 
+@router.post("/api/miniapp/admin/bookings/{booking_id}/return-without-customer")
+async def admin_return_without_customer(booking_id: int, user=Depends(require_admin)):
+    from .rental import start_return_without_customer
+    try:
+        await asyncio.to_thread(start_return_without_customer, booking_id, user["id"], operator_name(user))
+        return admin_booking_view(await asyncio.to_thread(get_booking, booking_id))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 class ReworkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str
@@ -2051,12 +2145,13 @@ class AttestationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: str
     acknowledged: bool = False
+    issued_at: str | None = None
 
 
 @router.post("/api/miniapp/bookings/{booking_id}/attest")
 async def customer_attestation(booking_id: int, payload: AttestationRequest, user=Depends(require_customer)):
     from .handover import customer_attest
-    await workflow_call(customer_attest, booking_id, user["id"], payload.action, payload.acknowledged)
+    await workflow_call(customer_attest, booking_id, user["id"], payload.action, payload.acknowledged, None, payload.issued_at)
     return booking_view(await asyncio.to_thread(get_booking, booking_id))
 
 
@@ -2193,6 +2288,31 @@ class ChangeProposal(BaseModel):
     proposed: RequestEdit | None = None
 
 
+class ForceEditRequest(RequestEdit):
+    comment: str = Field(min_length=1, max_length=2000)
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+@router.get("/api/miniapp/admin/bookings/{booking_id}/force-edit")
+async def admin_force_edit_context(booking_id: int, user=Depends(require_admin)):
+    from .booking_changes import force_edit_context
+    return await workflow_call(force_edit_context, booking_id, user["id"])
+
+
+@router.get("/api/miniapp/admin/bookings/{booking_id}/force-edit/availability")
+async def admin_force_edit_availability(booking_id: int, start: datetime, end: datetime, user=Depends(require_admin)):
+    from .booking_changes import edit_availability
+    return {"items": await workflow_call(edit_availability, booking_id, user["id"], start, end, staff=True)}
+
+
+@router.put("/api/miniapp/admin/bookings/{booking_id}/force-edit")
+async def admin_force_edit(booking_id: int, payload: ForceEditRequest, user=Depends(require_admin)):
+    from .booking_changes import force_edit_request
+    status = await workflow_call(force_edit_request, booking_id, user["id"], payload.start, payload.end,
+                                 [row.model_dump() for row in payload.lines], payload.comment, payload.revision)
+    return {"status": status}
+
+
 class DeclineRequest(BaseModel):
     comment:str=Field(min_length=1,max_length=2000)
 
@@ -2238,6 +2358,12 @@ async def customer_edit_request(booking_id: int, payload: RequestEdit, user=Depe
     await workflow_call(update_request, booking_id, user["id"], payload.start, payload.end,
                         [row.model_dump() for row in payload.lines])
     return booking_view(await asyncio.to_thread(get_booking, booking_id))
+
+
+@router.get("/api/miniapp/bookings/{booking_id}/edit-availability")
+async def customer_edit_availability(booking_id: int, start: datetime, end: datetime, user=Depends(require_customer)):
+    from .booking_changes import edit_availability
+    return {"items": await workflow_call(edit_availability, booking_id, user["id"], start, end)}
 
 
 class ChangeResponse(BaseModel):

@@ -75,6 +75,18 @@ async def deliver_notification(delivery_id: int) -> bool:
             from .bot import make_bot
             from aiogram.enums import ParseMode
             from aiogram.types import LinkPreviewOptions
+            from .customer_next import customer_keyboard, next_action, settings_view
+            from html import escape
+            booking = session.get(Booking, delivery.booking_id) if delivery.booking_id else None
+            markup = customer_keyboard(booking, delivery.recipient_id)
+            ready_push = delivery.delivery_kind == "push" and booking and booking.customer_id == delivery.recipient_id and delivery.event_id and "ready" in session.get(BookingEvent, delivery.event_id).actions
+            message = delivery_message(delivery)
+            if ready_push:
+                if booking.deleted_at or booking.status != "ready" or booking.identity_status != "verified" or booking.ends_at <= _now():
+                    delivery.cancelled_at = _now()
+                    return False
+                guidance = next_action(booking, settings_view(session))
+                message = "\n".join(escape(part) for part in [f"Заявка {booking.human_number or booking.id}: всё готово к выдаче", guidance["description"], guidance["pickup_location"], guidance["pickup_instructions"]] if part)
             async with make_bot(token) as bot:
                 if delivery.delivery_kind == "card":
                     # One lock across all outbox rows/processes for this card.
@@ -95,7 +107,7 @@ async def deliver_notification(delivery_id: int) -> bool:
                         if card.message_id:
                             try:
                                 await asyncio.wait_for(bot.edit_message_text(chat_id=delivery.recipient_id,
-                                    message_id=card.message_id, text=latest.card_text, parse_mode=ParseMode.HTML,
+                                    message_id=card.message_id, text=latest.card_text, parse_mode=ParseMode.HTML, reply_markup=markup,
                                     link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
                             except TelegramBadRequest as exc:
                                 detail = str(exc).lower()
@@ -107,12 +119,12 @@ async def deliver_notification(delivery_id: int) -> bool:
                                     raise
                         if card.message_id is None:
                             sent = await asyncio.wait_for(bot.send_message(delivery.recipient_id, latest.card_text,
-                                parse_mode=ParseMode.HTML, disable_notification=True,
+                                parse_mode=ParseMode.HTML, disable_notification=True, reply_markup=markup,
                                 link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
                             card.message_id = sent.message_id
                         card.event_id, card.updated_at = latest.id, _now()
                 else:
-                    await asyncio.wait_for(bot.send_message(delivery.recipient_id, delivery_message(delivery), parse_mode=ParseMode.HTML,
+                    await asyncio.wait_for(bot.send_message(delivery.recipient_id, message, parse_mode=ParseMode.HTML, reply_markup=markup,
                         link_preview_options=LinkPreviewOptions(is_disabled=True)), timeout=10)
         except Exception as exc:
             delivery.attempts += 1

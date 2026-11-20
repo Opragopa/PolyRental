@@ -3,6 +3,18 @@ from sqlalchemy import select, text
 from .db import Booking, ClientActivity, ClientProfile, Session
 
 
+def booking_identity(user):
+    """Use authenticated Telegram identity until a retained form supplies a name."""
+    from .pii import profile_identity_fields
+    from .user_names import telegram_name
+    get = user.get if isinstance(user, dict) else lambda key, default=None: getattr(user, key, default)
+    username = str(get('username') or '').strip().lstrip('@')
+    name = f'@{username}' if username else telegram_name(user)
+    contact = f'@{username}' if username else f"tg://user?id={get('id')}"
+    fields = profile_identity_fields(get('id'))['fields']
+    return fields.get('full_name') or name, fields.get('phone') or contact
+
+
 def profile_state(user_id):
     with Session.begin() as session:
         session.execute(text("INSERT INTO client_profiles (telegram_id, created_at) VALUES (:id, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT DO NOTHING"), {"id": user_id})

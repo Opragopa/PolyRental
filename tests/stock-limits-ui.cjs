@@ -23,7 +23,7 @@ await page.locator('#main-button').click();
 assert.equal(await page.locator('#cart-items .plus').isDisabled(),true);
 await page.locator('#cart-items .minus').click();assert.equal(await page.locator('#cart-items .plus').isEnabled(),true);
 await page.locator('#cart-items .plus').click();assert.equal(await page.locator('#cart-items .plus').isDisabled(),true);
-await page.locator('#customer-name').fill('Тест');await page.locator('#customer-contact').fill('@test_user');await page.locator('#main-button').click();
+await page.locator('#main-button').click();
 await page.locator('[data-date="2026-11-03"]').click();await page.locator('[data-date="2026-11-04"]').click();await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('18:00');await page.locator('#main-button').click();
 await page.locator('#availability-result').getByText(/нужно 2 шт., доступно 1 шт./).waitFor();
 await page.locator('#nearest-apply').waitFor();

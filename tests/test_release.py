@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +19,6 @@ def test_release_version_is_visible_and_matches_health(application):
         assert f'>v{__version__}</button>' in page.text
         assert "__APP_VERSION__" not in page.text
         for asset in ["range-calendar.js", "app.js", "style.css"]:
-            url = f"/miniapp/static/{asset}?v={__version__}"
-            assert url in page.text
-            assert client.get(url).status_code == 200
+            match = re.search(rf'/miniapp/static/{re.escape(asset)}\?v=[0-9a-f]{{16}}', page.text)
+            assert match, f"Missing versioned asset: {asset}"
+            assert client.get(match.group()).status_code == 200

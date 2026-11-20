@@ -188,7 +188,7 @@ def identity_case(monkeypatch):
     from tests.test_miniapp import create_confirmed
     headers = {"X-Telegram-Init-Data": signed_init_data(42)}
     booking_id = create_confirmed(client, headers)
-    fields = {"full_name": "Тестовый Клиент", "birth_date": "2000-01-01",
+    fields = {"phone": "+79990000000", "full_name": "Тестовый Клиент", "birth_date": "2000-01-01",
               "passport_series": "0000", "passport_number": "000000",
               "passport_issued_at": "2020-01-01", "passport_issuer": "Тест",
               "passport_division_code": "000-000", "registration_address": "Тест",

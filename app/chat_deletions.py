@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import and_, exists, func, or_, select
 
+from .chat_labels import DELETION_TARGETS
 from .chat_workflows import PAGE_SIZE, button, private
 from .db import Booking, BookingAsset, BookingLine, DeletionIntent, Session
 from .rental import Conflict, cancel_deletion_intent, create_deletion_intent, get_booking
@@ -32,7 +33,7 @@ def pending_intents(actor):
 async def pending_list(message,actor):
     entries=await asyncio.to_thread(pending_intents,actor)
     if not entries:return await message.answer('Ожидающих удалений нет. Для восстановления администратором: /deleted.')
-    rows=[[button(f"Отменить · заявка {entry['booking_id']} · {entry['target_type']}",f"dl:undo:{entry['booking_id']}:{UUID(entry['id']).hex}")] for entry in entries]
+    rows=[[button(f"Отменить · заявка {entry['booking_id']} · {DELETION_TARGETS.get(entry['target_type'], 'объект')}",f"dl:undo:{entry['booking_id']}:{UUID(entry['id']).hex}")] for entry in entries]
     await message.answer('Ожидающие удаления:',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 

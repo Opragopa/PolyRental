@@ -39,9 +39,16 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         });
         await page.locator(".item-card .plus").first().click();
         await page.locator("#main-button").click();
-        await page.locator("#customer-name").fill("Анна"); await page.locator("#customer-contact").fill("@anna_user");
+
         await page.locator("#main-button").click();
         assert.equal(await page.locator(".calendar-day").count(),42);
+        assert.equal(await page.locator('.calendar-legend li').count(),3);
+        const colors=await page.locator('.calendar-legend-dot').evaluateAll(dots=>dots.map(dot=>{
+          const style=getComputedStyle(dot),box=dot.getBoundingClientRect();
+          return {color:style.backgroundColor,round:style.borderRadius,width:box.width,height:box.height};
+        }));
+        assert.equal(new Set(colors.map(item=>item.color)).size,3);
+        assert.ok(colors.every(item=>item.round==='50%'&&Math.abs(item.width-item.height)<.2&&item.width>=10));
         assert.equal(await page.locator("#main-button").isDisabled(),true);
         assert.equal(await page.locator('[data-date="2026-10-26"]').isDisabled(),false);
         assert.equal(await page.locator('[data-date="2026-10-25"]').isDisabled(),true);
@@ -229,7 +236,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     assert.equal(await native.locator(".tabs").isVisible(),true);
     assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);
     await native.locator(".item-card .plus").first().tap(); await native.locator("#main-button").tap();
-    await native.locator("#customer-name").fill("Анна"); await native.locator("#customer-contact").fill("@anna_user"); await native.locator("#main-button").tap();
+      await native.locator("#main-button").tap();
     await native.locator('[data-date="2026-10-30"]').tap();
     await native.locator('[data-date="2026-10-31"]').tap();
     assert.equal(await native.locator("#main-button").isEnabled(),true);

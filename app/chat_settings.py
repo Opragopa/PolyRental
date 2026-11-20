@@ -11,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from .chat_workflows import PAGE_SIZE, button, private
+from .chat_labels import staff_role
 from .client_profile import profile_state, set_reminders_enabled
 from .rental import Conflict
 from .roles import configured_ids, staff_allows
@@ -68,7 +69,7 @@ async def staff_settings_command(message: Message):
 async def staff_list(message,actor,page):
     if not await asyncio.to_thread(staff_allows,actor,'admin'):raise PermissionError('Нужна роль администратора')
     staff=await asyncio.to_thread(staff_snapshot);page=max(0,min(page,max(0,(len(staff)-1)//PAGE_SIZE)))
-    rows=[[button(f"{row.get('name') or row['signer'].get('full_name') or 'Сотрудник'} · {row['role'] or 'без роли'}"[:60],f"as:open:{row['id']}")] for row in staff[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows=[[button(f"{row.get('name') or row['signer'].get('full_name') or 'Сотрудник'} · {staff_role(row['role'])}"[:60],f"as:open:{row['id']}")] for row in staff[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
     if page:nav.append(button('← Назад',f'as:page:{page-1}'))
     if (page+1)*PAGE_SIZE<len(staff):nav.append(button('Далее →',f'as:page:{page+1}'))
@@ -80,9 +81,9 @@ async def staff_list(message,actor,page):
 async def staff_detail(message,actor,target):
     if not await asyncio.to_thread(staff_allows,actor,'admin'):raise PermissionError('Нужна роль администратора')
     row=next((item for item in await asyncio.to_thread(staff_snapshot) if item['id']==target),None)
-    if not row:raise ValueError('Сотрудник не найден в ADMIN_IDS')
+    if not row:raise ValueError('Сотрудник не найден в списке администраторов')
     signer=row['signer']
-    text=f"Сотрудник: {row.get('name') or signer.get('full_name') or 'Имя не указано'}\nРоль: {row['role'] or 'не назначена'}\nДоверенный подписант: {signer.get('full_name') or 'не указан'} · {'активен' if signer.get('active') else 'неактивен'}"
+    text=f"Сотрудник: {row.get('name') or signer.get('full_name') or 'Имя не указано'}\nРоль: {staff_role(row['role'])}\nДоверенный подписант: {signer.get('full_name') or 'не указан'} · {'активен' if signer.get('active') else 'неактивен'}"
     rows=[[button('Оператор',f'as:role:{target}:operator'),button('Менеджер',f'as:role:{target}:manager'),button('Администратор',f'as:role:{target}:admin')],
           [button('Настроить подписанта',f'as:signer:{target}')],[button('К списку','as:page:0')]]
     await message.answer(text,reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -106,13 +107,13 @@ async def admin_action(query: CallbackQuery,state: FSMContext):
             await staff_detail(query.message,actor,int(parts[2]));return await query.answer()
         if action in {'role','signer'} and len(parts) in {3,4}:
             target=int(parts[2]);row=next((item for item in await asyncio.to_thread(staff_snapshot) if item['id']==target),None)
-            if not row:raise ValueError('Сотрудник не найден в ADMIN_IDS')
+            if not row:raise ValueError('Сотрудник не найден в списке администраторов')
             if action=='role' and len(parts)==4:
                 role=parts[3]
                 if role not in {'operator','manager','admin'}:raise ValueError('Недопустимая роль')
                 if target==actor and role!='admin':raise Conflict('Собственную роль администратора понизить нельзя')
                 await state.clear();await state.update_data(settings_action='role',settings_target=target,settings_role=role,settings_before=row['role'])
-                await query.answer();return await settings_confirmation(query.message,state,f'Назначить сотруднику {target} роль {role}?')
+                await query.answer();return await settings_confirmation(query.message,state,f'Назначить сотруднику {target} роль «{staff_role(role)}»?')
             if action=='signer' and len(parts)==3:
                 await state.clear();await state.update_data(settings_action='signer',settings_target=target,settings_before=row['signer'])
                 await state.set_state(AdminSettings.signer_name);await query.answer()

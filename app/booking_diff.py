@@ -28,7 +28,7 @@ def attach_history_details(session, booking_id, items):
     history_names(session, items)
     from .db import BookingChange
     from .booking_changes import _decode
-    targets = {item["id"]: item for item in items if item["action"] in {"request_changes_proposed", "request_updated"}}
+    targets = {item["id"]: item for item in items if item["action"] in {"request_changes_proposed", "request_updated", "request_force_edited"}}
     if not targets:
         return items
     for change in session.scalars(select(BookingChange).where(BookingChange.booking_id == booking_id)):

@@ -50,3 +50,19 @@ def test_support_messages_are_visible_only_to_their_recipient(monkeypatch):
         stranger = {"X-Telegram-Init-Data": signed_init_data(446)}
         assert any(item['message'] == 'Новое сообщение в поддержке' for item in client.get('/api/miniapp/notifications/inbox', headers=customer).json()['items'])
         assert client.get('/api/miniapp/notifications/inbox', headers=stranger).json()['items'] == []
+
+
+def test_inbox_presents_compact_copy_without_changing_stored_message(monkeypatch):
+    configure(monkeypatch)
+    from app.notification_inbox import inbox
+    from app.notification_outbox import encrypt_message
+    message = '<b>Заявка ТС260007</b>\nГотово к выдаче\nАвтор: Оператор\n<a href="https://example.com">Открыть заявку</a>'
+    with Session.begin() as session:
+        session.add(NotificationDelivery(recipient_id=447, event='update',
+            message=encrypt_message(None, 447, 'update', message)))
+        session.add(NotificationDelivery(recipient_id=447, event='legacy',
+            message='Заявка ТС260008\nСоздана: 01.11.2026\nКем: Клиент\nСтатус: Оборудование выдано\n• Камера — 2 шт.\nОткрыть заявку'))
+    rows = {item['title']: item for item in inbox(447)['items']}
+    assert rows['Заявка ТС260007']['summary'] == 'Готово к выдаче'
+    assert 'Автор: Оператор' in rows['Заявка ТС260007']['message']
+    assert rows['Заявка ТС260008']['summary'] == 'Оборудование выдано'

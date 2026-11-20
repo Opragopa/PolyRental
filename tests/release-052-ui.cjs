@@ -51,7 +51,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    assert.equal(await page.locator('#cart-items img').evaluate(img=>img.complete && img.naturalWidth>0),true);
    await page.locator('#cart-items .plus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'2');
    await page.locator('#cart-items .minus').click();assert.equal(await page.locator('#cart-items .quantity-control strong').innerText(),'1');
-   await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@anna_user');await page.locator('#main-button').click();
+   await page.locator('#main-button').click();
    await page.clock.runFor(300);
    await page.locator('#range-calendar [data-availability]').first().waitFor();
    assert.equal(await page.locator('#start-date').inputValue(),'','daily colors are available before choosing dates');
@@ -86,6 +86,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    await staff.page.locator('[data-mode="catalog"]').click();
    assert.equal(await staff.page.locator('.article-toggle').getAttribute('aria-expanded'),'false');
    assert.equal(await staff.page.getByRole('button',{name:/Изменить экземпляр:/}).count(),0);
+   assert(await staff.page.locator('.article-card-head').getByRole('button',{name:'Занятость вне сервиса'}).isVisible());
    await staff.page.locator('.article-toggle').click();await staff.page.getByText('Занят вне сервиса',{exact:true}).waitFor();
    assert.equal(await staff.page.locator('.equipment-details').getAttribute('open'),null);
    await staff.page.locator('.equipment-details summary').click();await staff.page.getByText('INV-052',{exact:true}).waitFor();
@@ -98,7 +99,6 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    await staff.page.getByRole('button',{name:/Изменить экземпляр:/}).click();
    await staff.page.getByRole('button',{name:'Добавить особенность'}).waitFor();
    assert.equal(await staff.page.locator('.equipment-owner-form [name="name"]').inputValue(),'Владелец QA');
-   assert.equal(await staff.page.getByRole('button',{name:'Указать или изменить занятость'}).isVisible(),true);
    await staff.page.locator('.equipment-owner-form [name="name"]').fill('Новый владелец');
    staff.page.once('dialog',dialog=>dialog.dismiss());await staff.page.locator('#tab-new').click();assert.equal(await staff.page.locator('.equipment-owner-form').isVisible(),true);
    await staff.page.getByRole('button',{name:'Сохранить владельца'}).click();await staff.page.getByText('Владелец сохранён',{exact:true}).waitFor();assert.equal(savedOwner.name,'Новый владелец');

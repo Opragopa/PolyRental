@@ -30,6 +30,27 @@ def test_book_chat_starts_chat_flow(monkeypatch):
     begin.assert_awaited_once_with(message,state)
 
 
+def test_cancel_support_exits_without_sending_question():
+    state = SimpleNamespace(get_state=AsyncMock(return_value=bot.Support.message.state), clear=AsyncMock())
+    message = SimpleNamespace(answer=AsyncMock())
+    asyncio.run(bot.cancel_flow(message, state))
+    state.clear.assert_awaited_once()
+    assert 'Обращение не отправлено' in message.answer.call_args.args[0]
+
+
+@pytest.mark.parametrize('callback', ['rent:confirm', 'rent:confirm:previous'])
+def test_stale_confirmation_cannot_send_current_draft(monkeypatch, callback):
+    create = AsyncMock()
+    monkeypatch.setattr(bot, 'create_booking', create)
+    state = SimpleNamespace(get_state=AsyncMock(return_value=bot.Rent.review.state),
+                            get_data=AsyncMock(return_value={'confirmation_nonce':'current'}), clear=AsyncMock())
+    query = SimpleNamespace(data=callback, answer=AsyncMock())
+    asyncio.run(bot.confirm_booking(query, state, AsyncMock()))
+    create.assert_not_called()
+    state.clear.assert_not_awaited()
+    assert query.answer.call_args.kwargs['show_alert']
+
+
 def test_flexible_dates_and_invalid_input():
     assert bot.parse_time('15.11.2028 9:30').hour == 9
     assert bot.parse_time('завтра 10').hour == 10

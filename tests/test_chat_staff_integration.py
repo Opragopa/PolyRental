@@ -19,6 +19,8 @@ class MemoryState:
     async def get_data(self): return dict(self.data)
     async def get_state(self): return self.state
     async def clear(self): self.data={};self.state=None
+    async def update_data(self, **values): self.data.update(values)
+    async def set_state(self, state): self.state=state.state
 
 
 def query(actor=100):
@@ -42,11 +44,47 @@ def test_chat_staff_fix_creates_existing_proposal(monkeypatch):
     assert get_booking(booking_id).status=='needs_changes'
 
 
+def test_chat_operator_can_override_pending_changes(monkeypatch):
+    from app.booking_changes import propose_change
+    from app.db import StaffRole
+
+    configure(monkeypatch)
+    monkeypatch.setattr(cw, "private", lambda _: True)
+    monkeypatch.setattr(cw, "show_staff_booking", AsyncMock())
+    with Session.begin() as session:
+        session.get(StaffRole, 200).role = "operator"
+    booking_id = pending_booking()
+    booking = get_booking(booking_id)
+    change_id = propose_change(booking_id, 100, "manager_edit", "Первое предложение", cw.workflow_snapshot(booking))
+    state = MemoryState({})
+    actor = query(200)
+    actor.message.answer = AsyncMock()
+    actor.data = f"sw:forceedit:{booking_id}"
+    message = SimpleNamespace(text="−", from_user=actor.from_user, answer=AsyncMock())
+
+    async def edit():
+        await cw.staff_action(actor, state)
+        await cw.manager_edit_dates(message, state)
+        await cw.manager_edit_lines(message, state)
+        message.text = "Оператор уточнил заявку"
+        await cw.manager_edit_comment(message, state)
+        actor.data = f"sw:forceconfirm:{booking_id}:stale"
+        await cw.staff_action(actor, state)
+        assert get_booking(booking_id).status == "needs_changes"
+        actor.data = message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+        await cw.staff_action(actor, state)
+
+    asyncio.run(edit())
+    assert get_booking(booking_id).status == "pending"
+    latest = change_view(booking_id, 42)
+    assert latest["id"] != change_id and latest["change_type"] == "staff_edit"
+
+
 def test_chat_return_finding_records_feature_once(monkeypatch):
     monkeypatch.setattr(cw,'show_staff_booking',AsyncMock())
     booking_id=ready_booking(monkeypatch);transition(booking_id,'ready',100)
     from app.handover import customer_attest
-    transition(booking_id,'issued',100);customer_attest(booking_id,42,'received');returning(booking_id)
+    transition(booking_id,'issued',100);returning(booking_id)
     asset_id=get_booking(booking_id).assets[0].equipment_id
     state=MemoryState({'workflow_nonce':'n','workflow_operation':'finding','workflow_booking':booking_id,'workflow_asset':asset_id,'workflow_kind':'existing','workflow_comment':'Прежняя царапина'})
     actor=query();asyncio.run(cw.staff_workflow_save(actor,state,'n'))

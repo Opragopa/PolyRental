@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const {fixture,base}=require('./completion-ui.cjs');
 (async()=>{const engine=process.env.PLAYWRIGHT_BROWSER==='webkit'?webkit:chromium;const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});try{
  const {page,writes,errors}=await fixture(browser,{admin:true,role:'manager',order:base('pending')});
- await page.route('**/api/miniapp/availability?*',route=>route.fulfill({json:{all_items:[{id:1,name:'Камера Sony',available_quantity:2},{id:2,name:'Объектив Canon',sku:'LENS',available_quantity:2},{id:3,name:'Штатив',available_quantity:0}]}}));
+ await page.route('**/api/miniapp/admin/bookings/*/force-edit/availability?*',route=>route.fulfill({json:{items:[{id:1,name:'Камера Sony',available_quantity:2},{id:2,name:'Объектив Canon',sku:'LENS',available_quantity:2},{id:3,name:'Штатив',available_quantity:0}]}}));
  await page.getByRole('button',{name:'Изменить заявку',exact:true}).click();
  const edit=page.getByRole('dialog',{name:'Изменить заявку'});
  await edit.getByRole('button',{name:'Добавить позицию'}).click();

@@ -78,8 +78,8 @@ const settle = page => page.waitForTimeout(300);
       await page.locator('#top-back-button').click();
       await page.locator('.item-card .plus').first().click();
       await page.locator('#main-button').click();
-      await page.locator("#customer-name").fill("Анна");
-      await page.locator("#customer-contact").fill("@anna_test");
+
+
       await page.locator("#main-button").click();
       await settle(page);
       await page.evaluate(()=>motionAudit.phase='calendar');

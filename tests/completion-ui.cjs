@@ -39,6 +39,7 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
     if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:trusted}:{})}});
     if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,client_allowed:true,system_admin:role==='admin',start_screen:admin?'management':'booking'}});
     if (url.pathname==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
+    if (url.pathname===`/api/miniapp/bookings/${order.id}`) return route.fulfill({json:order});
     if (url.pathname==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
     if (url.pathname==='/api/miniapp/profile/history'||url.pathname==='/api/miniapp/admin/bookings') {
       if (url.pathname==='/api/miniapp/admin/bookings'&&deferInspectionRefresh&&order.inspections.length) await inspectionRefresh;
@@ -115,14 +116,14 @@ if(require.main===module)(async()=>{
     }
     for (const width of [320,390]) {
       const {page,errors,writes}=await fixture(browser,{width,order:base("issued")});
-      await page.getByRole('button',{name:'Получил',exact:true}).click();
+      assert.equal(await page.getByRole('button',{name:'Получил',exact:true}).count(),0);
+      await page.getByRole('button',{name:'Сдать оборудование',exact:true}).click();
       const dialog=page.locator('.workflow-dialog');
-      await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();
-      assert.equal(writes.length,0,'partial receipt requires acknowledgement');
-      await dialog.getByLabel('С перечнем ознакомлен').check(); await noOverflow(page);
-      await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      assert.equal(writes.length,0,'opening return confirmation does not change status');
+      await noOverflow(page);
+      await dialog.getByRole('button',{name:'Да, передаю сотруднику',exact:true}).click();
       await page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
-      assert.deepEqual(writes[0].body,{action:'received',acknowledged:true});
+      assert.equal(writes[0].body.action,'returning');
       assert.deepEqual(errors,[]);await page.close();passed++;
     }
     {
@@ -165,13 +166,9 @@ if(require.main===module)(async()=>{
       assert.ok(operator.writes.some(row=>row.body.action==='issued'));
       assert.ok(!operator.writes.some(row=>row.path.endsWith('/paper-signature')));
       await client.page.clock.runFor(5100);
-      await client.page.getByRole('button',{name:'Получил',exact:true}).click();
-      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
-      await client.page.waitForFunction(()=>!document.querySelector('.workflow-dialog'));
-      assert.ok(client.writes.some(row=>row.body.action==='received'));
-      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).waitFor();
-      await client.page.getByRole('button',{name:'Сдаю оборудование',exact:true}).click();
-      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      assert.equal(await client.page.getByRole('button',{name:'Получил',exact:true}).count(),0);
+      await client.page.getByRole('button',{name:'Сдать оборудование',exact:true}).click();
+      await client.page.locator('.workflow-dialog').getByRole('button',{name:'Да, передаю сотруднику',exact:true}).click();
       await operator.page.clock.runFor(5100);
       await operator.page.locator('.handover-progress li').filter({hasText:'Клиент отметил сдачу оборудования'}).getByText('Готово', {exact:true}).waitFor();
       assert.equal(await operator.page.locator('.handover-progress input[type=checkbox]').count(),0,'return progress must not contain checkboxes');

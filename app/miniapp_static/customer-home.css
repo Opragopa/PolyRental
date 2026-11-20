@@ -1,0 +1,15 @@
+.customer-next { display:grid; gap:12px; margin:0 0 24px; }
+.customer-next-card { padding:18px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+.customer-next-card h3 { margin:0 0 8px; font-size:18px; }
+.customer-next-card p { margin:8px 0; white-space:pre-wrap; }
+.customer-next-card .button { width:100%; margin-top:8px; min-height:48px; }
+.equipment-features { padding:14px; border:1px solid var(--line); border-radius:12px; }
+.equipment-features p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.file-drop-zone { position:relative; border-radius:12px; }
+.file-drop-zone.drag-over { outline:3px dashed var(--accent); outline-offset:4px; background:var(--soft); }
+.drop-hint,.drop-status { display:block; font-size:12px; overflow-wrap:anywhere; }
+.drop-status.error { color:var(--danger); }
+.drop-preview { display:block; max-width:100%; width:160px; height:120px; object-fit:contain; border-radius:8px; background:var(--soft); }
+.ready-invitation .dialog-card { border:2px solid var(--accent); }
+.settings-tabs { flex-wrap:wrap; }
+.settings-tabs button { flex:1 1 100px; }

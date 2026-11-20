@@ -29,6 +29,7 @@ async function fixture(browser,{admin=false,role='operator',status='ready',width
     if(p==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role}:{})}});
     if(p==='/api/miniapp/profile') return route.fulfill({json:{display_name:'Анна',onboarding_seen:true,client_allowed:true,system_admin:admin&&role==='admin',start_screen:admin?'management':'booking',reminders_enabled:true}});
     if(p==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
+    if(p===`/api/miniapp/bookings/${order.id}`) return route.fulfill({json:order});
     if(p==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
     if(p==='/api/miniapp/catalog') return route.fulfill({json:{items,selected_items:items,page:0,page_size:20,total:items.length}});
     if(p==='/api/miniapp/availability') return route.fulfill({json:{items,unavailable:[],unavailable_count:0}});
@@ -71,7 +72,7 @@ async function capture(page,name) {
       await page.locator('.category-card').getByText('Камера', {exact:true}).tap();
       await page.locator('.item-card').first().waitFor();await capture(page,`catalog-${suffix}`);
       await page.locator('.item-card .plus').first().tap();await page.locator('#main-button').tap();
-      await page.locator('#customer-name').fill('Анна');await page.locator('#customer-contact').fill('@synthetic_customer');
+
       await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();
       await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
       await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
@@ -86,7 +87,7 @@ async function capture(page,name) {
       assert.ok(await page.getByRole('button',{name:'Скачать DOCX',exact:true}).isVisible());
       await capture(page,`docx-summary-${suffix}`);
       await page.getByRole('button',{name:'Назад к заявке',exact:true}).tap();
-      await page.getByRole('button',{name:'Получил',exact:true}).tap();await capture(page,`receipt-dialog-${suffix}`);
+      await page.getByRole('button',{name:'Сдать оборудование',exact:true}).tap();await capture(page,`receipt-dialog-${suffix}`);
       await page.locator('.workflow-dialog').getByRole('button',{name:'Отмена',exact:true}).tap();
       await page.locator('#profile-header > summary').tap();await page.locator('#profile-support').tap();
       await capture(page,`support-${suffix}`);

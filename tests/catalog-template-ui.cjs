@@ -47,6 +47,7 @@ const native=await page.evaluate(()=>window.__templateDownload);
 assert.equal(new URL(native.url).pathname,'/miniapp/static/equipment-import-template.csv');
 assert.ok(new URL(native.url).searchParams.get('v'));
 assert.equal(native.file_name,'equipment-import-template.csv');
+await page.waitForFunction(()=>document.activeElement?.matches('.catalog-template-download'));
 await page.keyboard.press('Escape');
 await page.getByRole('dialog',{name:'Импорт CSV',exact:true}).waitFor({state:'hidden'});
 assert.equal(await page.getByRole('button',{name:'Импорт CSV',exact:true}).evaluate(el=>document.activeElement===el),true);

@@ -23,11 +23,11 @@ def test_chat_double_confirmation_is_idempotent(monkeypatch):
     state = SimpleNamespace(clear=AsyncMock(), update_data=AsyncMock(), set_state=AsyncMock())
     asyncio.run(bot.begin_chat_booking(message, state))
     request_id = state.update_data.call_args.kwargs["request_id"]
-    data = dict(request_id=request_id, ids=[article_id], name="Тест", contact="@qa_user",
+    data = dict(request_id=request_id, confirmation_nonce="current", ids=[article_id], name="Тест", contact="@qa_user",
                 start=start.isoformat(), end=end.isoformat(), expected_total="200.00")
     state.get_state = AsyncMock(return_value=bot.Rent.review.state)
     state.get_data = AsyncMock(return_value=data)
-    query = SimpleNamespace(from_user=SimpleNamespace(id=42), answer=AsyncMock(), message=message)
+    query = SimpleNamespace(data="rent:confirm:current", from_user=SimpleNamespace(id=42), answer=AsyncMock(), message=message)
     notification = AsyncMock()
     monkeypatch.setattr(bot, "notify_managers", notification)
     async def double_click():
