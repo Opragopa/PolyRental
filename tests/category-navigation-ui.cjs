@@ -56,12 +56,13 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  releaseCatalog();
  await page.locator('#catalog-page-title').getByText('Камеры',{exact:true}).waitFor();
  assert.equal(await page.locator('.category-level-transition').getAttribute('aria-hidden'),'true');
+ await page.evaluate(()=>{window.__centeringTrace=[]; const original=window.scrollTo.bind(window); window.scrollTo=(...args)=>{if(args[0]?.behavior)window.__centeringTrace.push(args[0].behavior); return original(...args);};});
  await page.locator('.category-level-transition').evaluate(el=>el.getAnimations({subtree:true}).forEach(animation=>animation.finish()));
  await page.locator('.category-level-transition').waitFor({state:'detached'});
- await page.evaluate(()=>{window.__centeringTrace=[]; const original=window.scrollTo.bind(window); window.scrollTo=(...args)=>{window.__centeringTrace.push(typeof args[0]==='object'?args[0].top:args[1]); return original(...args);};});
  await page.clock.runFor(850);
+ await page.waitForFunction(()=>document.querySelector('#catalog-page-title').getBoundingClientRect().top>=0);
  {const info=await page.evaluate(()=>({y:scrollY,heading:document.querySelector('#catalog-page-title').getBoundingClientRect().top})); assert(info.y<=categoryScrollY+2 && info.heading>=0 && info.heading<844,`heading is brought into view after the swipe: ${JSON.stringify(info)}`);}
- {const trace=await page.evaluate(()=>window.__centeringTrace); if (categoryScrollY>150) assert(new Set(trace.map(Math.round)).size>2,`centering uses intermediate positions: ${JSON.stringify(trace)}`);}
+ {const trace=await page.evaluate(()=>window.__centeringTrace); if (categoryScrollY>150) assert(trace.includes('smooth'),`centering uses native smooth scrolling: ${JSON.stringify(trace)}`);}
  assert.equal(await page.locator('#client-categories').getByRole('button',{name:'Свет'}).count(),0); assert.equal(await page.locator('.category-morph-surface, .category-morph-label').count(),0);
  assert.equal(await page.locator('#catalog-page-title').evaluate(el=>el===document.activeElement),true);
  await page.locator('#client-catalog-search').fill('Sony'); await page.clock.runFor(350);

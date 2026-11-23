@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
-from .db import Booking, BookingEvent, BookingEventRecipient, HandoverSettings, Session
+from .db import Booking, BookingEvent, BookingEventRecipient, BookingHandover, HandoverSettings, Session
 
 ACTIVE = ("pending", "needs_changes", "confirmed", "preparing", "ready", "issued", "return_inspection")
 
@@ -34,10 +34,11 @@ def save_settings(actor_id, location, instructions):
         return {"pickup_location": location, "pickup_instructions": instructions}
 
 
-def next_action(booking, settings=None):
+def next_action(booking, settings=None, handover=None):
     settings = settings or {}
     action, label, title, description = "open", "Открыть заявку", "Заявка на проверке", "Дождитесь решения сотрудника."
     status, identity = booking.status, booking.identity_status
+    return_overdue = False
     if status == "needs_changes":
         title, label, description = "Нужно исправить заявку", "Посмотреть изменения", "Проверьте предложенные изменения в заявке."
     elif status in {"confirmed", "preparing", "ready"}:
@@ -69,10 +70,22 @@ def next_action(booking, settings=None):
         title, description = "Заявка отменена", "Оборудование по этой заявке не ожидает выдачи."
     elif status == "expired":
         title, description = "Срок заявки истёк", "Откройте заявку или свяжитесь с сотрудником."
+    if status in {"issued", "return_inspection"}:
+        from .return_overdue import overdue
+        if handover is None:
+            from .handover import handover_state
+            handover = handover_state(booking.id)
+        return_overdue = overdue(booking, handover)
+        if return_overdue:
+            deadline = booking.ends_at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y в %H:%M МСК")
+            title = "Возврат просрочен"
+            description = f"Срок сдачи — {deadline}. Свяжитесь с оператором, чтобы договориться о возврате."
+            if status == "return_inspection":
+                action, label = "support", "Связаться с оператором"
     return {"booking_id": booking.id, "human_number": booking.human_number or str(booking.id),
             "status": status, "identity_status": identity, "starts_at": booking.starts_at.isoformat(),
             "ends_at": booking.ends_at.isoformat(), "action": action, "label": label,
-            "title": title, "description": description,
+            "title": title, "description": description, "return_overdue": return_overdue,
             "pickup_location": settings.get("pickup_location", "") if status == "ready" else "",
             "pickup_instructions": settings.get("pickup_instructions", "") if status == "ready" else ""}
 
@@ -84,7 +97,8 @@ def next_actions(user_id):
             Booking.deleted_at.is_(None), Booking.status.in_(ACTIVE))).all()
         items = []
         for booking in bookings:
-            item = next_action(booking, settings)
+            row = session.get(BookingHandover, booking.id) if booking.status in {"issued", "return_inspection"} else None
+            item = next_action(booking, settings, row.data if row else {})
             item["equipment"] = [{"name": line.article.name, "quantity": line.quantity} for line in booking.lines if line.deleted_at is None]
             items.append(item)
     priority = {"issued": 0, "ready": 1, "needs_changes": 2}
@@ -151,6 +165,6 @@ def customer_keyboard(booking, recipient_id):
         rows.append([InlineKeyboardButton(text=action["label"] if key == "identity" else "Открыть заявку", web_app=WebAppInfo(url=f"{base}/miniapp?{key}={booking.id}"))])
     else:
         rows.append([InlineKeyboardButton(text="Открыть заявку", url=booking_link(booking.id))])
-    if booking.status == "ready" or action["action"] == "support":
+    if booking.status == "ready" or action["action"] == "support" or action["return_overdue"]:
         rows.append([InlineKeyboardButton(text="Связаться с оператором", callback_data=f"cw:support:{booking.id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

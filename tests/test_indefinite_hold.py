@@ -47,9 +47,9 @@ def test_status_controls_reservation_without_return_buffer(status, blocked):
 
 
 @pytest.mark.parametrize("status", ["issued", "return_inspection"])
-def test_planned_end_releases_unreturned_equipment_in_every_availability_path(status):
+def test_every_availability_path_holds_unreturned_equipment_until_inspection_ends(status):
     from app.db import Article, BookingAsset, BookingLine, Equipment
-    from app.rental import (AvailabilitySnapshot, _asset_conflicts, _reserved_quantity,
+    from app.rental import (AvailabilitySnapshot, Conflict, _asset_conflicts, _reserved_quantity,
                             calendar_availability, nearest_available_period)
     from tests.test_integration import article_with_assets
     article_id = article_with_assets("PLANNED-END", 1)
@@ -69,23 +69,34 @@ def test_planned_end_releases_unreturned_equipment_in_every_availability_path(st
     with Session() as session:
         snapshot = AvailabilitySnapshot(session, [article_id], start, end + timedelta(days=3))
         for left, right, expected in ((start, end, 1), (end-timedelta(minutes=1),end+timedelta(minutes=1),1),
-                                      (end,end+timedelta(hours=1),0)):
+                                      (end,end+timedelta(hours=1),1)):
             assert snapshot.peak(article_id,left,right) == expected
             assert _reserved_quantity(session,article_id,left,right) == expected
         target = Booking(id=-1, starts_at=end, ends_at=end+timedelta(hours=1))
-        assert not _asset_conflicts(session,target,asset_id)
+        assert _asset_conflicts(session,target,asset_id)
         target.starts_at = end-timedelta(minutes=1)
         assert _asset_conflicts(session,target,asset_id)
         assert session.get(Booking,booking_id).status == status
     future = (now()+timedelta(days=4)).replace(minute=0,second=0,microsecond=0)
     rows = {item['id']:item for item in availability(future,future+timedelta(hours=1))}
-    assert rows[article_id]['available_quantity'] == 1
+    assert rows[article_id]['available_quantity'] == 0
     selection = [{'article_id':article_id,'quantity':1}]
+    calendar = calendar_availability(future,future+timedelta(hours=1),selection,future.date())
+    assert calendar['selected'] == 'none'
+    assert set(calendar['daily'].values()) == {'none'}
+    assert nearest_available_period(future,future+timedelta(hours=1),selection) is None
+    with pytest.raises(Conflict):
+        create_booking(43,'Следующий клиент','@next_user',future,future+timedelta(hours=1),selection)
+    with Session.begin() as session:
+        booking = session.get(Booking,booking_id)
+        assert booking.status == status
+        booking.status = 'returned'
+        booking.returned_at = now()
+    rows = {item['id']:item for item in availability(future,future+timedelta(hours=1))}
+    assert rows[article_id]['available_quantity'] == 1
     calendar = calendar_availability(future,future+timedelta(hours=1),selection,future.date())
     assert calendar['selected'] == 'all'
     assert set(calendar['daily'].values()) == {'all'}
     assert nearest_available_period(future,future+timedelta(hours=1),selection)['start'] == future.isoformat()
     new_id=create_booking(43,'Следующий клиент','@next_user',future,future+timedelta(hours=1),selection)
     assert transition(new_id,'confirmed',100,actor_name='Оператор') == 'confirmed'
-    with Session() as session:
-        assert session.get(Booking,booking_id).status == status

@@ -13,7 +13,7 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null,isMobile=true}={}) {
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null,isMobile=true,continuousCorners=false}={}) {
   const page=await browser.newPage({viewport:{width,height:844},isMobile,hasTouch:isMobile});
   const errors=[],writes=[];let catalogPreview='';
   let releaseInspectionRefresh;
@@ -67,7 +67,10 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
       return route.fulfill({json:order});
     }
     if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
-    return route.fulfill({body:html,contentType:'text/html'});
+    const document = continuousCorners
+      ? html.replace('</head>', '<link rel="stylesheet" href="/miniapp/static/acceptance-corners.css"></head>')
+      : html;
+    return route.fulfill({body:document,contentType:'text/html'});
   });
   await page.goto('http://polyrental.test/miniapp');
   await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));

@@ -76,7 +76,7 @@
       {height: `${dialog.getBoundingClientRect().height}px`, opacity, paddingTop: style.paddingTop, paddingBottom: style.paddingBottom, marginTop: style.marginTop, marginBottom: style.marginBottom},
       {height: "0px", minHeight: "0px", opacity: 0, paddingTop: "0px", paddingBottom: "0px", marginTop: "0px", marginBottom: "0px"}
     ] : [{opacity}, {opacity: 0}];
-    if (collapse) dialog.style.overflow = "hidden";
+    if (collapse) dialog.style.overflow = "clip";
     const animations = [dialog.animate(exitFrames, {duration: 160, easing: "ease-out", fill: "forwards"})];
     if (card) animations.push(card.animate(frames, {duration: 160, easing: "ease-out", fill: "forwards"}));
     let exitTimeout;
@@ -90,6 +90,56 @@
     exits.set(dialog, {animations, promise});
     return promise;
   }
+  function morphEquipmentPreview(dialog, source, radius, close) {
+    if (preference.matches) {
+      close.focus({preventScroll:true});
+      return;
+    }
+    if (typeof dialog.animate !== "function" || !source.width || !source.height) return;
+    const card = dialog.querySelector(".dialog-card");
+    const destination = card.getBoundingClientRect();
+    if (!destination.width || !destination.height) return;
+    const shell = document.createElement("div");
+    shell.className = "equipment-preview-morph";
+    shell.setAttribute("aria-hidden", "true");
+    const shade = document.createElement("div");
+    shade.className = "equipment-preview-shade";
+    shade.setAttribute("aria-hidden", "true");
+    shade.style.backgroundColor = getComputedStyle(dialog).backgroundColor;
+    const background = dialog.style.backgroundColor;
+    dialog.style.backgroundColor = "transparent";
+    const style = getComputedStyle(card);
+    Object.assign(shell.style, {
+      left: `${destination.left}px`, top: `${destination.top}px`, width: `${destination.width}px`,
+      height: `${destination.height}px`, borderRadius: style.borderRadius || radius,
+      backgroundColor: style.backgroundColor, borderColor: style.borderColor,
+    });
+    const translation = `translate(${source.left - destination.left}px, ${source.top - destination.top}px)`;
+    const scale = `scale(${source.width / destination.width}, ${source.height / destination.height})`;
+    dialog.classList.add("is-preview-morphing");
+    dialog.append(shade, shell);
+    dialog.tabIndex = -1;
+    dialog.focus({preventScroll:true});
+    const timing = {duration:340, easing:"cubic-bezier(.22, 1, .36, 1)"};
+    const animation = shell.animate([{transform:`${translation} ${scale}`}, {transform:"none"}], {...timing, fill:"both"});
+    const fade = shade.animate([{opacity:0}, {opacity:1}], {...timing, fill:"both"});
+    const reduce = () => { if (preference.matches) animation.finish(); };
+    preference.addEventListener("change", reduce);
+    void animation.finished.catch(() => {}).then(() => {
+      preference.removeEventListener("change", reduce);
+      fade.cancel();
+      shade.remove();
+      shell.remove();
+      dialog.style.backgroundColor = background;
+      dialog.classList.remove("is-preview-morphing");
+      if (!dialog.isConnected || dialog.hasAttribute("data-modal-closing")) return;
+      if (!preference.matches) {
+        for (const child of card.children) child.animate([{opacity:0}, {opacity:1}], {duration:130, easing:"ease-out"});
+      }
+      close.focus({preventScroll:true});
+    });
+  }
+
   const headingAnimations = new Map();
   function morphText(element, nextText) {
     if (!element || element.textContent === nextText) return;
@@ -200,7 +250,7 @@
   function cancelSurface(host) {
     const state = surfaces.get(host);
     if (!state) return;
-    surfaces.delete(host); state.observer?.disconnect(); state.animation?.cancel();
+    surfaces.delete(host); state.observer?.disconnect(); cancelAnimationFrame(state.resizeFrame); state.animation?.cancel();
     host.style.overflow = state.overflow;
   }
   function surface(host, change) {
@@ -233,7 +283,10 @@
           if (sizes.get(target) !== size) changed = true;
           sizes.set(target,size);
         }
-        if (changed && surfaces.get(host) === state) animate(host.getBoundingClientRect().height);
+        if (changed && !state.resizeFrame) state.resizeFrame = requestAnimationFrame(() => {
+          state.resizeFrame = 0;
+          if (surfaces.get(host) === state) animate(host.getBoundingClientRect().height);
+        });
       });
       for (const child of host.children) state.observer.observe(child);
     }
@@ -271,5 +324,5 @@
       for (const {animations} of exits.values()) animations.forEach(animation => animation.finish());
     }
   });
-  window.PolyRentalMotion = {surface, cancelSurface, removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, captureCategoryView, transitionCategoryView, waitCategory: () => categoryAnimation?.finished.catch(()=>{}), flyToCart, cancelTransient, morphText, quantityFeedback, stage, result};
+  window.PolyRentalMotion = {surface, cancelSurface, removeDialog, removeRow: element => removeDialog(element, {collapse: true}), enter, reflow, cancelReflow, captureCategory, categoryMorph, captureCategoryView, transitionCategoryView, waitCategory: () => categoryAnimation?.finished.catch(()=>{}), flyToCart, cancelTransient, morphText, morphEquipmentPreview, quantityFeedback, stage, result};
 })();

@@ -9,7 +9,8 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
-from .db import Booking, BookingBotCard, BookingEvent, NotificationDelivery, Session
+from .db import Booking, BookingBotCard, BookingEvent, BookingHandover, NotificationDelivery, Session
+from .return_overdue import CUSTOMER_EVENT, MANAGER_EVENT, RISK_EVENT, at_risk, overdue, staff_route
 
 
 logger = logging.getLogger(__name__)
@@ -55,12 +56,46 @@ async def deliver_notification(delivery_id: int) -> bool:
     if not token:
         return False
     with Session.begin() as session:
+        target = session.execute(select(NotificationDelivery.booking_id, NotificationDelivery.return_due_at)
+            .where(NotificationDelivery.id == delivery_id)).first()
+        if target is None:
+            return False
+        booking = None
+        if target.return_due_at is not None and target.booking_id is not None:
+            # Confirmation uses this same lock order before cancelling pending deliveries.
+            booking = session.get(Booking, target.booking_id, with_for_update={"skip_locked": True})
+            if booking is None:
+                return False
         delivery = session.scalar(select(NotificationDelivery).where(
             NotificationDelivery.id == delivery_id).with_for_update(skip_locked=True))
         if delivery is None:
             return False
         if delivery.sent_at is not None or delivery.cancelled_at is not None:
             return delivery.cancelled_at is None
+        if delivery.return_due_at is not None:
+            at = _now()
+            valid = False
+            if booking is not None:
+                if delivery.event == RISK_EVENT:
+                    valid = delivery.return_due_at == booking.starts_at and at_risk(session, booking, at)
+                else:
+                    handover = session.get(BookingHandover, booking.id)
+                    valid = delivery.return_due_at == booking.ends_at and overdue(
+                        booking, handover.data if handover else {}, at)
+                if valid and delivery.event == CUSTOMER_EVENT:
+                    valid = delivery.recipient_id == booking.customer_id
+                elif valid:
+                    recipients, managers = staff_route(session, booking)
+                    valid = delivery.recipient_id in (managers if delivery.event == MANAGER_EVENT else recipients)
+            if not valid:
+                delivery.cancelled_at, delivery.next_retry_at = at, None
+                return False
+            if delivery.event != CUSTOMER_EVENT:
+                from .operator_preferences import next_actionable_time
+                next_time = next_actionable_time(delivery.recipient_id, at)
+                if next_time > at + timedelta(microseconds=1):
+                    delivery.next_retry_at = next_time
+                    return False
         if delivery.event.startswith("optional_reminder_"):
             from .db import ClientProfile
             booking=session.get(Booking,delivery.booking_id)
@@ -74,11 +109,15 @@ async def deliver_notification(delivery_id: int) -> bool:
         try:
             from .bot import make_bot
             from aiogram.enums import ParseMode
-            from aiogram.types import LinkPreviewOptions
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
             from .customer_next import customer_keyboard, next_action, settings_view
             from html import escape
             booking = session.get(Booking, delivery.booking_id) if delivery.booking_id else None
             markup = customer_keyboard(booking, delivery.recipient_id)
+            if delivery.return_due_at is not None and delivery.event != CUSTOMER_EVENT:
+                from .booking_events import booking_link
+                markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text="Открыть заявку", url=booking_link(booking.id))]])
             ready_push = delivery.delivery_kind == "push" and booking and booking.customer_id == delivery.recipient_id and delivery.event_id and "ready" in session.get(BookingEvent, delivery.event_id).actions
             message = delivery_message(delivery)
             if ready_push:

@@ -381,6 +381,7 @@ def booking_view(booking):
         rework=session.scalar(select(BookingRework).where(BookingRework.booking_id==booking.id).order_by(BookingRework.id.desc()).limit(1))
         from .customer_changes import can_request, latest_request, summary
         client_request = latest_request(session, booking.id)
+    guidance = next_action(booking, get_settings(), handover)
     return {
         "article_media": article_media,
         "can_request_changes": can_request(booking, client_request),
@@ -391,7 +392,8 @@ def booking_view(booking):
         "receipt_preview_available":booking.status=="ready" and bool(handover.get("snapshot")),
         "handover": handover,
         "equipment_details": public_features(booking.id),
-        "next_action": next_action(booking, get_settings()),
+        "next_action": guidance,
+        "return_overdue": guidance["return_overdue"],
         "partial_issue": bool(handover.get("exceptions")),
         "id": booking.id,
         "is_test": booking.is_test,
@@ -498,6 +500,12 @@ def miniapp_page():
 def miniapp_html():
     from .frontend_assets import versioned_html
     document = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("__APP_VERSION__", __version__)
+    if os.getenv("MINIAPP_CONTINUOUS_CORNERS") == "1":
+        document = document.replace(
+            "</head>",
+            '  <link rel="stylesheet" href="/miniapp/static/acceptance-corners.css">\n</head>',
+            1,
+        )
     return versioned_html(document, STATIC_DIR)
 
 
@@ -1170,7 +1178,9 @@ def admin_booking_view(booking):
     result["assignee_id"] = booking.assignee_id
     with Session() as session:
         from .user_names import user_name
+        from .return_overdue import at_risk
         result["assignee_name"] = user_name(session, booking.assignee_id) if booking.assignee_id else ""
+        result["return_risk"] = at_risk(session, booking)
         missing_media = {row.equipment.article_id for row in booking.assets if row.equipment.article_id} - result["article_media"].keys()
         result["article_media"].update(booking_article_media(session, missing_media))
     result["sla"] = request_sla(booking)

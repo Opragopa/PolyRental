@@ -241,6 +241,14 @@ def validate_issue(session, booking, actor_id=None, actor_name=""):
     document = session.get(BookingDocument, (booking.id, data.get("receipt_kind", "receipt_pdf")))
     if document is None:
         raise Conflict("Сохранённая расписка отсутствует")
+    from .return_overdue import occupied_assets
+    assigned = select(BookingAsset.equipment_id).where(
+        BookingAsset.booking_id == booking.id, BookingAsset.deleted_at.is_(None))
+    assets = session.scalars(select(Equipment).where(Equipment.id.in_(assigned))
+        .order_by(Equipment.id).with_for_update()).all()
+    if assets and session.execute(occupied_assets().where(
+        Booking.id != booking.id, Equipment.id.in_([asset.id for asset in assets])).limit(1)).first():
+        raise Conflict("Экземпляр ещё не принят по другой заявке. Верните заявку в подготовку и подберите замену.")
     from .inventory import composition_items
     from .receipt_archive import _decrypt
     from cryptography.exceptions import InvalidTag

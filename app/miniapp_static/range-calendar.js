@@ -1,6 +1,17 @@
 /* Local, reusable range calendar. Dates are ISO calendar days, never local TZ. */
 ((root) => {
   "use strict";
+  const tapAnimations = new WeakMap();
+  const activeAnimations = new Set();
+  const reduced = root.matchMedia?.("(prefers-reduced-motion: reduce)");
+  reduced?.addEventListener("change", () => {
+    if (reduced.matches) for (const animation of activeAnimations) animation.cancel();
+  });
+  function track(animation) {
+    activeAnimations.add(animation);
+    void animation.finished.catch(() => {}).then(() => activeAnimations.delete(animation));
+    return animation;
+  }
   const addDays = (value, count) => {
     const date = new Date(`${value}T12:00:00Z`);
     date.setUTCDate(date.getUTCDate() + count);
@@ -30,6 +41,7 @@
     constructor(element, { minimum, start = "", end = "", onChange = () => {}, onSelect = () => {}, onMonthChange = () => {}, isDisabled = () => false, dayNote = () => "", dayState = () => "" }) {
       this.element = element; this.minimum = minimum; this.range = { start, end }; this.onChange = onChange; this.onSelect = onSelect;
       this.isDisabled = isDisabled;
+      this.radialFill = element.id === "range-calendar";
       this.dayNote = dayNote;
       this.dayState = dayState; this.onMonthChange = onMonthChange;
       this.month = `${start || minimum}`.slice(0, 7) + "-01";
@@ -43,10 +55,13 @@
       date.setUTCMonth(date.getUTCMonth() + amount);
       this.month = date.toISOString().slice(0, 10); this.render(); this.onMonthChange();
       if (navigation) [...this.element.querySelectorAll(".calendar-nav")].find(button => button.getAttribute("aria-label") === navigation)?.focus({preventScroll: true});
+      root.PolyRentalViewportFocus?.reveal(this.element);
     }
     refreshDays(motion = {}) {
       const buttons = [...this.element.querySelectorAll(".calendar-day")];
       const range = buttons.filter(button => this.range.start && this.range.end && button.dataset.date >= this.range.start && button.dataset.date <= this.range.end);
+      const reveals = [];
+      let restartReveal = false;
       const formatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
       for (const [index, button] of buttons.entries()) {
         const previousAvailability = button.dataset.availability;
@@ -58,11 +73,12 @@
         for (const state of ["all", "partial", "none"]) button.classList.toggle(`calendar-availability-${state}`, availability === state);
         if (["all", "partial", "none"].includes(availability)) button.dataset.availability = availability;
         else delete button.dataset.availability;
-        if (previousAvailability !== availability) {
+        if (this.radialFill && previousAvailability !== button.dataset.availability) {
+          restartReveal ||= button.classList.contains("calendar-status-reveal");
           button.classList.remove("calendar-status-reveal");
-          if (["all", "partial", "none"].includes(availability)) {
+          if (button.dataset.availability && !reduced?.matches) {
             button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
-            button.classList.add("calendar-status-reveal");
+            reveals.push([button, "calendar-status-reveal"]);
           }
         }
         button.classList.toggle("calendar-day-busy", Boolean(note));
@@ -70,18 +86,24 @@
         button.setAttribute("aria-pressed", String(selected));
         button.setAttribute("aria-label", formatter.format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
         if (motion.clickedDay) {
+          restartReveal ||= button.classList.contains("calendar-day-reveal");
           button.classList.remove("calendar-day-pop", "calendar-day-reveal");
-          if (day === motion.clickedDay && !this.element.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-            button.getAnimations().forEach(animation => animation.cancel());
-            button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"});
+          tapAnimations.get(button)?.cancel();
+          if (!this.radialFill && day === motion.clickedDay && typeof button.animate === "function" && !reduced?.matches) {
+            const animation = track(button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
+            tapAnimations.set(button, animation);
           }
-          if (motion.revealRange && range.includes(button)) {
-            button.style.setProperty("--range-base", previousAvailability ? "var(--day-status-bg)" : "var(--surface)");
-            button.style.setProperty("--range-reveal-delay", `${range.indexOf(button) * Math.min(80, 600 / Math.max(1, range.length - 1))}ms`);
-            button.classList.add("calendar-day-reveal");
+          const rangePosition = motion.revealRange ? range.indexOf(button) : -1;
+          if (!reduced?.matches && (rangePosition >= 0 || (this.radialFill && day === motion.clickedDay))) {
+            const delay = Math.max(0, rangePosition) * Math.min(80, 600 / Math.max(1, range.length - 1));
+            button.style.setProperty("--range-reveal-delay", `${delay}ms`);
+            reveals.push([button, "calendar-day-reveal"]);
           }
         }
       }
+      // Commit removals together before replaying a reveal interrupted by a click or data update.
+      if (restartReveal && reveals.length) this.element.getBoundingClientRect();
+      for (const [button, className] of reveals) button.classList.add(className);
     }
     render(focusDay = "", motion = {}) {
       const doc = this.element.ownerDocument;
@@ -122,6 +144,12 @@
         const day = addDays(first, index);
         const button = doc.createElement("button"); button.type = "button"; button.className = "calendar-day"; button.dataset.date = day;
         button.textContent = String(Number(day.slice(8))); button.disabled = day < this.minimum || this.isDisabled(day);
+        if (this.radialFill) {
+          const fill = doc.createElement("span");
+          fill.className = "calendar-availability-fill";
+          fill.setAttribute("aria-hidden", "true");
+          button.prepend(fill);
+        }
         button.classList.toggle("outside-month", day.slice(0, 7) !== this.month.slice(0, 7));
         const selected = day === this.range.start || day === this.range.end;
         button.classList.toggle("selected", selected);
@@ -131,16 +159,17 @@
         if (["all", "partial", "none"].includes(availability)) {
           button.classList.add(`calendar-availability-${availability}`);
           button.dataset.availability = availability;
-          button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
-          button.classList.add("calendar-status-reveal");
+          if (this.radialFill && !reduced?.matches) {
+            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
+            button.classList.add("calendar-status-reveal");
+          }
         }
         button.classList.toggle("calendar-day-busy", Boolean(note));
         if (note) button.title = note;
-        button.classList.toggle("calendar-day-pop", day === motion.clickedDay);
-        if (revealPositions.has(day)) {
+        button.classList.toggle("calendar-day-pop", !this.radialFill && day === motion.clickedDay);
+        if (!reduced?.matches && (revealPositions.has(day) || (this.radialFill && day === motion.clickedDay))) {
           button.classList.add("calendar-day-reveal");
-          button.style.setProperty("--range-base", availability ? "var(--day-status-bg)" : "var(--surface)");
-          button.style.setProperty("--range-reveal-delay", `${Math.round(revealPositions.get(day) * revealStep)}ms`);
+          button.style.setProperty("--range-reveal-delay", `${Math.round((revealPositions.get(day) ?? 0) * revealStep)}ms`);
         }
         button.setAttribute("aria-pressed", String(selected));
         button.setAttribute("aria-label", dayFormatter.format(new Date(`${day}T12:00:00Z`)) + (day === this.range.start ? ", начало" : day === this.range.end ? ", конец" : "") + (note ? `, ${note}` : ""));
@@ -156,19 +185,29 @@
           event.preventDefault(); const next = addDays(day, offsets[event.key]);
           if (next < this.minimum) return;
           if (!grid.querySelector(`[data-date="${next}"]`)) { this.month = next.slice(0, 7) + "-01"; this.render(next); this.onMonthChange(); }
-          else grid.querySelector(`[data-date="${next}"]`).focus();
+          else {
+            const nextButton = grid.querySelector(`[data-date="${next}"]`);
+            nextButton.focus({preventScroll: true});
+            root.PolyRentalViewportFocus?.reveal(nextButton, {block: "nearest"});
+          }
         });
-        button.addEventListener("animationend", event => {
+        const finishReveal = event => {
+          if (event.animationName === "calendar-cell-fill" && event.target.classList.contains("calendar-availability-fill")) {
+            button.classList.remove("calendar-status-reveal");
+          }
           if (event.target !== button) return;
-          if (event.animationName === "calendar-day-reveal" && event.pseudoElement === "::before") button.classList.remove("calendar-day-reveal");
-          else if (event.animationName === "calendar-status-wipe" && event.pseudoElement === "::before") button.classList.remove("calendar-status-reveal");
+          if (["calendar-day-reveal", "calendar-cell-fill"].includes(event.animationName) && event.pseudoElement === "::before") button.classList.remove("calendar-day-reveal");
           else if (["calendar-tap", "calendar-day-pop"].includes(event.animationName) && !event.pseudoElement) button.classList.remove("calendar-day-pop");
+        };
+        button.addEventListener("animationend", finishReveal);
+        button.addEventListener("animationcancel", event => {
+          if (reduced?.matches) finishReveal(event);
         });
         grid.append(button);
       }
       this.element.append(header, weekdays, grid);
       if (changingMonth && !doc.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof grid.animate === "function") {
-        grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"});
+        track(grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
       }
       if (focusDay) grid.querySelector(`[data-date="${focusDay}"]`)?.focus({ preventScroll: true });
     }

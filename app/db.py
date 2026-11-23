@@ -573,7 +573,11 @@ class ReleasePublication(Base):
 class NotificationDelivery(Base):
     """Durable Telegram delivery log and retry queue."""
     __tablename__ = "notification_deliveries"
-    __table_args__ = (UniqueConstraint("event_id", "recipient_id", "delivery_kind", name="notification_event_recipient_kind_unique"),)
+    __table_args__ = (
+        UniqueConstraint("event_id", "recipient_id", "delivery_kind", name="notification_event_recipient_kind_unique"),
+        Index("notification_return_due_unique", "booking_id", "recipient_id", "event", "return_due_at", unique=True,
+              postgresql_where=text("return_due_at IS NOT NULL")),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True, index=True)
     recipient_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -586,6 +590,7 @@ class NotificationDelivery(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    return_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
@@ -754,6 +759,11 @@ def init_db():
                     connection.execute(text(f"ALTER TABLE identity_documents ADD COLUMN {name} BYTEA"))
         if "notification_deliveries" in tables and "cancelled_at" not in _columns(connection, "notification_deliveries"):
             connection.execute(text("ALTER TABLE notification_deliveries ADD COLUMN cancelled_at TIMESTAMPTZ"))
+        if "notification_deliveries" in tables and "return_due_at" not in _columns(connection, "notification_deliveries"):
+            connection.execute(text("ALTER TABLE notification_deliveries ADD COLUMN return_due_at TIMESTAMPTZ"))
+            connection.execute(text("""CREATE UNIQUE INDEX IF NOT EXISTS notification_return_due_unique
+                ON notification_deliveries (booking_id, recipient_id, event, return_due_at)
+                WHERE return_due_at IS NOT NULL"""))
         if "support_threads" in tables and "resolved_at" not in _columns(connection, "support_threads"):
             connection.execute(text("ALTER TABLE support_threads ADD COLUMN resolved_at TIMESTAMPTZ"))
         if "deletion_intents" in tables and "expires_at" not in _columns(connection, "deletion_intents"):

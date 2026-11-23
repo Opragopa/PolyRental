@@ -146,7 +146,7 @@ async def show_customer_booking(message, booking_id, user_id, *, replace=False):
     lines = "\n".join(f"• {html.escape(line.article.name[:100])} × {line.quantity}" for line in booking.lines[:8])
     if len(booking.lines)>8: lines += f"\n… ещё позиций: {len(booking.lines)-8}. Полный состав — в заявке."
     from .customer_next import next_action, get_settings
-    guidance = next_action(booking, await asyncio.to_thread(get_settings))
+    guidance = await asyncio.to_thread(next_action, booking, await asyncio.to_thread(get_settings))
     text = f"<b>Заявка {number(booking)}</b>\n{html.escape(guidance['title'])}\n{html.escape(guidance['description'])}\nОборудование:\n{lines or 'Нет позиций'}"
     if getattr(booking, 'rental_purpose', ''):
         text += '\n\nЦель аренды: ' + html.escape(booking.rental_purpose)
@@ -319,11 +319,17 @@ async def show_staff_booking(message, booking_id, user_id):
         text += '\n\nЦель аренды: ' + html.escape(booking.rental_purpose)
     transitions = {"pending": [("Подтвердить", "confirmed")], "confirmed": [("Начать подготовку", "preparing")],
                    "preparing": [("Готова к выдаче", "ready")], "ready": [("Выдать", "issued")],
-                   "issued": [("Начать приёмку", "return_inspection")], "return_inspection": [("Завершить заявку", "returned")]}
+                   "return_inspection": [("Завершить заявку", "returned")]}
     rows = [[button(label, f"sw:ask:{booking_id}:{action}")] for label, action in transitions.get(booking.status, [])]
     handover = await asyncio.to_thread(handover_state, booking_id)
-    if booking.status == "issued" and not handover.get("returning_at"):
-        rows.append([button("Принять без отметки клиента", f"sw:returnask:{booking_id}")])
+    from .return_overdue import booking_at_risk, overdue
+    if overdue(booking, handover):
+        due = booking.ends_at.astimezone(MOSCOW).strftime("%d.%m.%Y %H:%M")
+        text += f"\n<b>Возврат просрочен.</b> Срок сдачи — {due} МСК."
+    if await asyncio.to_thread(booking_at_risk, booking):
+        text += "\n<b>Риск срыва выдачи. Проверьте комплект и при необходимости подберите замену.</b>"
+    if booking.status == "issued" or (booking.status == "return_inspection" and not handover.get("operator_return")):
+        rows.append([button("Подтвердить получение оборудования", f"sw:returnask:{booking_id}")])
     from .customer_changes import request_overview
     change_request = (await asyncio.to_thread(request_overview, booking))["request"]
     if change_request and change_request["status"] == "pending" and booking.status == "confirmed":
@@ -376,14 +382,14 @@ async def staff_action(query: CallbackQuery, state: FSMContext):
             if parts[1] == "returnask":
                 await query.answer()
                 return await query.message.answer(
-                    "Оборудование фактически возвращено. Начать приёмку без отметки клиента?",
+                    "Подтвердите, что оборудование фактически возвращено и уже у вас.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        button("Начать приёмку", f"sw:returndo:{booking_id}"),
+                        button("Подтвердить получение", f"sw:returndo:{booking_id}"),
                         button("Назад", f"sw:open:{booking_id}")]]))
             from .rental import start_return_without_customer
             await asyncio.to_thread(start_return_without_customer, booking_id, query.from_user.id,
                                     telegram_name(query.from_user, "Сотрудник"))
-            await query.answer("Приёмка начата")
+            await query.answer("Получение оборудования подтверждено")
             return await show_staff_booking(query.message, booking_id, query.from_user.id)
         if parts[1] == "page" and len(parts) == 3:
             await query.answer(); return await staff_list(query.message, query.from_user.id, int(parts[2]))

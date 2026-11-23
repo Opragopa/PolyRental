@@ -59,21 +59,18 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         await page.locator('[data-date="2026-10-25"]').evaluate(el=>el.click());
         assert.deepEqual(await page.evaluate(()=>window.__calendarImpacts),['light'],'disabled days must not produce haptics');
         assert.equal(await page.locator('[data-date="2026-10-30"]').getAttribute("aria-pressed"),"true");
-        assert.ok(await page.locator('[data-date="2026-10-30"]').evaluate(el => el.getAnimations().some(animation =>
-          animation.effect.getTiming().duration === 280 && animation.effect.getKeyframes().some(frame => frame.transform === "scale(1.08)"))), "selected day animates briefly without replacing its button");
+        assert.equal(await page.locator('[data-date="2026-10-30"]').evaluate(el => getComputedStyle(el, '::before').animationName), 'calendar-cell-fill');
         assert.equal(await page.locator("#start-time").isDisabled(),true);
         await page.locator('[data-date="2026-11-02"]').click();
         assert.equal(await page.locator(".calendar-day.in-range").count(),2);
         const periodMotion = await page.locator('.calendar-day.calendar-day-reveal').evaluateAll(nodes => nodes.map(node => ({delay:parseFloat(node.style.getPropertyValue('--range-reveal-delay')) || 0, duration:parseFloat(getComputedStyle(node,'::before').animationDuration)})));
         assert(periodMotion.length >= 3 && Math.max(...periodMotion.map(item=>item.delay)) >= 80, 'period reveal must proceed slowly across selected days');
-        assert(periodMotion.every(item=>item.duration >= .39), 'period reveal must use a slower fade');
+        assert(periodMotion.every(item=>item.duration === .3), 'each day reveals for 300 ms');
         const lastReveal = page.locator('.calendar-day.calendar-day-reveal').last();
         await lastReveal.evaluate(el=>el.dispatchEvent(new AnimationEvent('animationend',{animationName:'calendar-tap'})));
         assert(await lastReveal.evaluate(el=>el.classList.contains('calendar-day-reveal')), 'unrelated animations must not cancel the range reveal');
-        const paintedBase = await page.locator('.calendar-day.calendar-day-reveal[data-availability="all"]').first().evaluate(el=>({base:getComputedStyle(el).backgroundColor,status:getComputedStyle(el).getPropertyValue('--day-status-bg').trim()}));
-        assert.notEqual(paintedBase.base,'rgba(0, 0, 0, 0)','availability fill must remain visible during the range reveal');
-        assert.notEqual(paintedBase.base,'rgb(255, 255, 255)','availability fill must not flash white');
-        assert.ok(["none", "calendar-day-reveal", "calendar-status-wipe"].includes(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName)));
+        const paintedBase = await page.locator('.calendar-day.calendar-day-reveal[data-availability="all"]').first().evaluate(el => getComputedStyle(el.querySelector('.calendar-availability-fill')).backgroundColor);
+        assert.equal(paintedBase, 'rgb(215, 241, 226)', 'availability keeps its own layer during the range reveal');
         await page.emulateMedia({reducedMotion:"reduce"});
         assert.equal(await page.locator('[data-date="2026-10-31"]').evaluate(el => getComputedStyle(el, "::before").animationName), "none");
         await page.emulateMedia({reducedMotion:"no-preference"});
@@ -142,24 +139,51 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         await page.close();
       }
     }
-    // Status hover paints diagonally without changing the cell's geometry.
+    // Selection and availability can reveal independently inside the same cell.
     const hover=await browser.newPage({viewport:{width:1024,height:768}});
     await hover.route('**/*',route=>route.fulfill({body:''}));
     await hover.setContent('<div id="range-calendar" class="range-calendar"></div>');
     for(const name of ['style.css','design.css','motion.css']) await hover.addStyleTag({content:fs.readFileSync(path.join(assets,name),'utf8')});
     await hover.addScriptTag({content:fs.readFileSync(path.join(assets,'range-calendar.js'),'utf8')});
-    await hover.evaluate(()=>new PolyRentalCalendar.RangeCalendar(document.querySelector('#range-calendar'),{minimum:'2026-10-30',dayState:day=>day>='2026-10-30'?'all':''}));
+    await hover.evaluate(() => {
+      window.availability = 'all';
+      window.selectionTest = new PolyRentalCalendar.RangeCalendar(document.querySelector('#range-calendar'), {
+        minimum: '2026-10-30', dayState: day => day >= '2026-10-30' ? window.availability : '',
+      });
+    });
     const cell=hover.locator('[data-date="2026-10-30"]');const before=await cell.boundingBox();
     await cell.hover();
-    assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'calendar-status-wipe');
+    assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'calendar-cell-fill');
     const after=await cell.boundingBox();assert.equal(before.width,after.width);assert.equal(before.height,after.height);
+    const fills = await cell.evaluate(el => {
+      el.click();
+      el.click();
+      el.click();
+      window.availability = 'partial';
+      window.selectionTest.refreshDays();
+      const keyframes = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules])
+        .filter(rule => rule instanceof CSSMediaRule).flatMap(rule => [...rule.cssRules])
+        .find(rule => rule.name === 'calendar-cell-fill');
+      return {
+        range: getComputedStyle(el, '::before').animationName,
+        available: getComputedStyle(el.querySelector('.calendar-availability-fill')).animationName,
+        state: el.dataset.availability,
+        frames: [...keyframes.cssRules].map(rule => [rule.style.clipPath, rule.style.transform]),
+      };
+    });
+    assert.equal(fills.range, 'calendar-cell-fill');
+    assert.equal(fills.available, 'calendar-cell-fill');
+    assert.equal(fills.state, 'partial');
+    assert.deepEqual(fills.frames.map(([clip, scale]) => [parseFloat(clip.slice(7)), scale]),
+      [[0, 'scale(1)'], [71, 'scale(1.04)'], [62, 'scale(1)'], [71, 'scale(1)']]);
     await hover.emulateMedia({reducedMotion:'reduce'});
     assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
+    assert.equal(await cell.locator('.calendar-availability-fill').evaluate(el => getComputedStyle(el).animationName), 'none');
     for (const status of ['all','partial','none']) {
       await hover.evaluate(status=>{
         window.selectionTest=new PolyRentalCalendar.RangeCalendar(document.querySelector('#range-calendar'),{minimum:'2026-10-30',start:'2026-11-02',end:'2026-11-06',dayState:()=>status});
       },status);
-      const shade=selector=>hover.locator(selector).evaluate(el=>({fill:getComputedStyle(el,'::before').backgroundColor,color:getComputedStyle(el).color,status:el.dataset.availability}));
+      const shade=selector=>hover.locator(selector).evaluate(el=>({fill:el.matches('.selected,.in-range')?getComputedStyle(el,'::before').backgroundColor:getComputedStyle(el.querySelector('.calendar-availability-fill')).backgroundColor,color:getComputedStyle(el).color,status:el.dataset.availability}));
       const outside=await shade('[data-date="2026-11-09"]');
       const inside=await shade('[data-date="2026-11-04"]');
       const endpoint=await shade('[data-date="2026-11-02"]');

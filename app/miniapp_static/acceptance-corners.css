@@ -1,0 +1,263 @@
+:root {
+  --radius-sheet: 28px;
+  --radius-card: 24px;
+  --radius-widget: 16px;
+  --radius-control: 12px;
+  --radius-icon-button: 10px;
+  --radius-detail: 8px;
+  --radius-pill: 9999px;
+}
+
+:is(.dialog-card, .document-viewer-card, .customer-order-card, .customer-next-card,
+    .order-card, .request-card, .admin-card, .contact-card, .panel, .editor-card,
+    #profile-disclosure, #range-calendar, .profile-theme,
+    .range-calendar, .theme-switch, .theme-switch span, .address-suggestions,
+    .category-card-icon, .catalog-media,
+    .item-card, .equipment-preview-media, .receipt-docx-preview, .notification-bell,
+    .field input:not([type="radio"], [type="checkbox"], [type="range"]),
+    .field select, .field textarea) {
+  corner-shape: squircle;
+}
+
+:is(.dialog-card, .workflow-dialog .dialog-card, #release-dialog .dialog-card, .document-viewer-card) {
+  --dialog-padding: 16px;
+  padding: var(--dialog-padding);
+  border-radius: var(--radius-sheet);
+}
+
+#notification-dialog .dialog-card {
+  padding: 0;
+  border-radius: var(--radius-sheet);
+}
+
+#notification-dialog .notification-header {
+  padding-block-start: 15px;
+  padding-inline-end: 15px;
+}
+
+:is(.equipment-preview-dialog, .receipt-preview-dialog, .document-viewer-card)
+  :is(.equipment-preview-media, .receipt-docx-preview, .document-viewer-body img) {
+  border-radius: max(0px, calc(var(--radius-sheet) - var(--dialog-padding) - 1px));
+  corner-shape: squircle;
+}
+
+/* The standalone document viewer has no border around its padding. */
+.document-viewer-card .document-viewer-body img {
+  border-radius: calc(var(--radius-sheet) - var(--dialog-padding));
+}
+
+.equipment-preview-dialog .equipment-preview-media { overflow: hidden; }
+
+:is(.customer-order-card, .customer-next-card, .order-card, .request-card,
+    .admin-card, .contact-card, .panel, .editor-card),
+:root[data-style="frame"] :is(.customer-order-card, .contact-card, .cart-item, #review-content),
+#profile-disclosure {
+  border-radius: var(--radius-card);
+  corner-shape: squircle;
+}
+
+#profile-disclosure > .profile-private {
+  border-radius: 0 0 calc(var(--radius-card) - 1px) calc(var(--radius-card) - 1px);
+  corner-shape: squircle;
+}
+
+:is(.profile-theme, .catalog-controls, .catalog-period, .info-strip, .notice,
+    .request-next-overview.request-actions, .request-next-head .stage-lock-complete,
+    .customer-status-panel, .receipt-section,
+    .identity-section, .document-group, .catalog-skeleton .catalog-skeleton-card),
+:root[data-style="frame"] .info-strip {
+  border-radius: var(--radius-widget);
+  corner-shape: squircle;
+}
+
+#range-calendar, :root[data-style="frame"] #range-calendar {
+  border: 1px solid var(--line);
+  padding: 8px;
+  border-radius: var(--radius-widget);
+}
+
+#range-calendar .calendar-day::before,
+#range-calendar .calendar-day::after {
+  corner-shape: squircle;
+}
+:is(.theme-switch, :root[data-style="frame"] .theme-switch) {
+  padding: 3px;
+  border-radius: var(--radius-control);
+}
+.theme-switch span { border-radius: var(--radius-detail); }
+
+.address-suggestions { padding: 5px; border-radius: var(--radius-widget); }
+:is(.catalog-controls, .catalog-search-input, .admin-queues) :is(input, select),
+:is(#admin-request-filter, #admin-status, #admin-sort),
+:root[data-style="frame"] .catalog-search-input input,
+.field :is(input:not([type="radio"], [type="checkbox"], [type="range"]), select, textarea) {
+  border-radius: var(--radius-control);
+  corner-shape: squircle;
+}
+
+/* Override legacy button radii, including state and theme selectors.
+   The component rules below set the radius independently of selector specificity. */
+:where(button, .button, [role="button"], summary, input:is([type="button"], [type="submit"], [type="reset"])) {
+  border-radius: var(--button-radius, var(--radius-control)) !important;
+  corner-shape: var(--button-corner-shape, squircle);
+}
+
+:where(.icon-action, .catalog-search-back, .catalog-manage-categories, .catalog-layout-icon,
+       .category-edit, .tab, .admin-mode, .settings-tabs [role="tab"],
+       #client-search-hide-keyboard, .admin-search-hide-keyboard, .address-suggestion) {
+  --button-radius: var(--radius-icon-button);
+}
+
+:where(button.app-version, .recent-category) {
+  --button-radius: var(--radius-pill);
+  --button-corner-shape: round;
+}
+
+.category-delete {
+  --button-radius: 50%;
+  --button-corner-shape: round;
+}
+
+#range-calendar :where(.calendar-nav, .calendar-day) {
+  --button-radius: calc(var(--radius-widget) - 8px - 1px);
+}
+
+.dialog-card :where(.action-row, .release-actions) > .button {
+  --button-radius: max(0px, calc(var(--radius-sheet) - var(--dialog-padding) - 1px));
+}
+
+.catalog-media > .catalog-photo-retry {
+  border-radius: inherit !important;
+  corner-shape: inherit;
+}
+
+:is(.request-toggle, .customer-order-toggle), #profile-disclosure > .profile-card {
+  --button-radius: calc(var(--radius-card) - 1px);
+}
+:is(.request-accordion, .customer-order-accordion, #profile-disclosure)[open]
+  > :is(.request-toggle, .customer-order-toggle, .profile-card) {
+  --button-radius: calc(var(--radius-card) - 1px) calc(var(--radius-card) - 1px) 0 0;
+}
+
+:is(.quantity-control, .item-card .quantity-control, #cart-items .quantity-control, #review-content .quantity-control) {
+  --quantity-inner-radius: calc(var(--radius-control) - 1px);
+  border-radius: var(--radius-control);
+  corner-shape: squircle;
+  overflow: hidden;
+}
+.quantity-control > button:first-child {
+  --button-radius: var(--quantity-inner-radius) 4px 4px var(--quantity-inner-radius);
+}
+.quantity-control > button:last-child {
+  --button-radius: 4px var(--quantity-inner-radius) var(--quantity-inner-radius) 4px;
+}
+
+.profile-support-entry { width: 100%; margin-inline: 0; }
+
+/* A status badge can sit below a full-width action in the same group. */
+:is(.action-row, .action-bar, .done-actions, .release-actions, .profile-identity-actions,
+    .profile-settings-actions, .request-secondary-grid, .request-danger-zone)
+  > .button:not(.icon-action, .catalog-layout-icon):nth-child(1 of :not([hidden], .status-pill)):nth-last-child(1 of :not([hidden], .status-pill)) {
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 100%;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-block-size: 44px;
+  margin-inline: 0;
+  text-align: center;
+}
+
+:is(.status-pill, .condition-pill, .handover-badge),
+:is(.request-toggle, .customer-order-toggle) .status-pill {
+  box-sizing: border-box;
+  inline-size: fit-content;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding: 4px 9px;
+  border-radius: var(--radius-pill);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:is(.request-toggle, .customer-order-toggle) .order-head > .status-pill {
+  flex-shrink: 1;
+}
+
+.external-occupancy-badge {
+  padding: 6px 9px;
+  border-radius: var(--radius-detail);
+  corner-shape: squircle;
+  overflow-wrap: anywhere;
+}
+
+:is(.request-period, .customer-order-period) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-detail);
+  corner-shape: squircle;
+}
+
+:is(.item-name, .available-badge, .request-equipment-info, .profile-summary) {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Include the border in the inset measured from the outer edge. */
+.category-card,
+:root[data-style="studio"] #step-items .category-card,
+:root[data-style="frame"] #client-categories .category-card {
+  --category-padding: 15px;
+  --button-radius: var(--radius-card);
+  padding-block: var(--category-padding);
+  padding-inline-start: var(--category-padding);
+}
+:not(.category-edit-tile) > .category-card { padding-inline-end: var(--category-padding); }
+.category-card .category-card-icon,
+:root[data-style="frame"] #client-categories .category-card-icon {
+  border-radius: max(0px, calc(var(--radius-card) - var(--category-padding) - 1px));
+}
+.category-card-icon { overflow: hidden; }
+.category-card-icon .category-card-photo { border-radius: inherit; corner-shape: inherit; }
+
+#step-items .items-grid.items-grid-tiles .item-card,
+:root[data-style="frame"] #step-items .items-grid.items-grid-tiles .item-card,
+:root:is([data-style="studio"], [data-style="frame"]) #step-items .items-grid:not(.items-grid-tiles) :is(.item-card, .item-card.selected) {
+  --item-padding: 15px;
+  padding: var(--item-padding);
+  border-radius: var(--radius-card);
+}
+
+#step-items .items-grid:not(.items-grid-tiles) .item-card.selected {
+  border-radius: var(--radius-card);
+}
+
+#step-items .item-media {
+  border-radius: max(0px, calc(var(--radius-card) - var(--item-padding, 15px) - 1px));
+  overflow: hidden;
+}
+#step-items .item-media :is(.item-photo, .item-placeholder) {
+  border-radius: inherit;
+  corner-shape: inherit;
+}
+
+.cart-item > .cart-media,
+:root[data-style="frame"] .cart-item > .cart-media {
+  border-radius: max(0px, calc(var(--radius-card) - var(--space-4) - 1px));
+}
+
+@media (max-width: 700px) {
+  #step-items .items-grid.items-grid-tiles .item-card,
+  :root[data-style="frame"] #step-items .items-grid.items-grid-tiles .item-card {
+    --item-padding: 8px;
+  }
+}
+
+@media (max-width: 360px) {
+  :root:is([data-style="studio"], [data-style="frame"]) #step-items .items-grid:not(.items-grid-tiles) :is(.item-card, .item-card.selected) {
+    --item-padding: 11px;
+  }
+}

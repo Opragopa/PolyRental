@@ -86,6 +86,8 @@ const settle = page => page.waitForTimeout(300);
       // Availability refreshes must keep node identity, keyboard focus and motion.
       const calendar = page.locator("#range-calendar");
       const days = calendar.locator(".calendar-day:not(:disabled):not(.outside-month)");
+      const nav = calendar.getByRole("button", {name:"Следующий месяц"});
+      if (await days.count() < 9) await nav.click();
       await days.nth(2).click();
       await days.nth(8).click();
       await page.evaluate(() => {
@@ -97,7 +99,6 @@ const settle = page => page.waitForTimeout(300);
       await page.waitForTimeout(350);
       assert.ok(await page.evaluate(()=>auditDay.isConnected));
       assert.ok(await page.evaluate(()=>document.activeElement===auditDay));
-      const nav = calendar.getByRole("button", {name:"Следующий месяц"});
       await nav.click(); await nav.click();
       await settle(page);
       assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')), "Следующий месяц");

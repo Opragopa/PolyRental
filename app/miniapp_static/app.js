@@ -13,14 +13,60 @@
 
   // Animate the element's height so the surrounding document follows the reveal.
   const disclosureAnimations = new Map();
+  const gridDisclosures = new WeakMap();
+  const viewportFocus = window.PolyRentalViewportFocus;
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   reducedMotion?.addEventListener("change", () => {
-    if (reducedMotion.matches) for (const state of disclosureAnimations.values()) state.animation.finish();
+    if (!reducedMotion.matches) return;
+    for (const state of disclosureAnimations.values()) state.animation.finish();
+    const panels = document.querySelectorAll("#orders-panel, #admin-panel, #admin-content, #release-dialog .dialog-card");
+    for (const panel of panels) {
+      for (const animation of panel.getAnimations()) {
+        if (Number.isFinite(animation.effect?.getComputedTiming().endTime)) animation.finish();
+      }
+    }
   });
   function scrollElementIntoView(element, options) {
-    // Read the current preference at the action boundary, including WebKit updates.
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    element.scrollIntoView({...options, behavior: reduce ? "auto" : "smooth"});
+    return viewportFocus?.reveal(element, options);
+  }
+  function afterDisclosureTransition(element) {
+    element.getBoundingClientRect();
+    return Promise.allSettled((element.getAnimations?.() || []).map(animation => animation.finished));
+  }
+  function settleGridDisclosure(drawer, expanded, animate = true) {
+    const reveal = {};
+    gridDisclosures.set(drawer, reveal);
+    drawer.inert = !expanded;
+    drawer.setAttribute("aria-hidden", String(!expanded));
+    drawer.classList.toggle("is-settled", expanded && !animate);
+    if (!expanded || !animate) return;
+    return afterDisclosureTransition(drawer).then(() => {
+      if (gridDisclosures.get(drawer) === reveal) drawer.classList.add("is-settled");
+    });
+  }
+  function bindEquipmentDisclosure(row, drawer) {
+    settleGridDisclosure(drawer, false, false);
+    const toggle = event => {
+      if (event.target.closest("button, a, .inspection-editor, input, textarea, select, label")) return;
+      if (event.type === "keydown") {
+        if (event.repeat || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+      }
+      const expanded = row.classList.toggle("is-expanded");
+      row.setAttribute("aria-expanded", String(expanded));
+      const after = settleGridDisclosure(drawer, expanded);
+      if (expanded) {
+        focusDisclosure(row);
+        scrollElementIntoView(row, {after, valid: () => !drawer.inert});
+      }
+    };
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", toggle);
+  }
+  async function revealNavigation(load, target) {
+    const since = viewportFocus?.checkpoint();
+    await load();
+    return scrollElementIntoView(target(), {since});
   }
   function disclosureIsOpen(details) {
     return disclosureAnimations.get(details)?.opening ?? details.open;
@@ -28,32 +74,26 @@
   function focusDisclosure(control) {
     control?.focus({preventScroll: true});
   }
-  function revealDisclosure(element, control) {
-    if (element.closest('#admin-settings, #profile-header')) return;
-    if (!element.isConnected || (control && document.activeElement !== control)) return;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight;
-    const tall = element.getBoundingClientRect().height > viewportHeight - 32;
-    scrollElementIntoView(element, {block: tall ? "start" : "nearest", inline: "nearest"});
-  }
   function setDisclosureOpen(details, opening, focus = false) {
     const summary = [...details.children].find(child => child.tagName === "SUMMARY");
     if (opening && focus) focusDisclosure(summary);
     const previous = disclosureAnimations.get(details);
     const startHeight = details.getBoundingClientRect().height;
     previous?.observer?.disconnect();
+    if (previous?.resizeFrame) cancelAnimationFrame(previous.resizeFrame);
+    disclosureAnimations.delete(details);
     previous?.animation.cancel();
     // Management cards contain the page's main content. Keep them in normal
     // flow: a clipped, animated details becomes a nested scrolling surface in
     // mobile WebViews, and revealing it can override the user's scroll gesture.
     if (details.matches(".request-accordion") || reducedMotion?.matches || typeof details.animate !== "function") {
-      disclosureAnimations.delete(details);
       details.style.overflow = previous?.overflow ?? details.style.overflow;
       details.open = opening;
-      if (opening && focus && !details.matches(".request-accordion")) requestAnimationFrame(() => revealDisclosure(details, summary));
+      if (opening && focus) scrollElementIntoView(details, {valid: () => details.open});
       return;
     }
     const overflow = previous?.overflow ?? details.style.overflow;
-    details.style.overflow = "hidden";
+    details.style.overflow = "clip";
     if (opening) details.open = true;
     if (!summary) { details.open = opening; details.style.overflow = overflow; disclosureAnimations.delete(details); return; }
     let endHeight;
@@ -71,25 +111,29 @@
     animation.onfinish = () => {
       if (disclosureAnimations.get(details) !== state) return;
       state.observer?.disconnect();
+      cancelAnimationFrame(state.resizeFrame);
       if (!opening) details.open = false;
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
-      if (opening && focus) revealDisclosure(details, summary);
     };
     animation.oncancel = () => {
       if (disclosureAnimations.get(details) !== state) return;
       state.observer?.disconnect();
+      cancelAnimationFrame(state.resizeFrame);
       details.style.overflow = overflow;
       disclosureAnimations.delete(details);
     };
-    if (opening && details.closest('#admin-settings, #profile-header') && typeof ResizeObserver === 'function') {
+    if (opening && typeof ResizeObserver === 'function') {
       const heights = new Map([...details.children].map(child=>[child,child.getBoundingClientRect().height]));
       state.observer = new ResizeObserver(entries=>{
         const changed = entries.some(({target})=>heights.get(target)!==target.getBoundingClientRect().height);
-        if (changed && disclosureAnimations.get(details) === state) setDisclosureOpen(details, true);
+        if (changed && !state.resizeFrame) state.resizeFrame = requestAnimationFrame(() => {
+          if (disclosureAnimations.get(details) === state) setDisclosureOpen(details, true);
+        });
       });
       for (const child of details.children) state.observer.observe(child);
     }
+    if (opening && focus) scrollElementIntoView(details, {valid: () => disclosureIsOpen(details)});
   }
   document.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -385,7 +429,7 @@
   function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
-  function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; $("global-error").scrollIntoView({ block: "nearest" }); }
+  function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; scrollElementIntoView($("global-error"), {block:"nearest"}); }
   function showIdentityFieldError(name, message) {
     const input = document.querySelector(`#identity-form [name="${name}"]`);
     const field = input?.closest(".field");
@@ -721,7 +765,10 @@
     }
     const mainViews = ["admin", "flow", "orders"];
     const animateMainView = mainViews.includes(state.view) && mainViews.includes(oldMainView) && state.view !== oldMainView;
-    if (oldMainView !== null && state.view !== oldMainView) window.PolyRentalMotion?.cancelTransient();
+    if (oldMainView !== null && state.view !== oldMainView) {
+      viewportFocus?.cancel();
+      window.PolyRentalMotion?.cancelTransient();
+    }
     renderedMainView = state.view;
     if (availabilityCheck && (state.view !== "flow" || state.step !== 2)) {
       availabilityCheck = null; availabilitySequence++; state.busy = false;
@@ -730,7 +777,8 @@
       resetProfileIdentity();
       const disclosure = $("profile-disclosure"), motion = disclosureAnimations.get(disclosure);
       if (motion) {
-        disclosureAnimations.delete(disclosure); motion.animation.cancel(); disclosure.style.overflow = motion.overflow;
+        disclosureAnimations.delete(disclosure); motion.observer?.disconnect(); cancelAnimationFrame(motion.resizeFrame);
+        motion.animation.cancel(); disclosure.style.overflow = motion.overflow;
       }
       disclosure.open = false;
     }
@@ -789,7 +837,7 @@
       if (renderedFlowStep !== null && renderedFlowStep !== state.step) {
         const panel = $(sections[state.step] || "step-done"), heading = panel.querySelector("h2");
         if (heading) { heading.tabIndex = -1; heading.focus({preventScroll:true}); }
-        scrollElementIntoView(panel, {block:"start"});
+        scrollElementIntoView(panel);
         window.PolyRentalMotion?.stage(panel, state.step > renderedFlowStep ? 1 : -1);
         if (done) window.PolyRentalMotion?.result(panel.querySelector('.success-mark'));
       }
@@ -950,52 +998,28 @@
   let preserveAdminCatalogControls = false;
   let inboxUnread = false, inboxOffset = 0, inboxBusy = false, inboxOpener = null;
   const categoryScrollPositions = {client: new Map(), admin: new Map()};
-  let categoryScrollAnimation = null;
-  function cancelCategoryScroll() {
-    if (!categoryScrollAnimation) return;
-    cancelAnimationFrame(categoryScrollAnimation.frame);
-    categoryScrollAnimation.resolve(); categoryScrollAnimation = null;
-  }
-  for (const event of ['wheel', 'touchstart', 'pointerdown']) window.addEventListener(event, cancelCategoryScroll, {passive:true});
-  function settleCategoryScroll(target, valid) {
-    cancelCategoryScroll();
-    const start = window.scrollY, end = Math.max(0, Math.min(target, document.documentElement.scrollHeight - innerHeight));
-    if (Math.abs(end - start) < 1) return Promise.resolve();
-    if (reducedMotion?.matches) { window.scrollTo(window.scrollX, end); return Promise.resolve(); }
-    return new Promise(resolve => {
-      const state = {frame:0, resolve}; categoryScrollAnimation = state; let started;
-      function tick(time) {
-        if (categoryScrollAnimation !== state) return;
-        if (!valid()) { cancelCategoryScroll(); return; }
-        if (started === undefined) started = time;
-        const progress = Math.min(1, (time - started) / 320), eased = 1 - Math.pow(1 - progress, 3);
-        window.scrollTo(window.scrollX, start + (end - start) * eased);
-        if (progress < 1) state.frame = requestAnimationFrame(tick);
-        else { categoryScrollAnimation = null; resolve(); }
-      }
-      state.frame = requestAnimationFrame(tick);
-    });
-  }
-  function categoryDestination(heading, backwards, savedPosition) {
-    if (backwards) return savedPosition;
-    if (!heading) return window.scrollY;
-    const rect = heading.getBoundingClientRect(), top = 120, bottom = window.innerHeight - 150;
-    return rect.top < top || rect.bottom > bottom ? window.scrollY + rect.top - top : window.scrollY;
+  function settleCategoryScroll(heading, backwards, savedPosition, since, valid) {
+    if (since !== viewportFocus?.checkpoint() || !valid()) return;
+    if (backwards) return viewportFocus?.restore(savedPosition, valid);
+    return scrollElementIntoView(heading, {since, valid});
   }
   const categoryHeightLocks = new WeakMap();
   function holdCategoryHeight(panel) {
-    if (!panel || reducedMotion?.matches) return;
+    if (!panel || reducedMotion?.matches) return () => {};
     const old = categoryHeightLocks.get(panel);
     const rect = panel.getBoundingClientRect();
     const floor = Math.max(window.innerHeight, window.innerHeight - rect.top + 24);
     panel.style.setProperty("--category-scroll-floor", `${floor}px`);
     panel.classList.add("catalog-scroll-stable");
     const minimum = Math.max(rect.height, panel.scrollHeight);
-    const state = {previous:old?.previous ?? panel.style.minHeight, timer:null};
-    if (old) clearTimeout(old.timer);
+    const state = {previous:old?.previous ?? panel.style.minHeight};
     panel.style.minHeight = `${minimum}px`;
-    state.timer = setTimeout(() => { if (categoryHeightLocks.get(panel) === state) { panel.style.minHeight = state.previous; categoryHeightLocks.delete(panel); } }, 800);
     categoryHeightLocks.set(panel, state);
+    return () => {
+      if (categoryHeightLocks.get(panel) !== state) return;
+      panel.style.minHeight = state.previous;
+      categoryHeightLocks.delete(panel);
+    };
   }
   let previousCategoryScroll = window.scrollY;
   let categoryScrollFrame = 0;
@@ -1013,11 +1037,12 @@
   }, {passive:true});
   async function navigateClientCategory(code, origin = null) {
     if (code) { try { localStorage.setItem(`${draftKey}:recent-category`, code); } catch (_) {} }
-    cancelCategoryScroll();
+    viewportFocus?.cancel();
+    const since = viewportFocus?.checkpoint();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
     const snapshot = window.PolyRentalMotion?.captureCategoryView($("client-catalog-level"));
     window.PolyRentalMotion?.cancelReflow([$("client-categories"), $("items-grid")]);
-    holdCategoryHeight($("step-items"));
+    const releaseHeight = holdCategoryHeight($("step-items"));
     const direction = code === categoryParent(clientCatalog.category) ? -1 : 1;
     if (direction > 0) categoryScrollPositions.client.set(clientCatalog.category, initialScroll.y);
     const targetScroll = direction < 0 ? (categoryScrollPositions.client.get(code) ?? initialScroll.y) : initialScroll.y;
@@ -1030,11 +1055,13 @@
     const loading = loadItems(false, true);
     window.scrollTo(initialScroll.x, initialScroll.y);
     window.PolyRentalMotion?.transitionCategoryView(snapshot, $("client-catalog-level"), direction);
-    await loading;
-    if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
-    await window.PolyRentalMotion?.waitCategory();
-    if (token !== categoryTransitions.client || state.view !== "flow" || state.step !== 0 || clientCatalog.category !== code) return;
-    await settleCategoryScroll(categoryDestination($('catalog-page-title'), direction < 0, targetScroll), () => token === categoryTransitions.client && state.view === 'flow' && state.step === 0 && clientCatalog.category === code);
+    const current = () => token === categoryTransitions.client && state.view === "flow" && state.step === 0 && clientCatalog.category === code;
+    try {
+      await loading;
+      if (!current()) return;
+      await window.PolyRentalMotion?.waitCategory();
+      await settleCategoryScroll($("catalog-page-title"), direction < 0, targetScroll, since, current);
+    } finally { releaseHeight(); }
   }
   function catalogBack() {
     if (state.view === 'admin' && !$('admin-settings').hidden) { closeAdminSettings(); return true; }
@@ -1359,7 +1386,11 @@
     toggle.textContent = "Изменить имя или телефон"; toggle.setAttribute("aria-expanded", "false");
     const form = document.createElement("form"); form.className = "contact-editor"; form.hidden = true;
     form.innerHTML = `<label class="field"><span>Имя</span><input name="name" value="${escapeHtml(order.customer_name || "")}" maxlength="200" required></label><label class="field"><span>Телефон или Telegram</span><input name="contact" value="${escapeHtml(order.customer_contact || "")}" maxlength="200" autocomplete="tel" required></label><button class="button primary" type="submit">Сохранить изменения</button>`;
-    toggle.addEventListener("click", () => { form.hidden = !form.hidden; toggle.setAttribute("aria-expanded", String(!form.hidden)); });
+    toggle.addEventListener("click", () => {
+      form.hidden = !form.hidden;
+      toggle.setAttribute("aria-expanded", String(!form.hidden));
+      if (!form.hidden) scrollElementIntoView(form);
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true;
       try {
@@ -1492,8 +1523,21 @@
         const customerEquipment = document.createElement('details'); customerEquipment.className = 'request-section request-equipment-section'; customerEquipment.open = true;
         const customerEquipmentTitle = document.createElement('summary'); customerEquipmentTitle.textContent = `Техника · ${order.items.length} поз.`; customerEquipment.append(customerEquipmentTitle);
         const customerEquipmentList = document.createElement('div'); customerEquipmentList.className = 'request-equipment';
-        const itemRows = order.items.map(item => { const row = document.createElement('div'); row.className = 'request-equipment-row'; const main = document.createElement('div'); main.className = 'equipment-card-main'; const thumb = document.createElement('div'); thumb.className = 'request-equipment-thumb'; thumb.innerHTML = catalogMedia(item, 'request-item'); const info = document.createElement('div'); info.className = 'request-equipment-info'; const name = document.createElement('span'); name.className = 'request-equipment-title'; name.textContent = item.title || item.name; const quantity = document.createElement('span'); quantity.className = 'request-equipment-quantity'; quantity.textContent = String(item.quantity); info.append(name, quantity); main.append(thumb, info); row.append(main); customerEquipmentList.append(row); return row; });
-        customerEquipment.append(customerEquipmentList); if (itemRows.length > 5) { const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; const update = expanded => { itemRows.forEach((row,index) => row.hidden = index >= 5 && !expanded); more.setAttribute('aria-expanded',String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${itemRows.length - 5} ▾`; }; more.addEventListener('click',() => update(more.getAttribute('aria-expanded') !== 'true')); update(false); customerEquipment.append(more); } card.append(customerEquipment);
+        const itemRows = order.items.map(item => {
+          const row = document.createElement("div"); row.className = "request-equipment-row";
+          const article = {...order.article_media?.[item.id], ...item};
+          const main = document.createElement("div"); main.className = "equipment-card-main";
+          const thumb = document.createElement("div"); thumb.className = "request-equipment-thumb";
+          thumb.innerHTML = catalogMedia(article, "request-item");
+          const info = document.createElement("div"); info.className = "request-equipment-info";
+          const name = document.createElement("span"); name.className = "request-equipment-title"; name.textContent = item.title || item.name;
+          const quantity = document.createElement("span"); quantity.className = "request-equipment-quantity"; quantity.textContent = String(item.quantity);
+          info.append(name, quantity); main.append(thumb, info); row.append(main);
+          bindEquipmentPreview(row, main, article, {keyboard: true});
+          customerEquipmentList.append(row);
+          return row;
+        });
+        customerEquipment.append(customerEquipmentList); if (itemRows.length > 5) { const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; const update = expanded => { itemRows.forEach((row,index) => row.hidden = index >= 5 && !expanded); more.setAttribute('aria-expanded',String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${itemRows.length - 5} ▾`; }; more.addEventListener('click',() => { const expanded = more.getAttribute('aria-expanded') !== 'true'; update(expanded); if (expanded) scrollElementIntoView(customerEquipment); }); update(false); customerEquipment.append(more); } card.append(customerEquipment);
         if (!(order.status === 'cancelled' && order.identity_status === 'not_required')) { const customerIdentity = document.createElement('section'); customerIdentity.className = 'request-section customer-identity-status'; const identityTitle = document.createElement('h4'); identityTitle.textContent = 'Анкета'; const identitySummary = document.createElement('p'); identitySummary.className = order.identity_status === 'verified' ? 'identity-verified' : 'identity-unverified'; identitySummary.textContent = identityStatusNames[order.identity_status] || 'Не заполнена'; customerIdentity.append(identityTitle,identitySummary); card.append(customerIdentity); }
         accordion.append(toggle, card); outer.append(accordion); $("orders-content").append(outer);
         toggle.addEventListener("click", event => {
@@ -1520,7 +1564,9 @@
   async function searchAddressSuggestions(query, sequence) {
     if (addressSuggestController) addressSuggestController.abort();
     addressSuggestController = new AbortController();
-    const list = $("address-suggestions"); list.replaceChildren();
+    const since = viewportFocus?.checkpoint();
+    const list = $("address-suggestions"), opening = list.hidden;
+    list.replaceChildren();
     try {
       const result = await api("/api/miniapp/address-suggestions", {
         method: "POST", signal: addressSuggestController.signal,
@@ -1539,10 +1585,12 @@
       }
       if (!list.childElementCount) { const empty = document.createElement("p"); empty.className = "address-suggestion-status"; empty.textContent = "Подходящий адрес не найден. Продолжите ввод вручную."; list.append(empty); }
       list.hidden = false; $("registration_address").setAttribute("aria-expanded", "true");
+      if (opening) scrollElementIntoView(list, {since});
     } catch (error) {
       if (error.name === "AbortError" || sequence !== addressSuggestSequence) return;
       const status = document.createElement("p"); status.className = "address-suggestion-status"; status.textContent = "Подсказки временно недоступны. Адрес можно ввести вручную."; list.replaceChildren(status);
       list.hidden = false; $("registration_address").setAttribute("aria-expanded", "true");
+      if (opening) scrollElementIntoView(list, {since});
     }
   }
 
@@ -1593,6 +1641,7 @@
     clearError(); state.identityBookingId = bookingId; state.view = "identity";
     try { localStorage.setItem("polyrental-identity-booking", String(bookingId)); } catch (_) {}
     render();
+    scrollElementIntoView($("identity-panel"));
     state.consent = null; state.identityNeedsChanges = false; state.identityRequiredPhotos = []; state.identityReusableDocuments = [];
     $("identity-form").reset();
     $("identity-submit").disabled = false; $("identity-submit").textContent = "Отправить на проверку";
@@ -1709,8 +1758,7 @@
       session.baseline = null; session.submitting = false;
       clearIdentityRestoreKey();
       form.reset();
-      if (document.startViewTransition && !reducedMotion?.matches) document.startViewTransition(() => { void showOrders(); });
-      else void showOrders();
+      void revealNavigation(showOrders, () => $("orders-panel"));
     } catch (error) { if (identitySessionCurrent(session)) showIdentityError(error); }
     finally { session.submitting = false; if (identitySessionCurrent(session)) { button.disabled = false; button.textContent = "Отправить на проверку"; } }
   }
@@ -1834,12 +1882,13 @@
   async function loadRequestHistory(order, card, page = 0) {
     const history = card.querySelector(".request-history"); const body = history.querySelector(".request-history-body");
     const sequence = String(Number(history.dataset.sequence || 0) + 1); history.dataset.sequence = sequence;
+    body.setAttribute("aria-busy", "true");
     showLoading(body, "Загружаем историю…", 2);
     try {
       const result = await api(`/api/miniapp/admin/bookings/${order.id}/history?page=${page}&page_size=20`);
       if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
       body.replaceChildren();
-      const names = { operator_return_confirmed: "Сотрудник подтвердил фактический возврат без отметки клиента", customer_change_requested: "Клиент запросил изменения", customer_change_approved: "Запрос клиента на изменения одобрен", customer_change_rejected: "Запрос клиента на изменения отклонён", pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_force_edited: "Сотрудник применил изменения заявки", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
+      const names = { operator_return_confirmed: "Сотрудник подтвердил фактический возврат", customer_change_requested: "Клиент запросил изменения", customer_change_approved: "Запрос клиента на изменения одобрен", customer_change_rejected: "Запрос клиента на изменения отклонён", pending: "Заявка возвращена на проверку", subject_request: "Данные удалены по запросу клиента", delete_failed: "Не удалось удалить", customer_received: "Клиент подтвердил получение", customer_returning: "Клиент подтвердил сдачу", paper_issue_signed: "Бумажная подпись при выдаче отмечена", paper_return_signed: "Бумажная подпись при возврате отмечена", assignee_cleared: "Закрепление снято", request_changes_proposed: "Предложены изменения заявки", request_changes_disputed: "Клиент оспорил изменения", request_changes_unanswered: "Клиент не ответил на изменения", request_updated: "Заявка изменена", request_force_edited: "Сотрудник применил изменения заявки", request_rejected: "Заявка отклонена", returned_for_rework: "Заявка возвращена на доработку", return_finding_existing: "Отмечена прежняя особенность", return_finding_damage: "Зафиксировано повреждение", return_finding_lost: "Зафиксирована утеря", legacy_receipt_migrated: "Подготовлена расписка старой выдачи", test_hidden: "Тестовая заявка скрыта", test_unhidden: "Тестовая заявка возвращена", test_flag_on: "Заявка отмечена как тестовая", test_flag_off: "Тестовая отметка снята", support_created: "Создано обращение", support_reopened: "Обращение открыто повторно", support_claimed: "Обращение взято в работу", support_resolved: "Обращение закрыто", support_client_message: "Получено сообщение клиента", support_operator_reply: "Подготовлен ответ оператора", support_routed_to_assignee: "Обращение передано владельцу заявки", created: "Заявка создана", confirmed: "Заявка подтверждена", preparing: "Начата подготовка", ready: "Готово к выдаче", issued: "Оборудование выдано", return_inspection: "Начата проверка возврата", returned: "Возврат завершён", cancelled: "Заявка отменена", expired: "Заявка истекла", submitted: "Анкета отправлена", verified: "Анкета одобрена", changes_requested: "Запрошены исправления анкеты", act_signed: "Отмечено подписание акта", contact_updated: "Контакт обновлён", repair_closed: "Ремонт закрыт", blocked: "Анкета заблокирована", unblocked: "Анкета разблокирована", manual_delete: "Анкета удалена", retention_purge: "Анкета удалена по сроку хранения" };
       if (!result.items?.length) { body.textContent = "Записей пока нет."; return; }
       const list = document.createElement("ol"); list.className = "request-history-list";
       for (const event of result.items) {
@@ -1867,6 +1916,8 @@
         body.textContent = "История временно недоступна. ";
         body.append(actionButton("Повторить", () => loadRequestHistory(order, card, page), order.id, "ghost lock-exempt", false));
       }
+    } finally {
+      if (history.dataset.sequence === sequence) body.removeAttribute("aria-busy");
     }
   }
 
@@ -1874,6 +1925,8 @@
     const lease = order.operation_lease_state || order.operation_lease;
     const activeStage = ["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status);
     const ownership = card.querySelector(".stage-lock");
+    ownership.classList.toggle("stage-lock-complete", !activeStage && order.status !== "needs_changes");
+    if (!activeStage) ownership.classList.remove("stage-lock-expired");
     if(order.status==="needs_changes"){ownership.textContent="Ждём ответа клиента";return;}
     if (!activeStage) { ownership.textContent = "Этап завершён. Закрепление не требуется."; return; }
     const expired = lease && (lease.expired || new Date(lease.expires_at).getTime() <= Date.now());
@@ -1953,6 +2006,7 @@
     document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
     const content = $("admin-content");
     const previousScrollY = window.scrollY;
+    const since = viewportFocus?.checkpoint();
     content.style.minHeight = mode === "orders" && previousCard ? `${content.offsetHeight}px` : "";
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
     if (!content.querySelector(".request-card") || mode !== "orders") showLoading(content, "Загружаем…");
@@ -2015,6 +2069,11 @@
         const owner = document.createElement("span"); owner.className = "request-assignee";
         owner.textContent = order.assignee_id ? (order.assignee_id === state.role?.id ? "Ответственный: вы" : `Ответственный: ${order.assignee_name || "Сотрудник"}`) : "Ответственный не назначен";
         toggle.append(owner);
+        if (order.return_overdue || order.return_risk) {
+          const warning = document.createElement("span"); warning.className = "notice";
+          warning.textContent = order.return_overdue ? "Возврат просрочен" : "Риск срыва выдачи. Проверьте комплект.";
+          toggle.append(warning);
+        }
         const body = document.createElement("div"); body.className = "request-body";
         appendRentalPurpose(body, order);
         const hasInspectionCards = ["preparing", "return_inspection"].includes(order.status) && order.assets?.length > 0;
@@ -2053,6 +2112,8 @@
             remove.addEventListener("click", (event) => { event.stopPropagation(); beginRequestDeletion(order, row, line.id); }); mainBar.append(remove);
           }
           row.append(mainBar);
+          bindEquipmentPreview(row, mainBar, {...mediaItem, title: line.title || article?.title, description: extraDescription},
+            {keyboard: !(fullName || extraDescription || assetSummary)});
           if (fullName || extraDescription || assetSummary) {
             row.classList.add("is-expandable");
             row.tabIndex = 0;
@@ -2064,14 +2125,7 @@
             if (assetSummary) { const meta = document.createElement("small"); meta.className = "inspection-unit-meta"; meta.textContent = assetSummary; drawerInner.append(meta); }
             drawer.append(drawerInner);
             row.append(drawer);
-            const toggleRow = (event) => {
-              if (event.target.closest("button")) return;
-              const expanded = row.classList.toggle("is-expanded");
-              row.setAttribute("aria-expanded", String(expanded));
-              if (expanded) { focusDisclosure(row); setTimeout(() => { if (row.classList.contains("is-expanded")) revealDisclosure(row, row); }, reducedMotion?.matches ? 0 : 280); }
-            };
-            row.addEventListener("click", toggleRow);
-            row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });
+            bindEquipmentDisclosure(row, drawer);
           }
           equipment.append(row);
         }
@@ -2084,7 +2138,12 @@
         if (equipmentRows.length > 5) {
           const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; more.setAttribute('aria-expanded', 'false');
           const updateEquipmentVisibility = expanded => { equipmentRows.forEach((row, index) => { row.hidden = index >= 5 && !expanded; }); more.setAttribute('aria-expanded', String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${equipmentRows.length - 5} ▾`; };
-          more.addEventListener('click', () => updateEquipmentVisibility(more.getAttribute('aria-expanded') !== 'true')); updateEquipmentVisibility(false); equipmentSection.append(more);
+          more.addEventListener('click', () => {
+            const expanded = more.getAttribute('aria-expanded') !== 'true';
+            updateEquipmentVisibility(expanded);
+            if (expanded) scrollElementIntoView(equipmentSection);
+          });
+          updateEquipmentVisibility(false); equipmentSection.append(more);
         }
         if (hasInspectionCards) equipmentSection.hidden = true;
         const formHost = document.createElement('section'); formHost.className = 'request-section request-form-host';
@@ -2131,10 +2190,10 @@
           }, order.id, ["manager","admin"].includes(state.role?.staff_role)?"secondary lock-exempt":"secondary"));
         }
         if (order.status === "pending") actions.append(actionButton("Подтвердить заявку", transitionAction("confirmed"), order.id, "primary workflow-next"));
-        if (order.status === 'issued' && !order.handover?.returning_at) {
-          nextStep.textContent = 'Примите оборудование, когда клиент его вернёт';
-          actions.append(actionButton('Принять без отметки клиента', async () => {
-            await workflowDialog('Начать приёмку', '<p>Оборудование фактически возвращено. Начать приёмку без отметки клиента?</p>', 'Начать приёмку', null,
+        if (order.status === 'issued' || (order.status === 'return_inspection' && !order.handover?.operator_return)) {
+          nextStep.textContent = 'Подтвердите получение, когда оборудование будет у вас';
+          actions.append(actionButton('Подтвердить получение оборудования', async () => {
+            await workflowDialog('Получение оборудования', '<p>Подтвердите, что оборудование уже у вас.</p>', 'Подтвердить получение', null,
               async () => api(`/api/miniapp/admin/bookings/${order.id}/return-without-customer`, {method:'POST'}));
           }, order.id, 'primary workflow-next'));
         }
@@ -2262,7 +2321,7 @@
       }, 1000);
       const selectedCard = content.querySelector(`.request-card[data-booking-id="${selectedRequestId}"]`);
       const selectedToggle = selectedCard?.querySelector(".request-toggle");
-      if (anchoredRequestId === selectedRequestId && previousTop != null && selectedToggle) {
+      if (anchoredRequestId === selectedRequestId && previousTop != null && selectedToggle && since === viewportFocus?.checkpoint()) {
         const targetScrollY = window.scrollY + selectedToggle.getBoundingClientRect().top - previousTop;
         content.style.minHeight = "";
         const shortfall = previousScrollY + window.innerHeight - document.documentElement.scrollHeight;
@@ -2336,6 +2395,7 @@
       }
       const mainBar = document.createElement("div"); mainBar.className = "equipment-card-main";
       mainBar.append(thumb, details, rowActions);
+      bindEquipmentPreview(row, mainBar, {...mediaItem, title: shortTitle, description: article?.description});
       row.append(mainBar);
       const drawer = document.createElement("div"); drawer.className = "equipment-card-drawer";
       const drawerInner = document.createElement("div"); drawerInner.className = "equipment-card-drawer-inner";
@@ -2355,14 +2415,7 @@
       }
       drawer.append(drawerInner);
       row.append(drawer);
-      const toggleRow = (event) => {
-        if (event.target.closest("button, .inspection-editor, input, textarea, select, label")) return;
-        const expanded = row.classList.toggle("is-expanded");
-        row.setAttribute("aria-expanded", String(expanded));
-        if (expanded) { focusDisclosure(row); setTimeout(() => { if (row.classList.contains("is-expanded")) revealDisclosure(row, row); }, reducedMotion?.matches ? 0 : 280); }
-      };
-      row.addEventListener("click", toggleRow);
-      row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRow(event); } });
+      bindEquipmentDisclosure(row, drawer);
       group.append(row);
     }
     const markAll = document.createElement("button"); markAll.type = "button"; markAll.className = "button secondary inspection-all-pass";
@@ -2444,7 +2497,7 @@
       if (refreshed) {
         const heading = refreshed.querySelector('.request-toggle');
         heading?.focus({preventScroll:true});
-        refreshed.scrollIntoView({behavior: reducedMotion?.matches ? 'instant' : 'smooth', block:'start'});
+        scrollElementIntoView(refreshed);
       }
     }, bookingId, "primary lock-exempt", false);
     const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost lock-exempt");
@@ -2473,7 +2526,7 @@
     host.append(card);
     const toggle = host.querySelector('.request-review-button');
     if (toggle) { toggle.textContent = 'Скрыть анкету'; toggle.setAttribute('aria-label', 'Скрыть анкету'); toggle.setAttribute('aria-expanded', 'true'); }
-    card.focus({preventScroll:true}); requestAnimationFrame(() => scrollElementIntoView(card, {block:'start', inline:'nearest'}));
+    card.focus({preventScroll:true}); scrollElementIntoView(card);
   }
 
   function requestIdentityChanges(bookingId) {
@@ -2495,7 +2548,7 @@
       row.append(checkbox, text); choices.append(row);
     }
     const returnFocus = document.activeElement;
-    form.reset(); $("identity-review-submit").disabled = false; setDialogHidden(dialog, false); dialog.querySelector("input")?.focus();
+    form.reset(); $("identity-review-submit").disabled = false; setDialogHidden(dialog, false); dialog.querySelector("input")?.focus({preventScroll:true});
     return new Promise((resolve, reject) => {
       let submitting = false;
       const keydown = (event) => {
@@ -2567,20 +2620,14 @@
   let documentViewerSequence = 0;
   let documentViewerReturnFocus = null;
   function trapDialogFocus(event, dialog) {
-    const focusable = [...dialog.querySelectorAll("button, input, textarea, select, summary, a[href], [tabindex]")].filter((node) => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden], [inert]') && node.getClientRects().length);
-    const first = focusable[0], last = focusable[focusable.length - 1];
-    if (!first || !dialog.contains(document.activeElement) || document.activeElement === dialog) {
-      event.preventDefault(); window.PolyRentalDialogs?.focus(dialog, event.shiftKey); return;
-    }
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    window.PolyRentalDialogs?.trap(event, dialog);
   }
 
   function requestReworkComment(target) {
     const dialog = $("rework-dialog"), form = $("rework-form"), cancel = $("rework-cancel");
     const comment = form.elements.comment, returnFocus = document.activeElement;
     form.reset(); $("rework-target").textContent = `Заявка вернётся на этап «${target}».`;
-    setDialogHidden(dialog, false); comment.focus();
+    setDialogHidden(dialog, false); comment.focus({preventScroll:true});
     return new Promise((resolve) => {
       const finish = (value) => {
         setDialogHidden(dialog, true); form.reset(); form.removeEventListener("submit", submit);
@@ -2600,7 +2647,7 @@
     documentViewerItems = kinds;
     documentViewerIndex = 0;
     const viewer = $("document-viewer"); setDialogHidden(viewer, false);
-    $("document-viewer-close").focus();
+    $("document-viewer-close").focus({preventScroll:true});
     await loadDocumentViewerImage(bookingId);
   }
   async function loadDocumentViewerImage(bookingId) {
@@ -2626,7 +2673,8 @@
   }
 
   async function navigateAdminCategory(code, staticResult = null, origin = null) {
-    cancelCategoryScroll();
+    viewportFocus?.cancel();
+    const since = viewportFocus?.checkpoint();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
     const previousCategory = catalogView.category;
     const backwards = code === categoryParent(previousCategory);
@@ -2634,7 +2682,7 @@
     const targetScroll = backwards ? (categoryScrollPositions.admin.get(code) ?? initialScroll.y) : initialScroll.y;
     const snapshot = window.PolyRentalMotion?.captureCategoryView($("admin-catalog-level"));
     window.PolyRentalMotion?.cancelReflow([document.querySelector(".admin-categories"), document.querySelector(".admin-catalog-items")]);
-    holdCategoryHeight($("admin-content"));
+    const releaseHeight = holdCategoryHeight($("admin-content"));
     const token = ++categoryTransitions.admin;
     preserveAdminCatalogControls = true;
     ++catalogView.sequence;
@@ -2652,12 +2700,15 @@
       window.PolyRentalMotion?.transitionCategoryView(snapshot, $("admin-catalog-level"), backwards ? -1 : 1);
       await reloadCatalogPage(false, true);
     }
-    if (token !== categoryTransitions.admin || state.view !== "admin" || state.adminMode !== "catalog" || catalogView.category !== code) { if (token === categoryTransitions.admin) preserveAdminCatalogControls = false; return; }
-    preserveAdminCatalogControls = false;
-    const heading = $("admin-catalog-heading"); heading?.focus({preventScroll:true});
-    await window.PolyRentalMotion?.waitCategory();
-    if (token !== categoryTransitions.admin || state.view !== 'admin' || state.adminMode !== 'catalog' || catalogView.category !== code) return;
-    await settleCategoryScroll(categoryDestination(heading, backwards, targetScroll), () => token === categoryTransitions.admin && state.view === 'admin' && state.adminMode === 'catalog' && catalogView.category === code);
+    const current = () => token === categoryTransitions.admin && state.view === "admin" && state.adminMode === "catalog" && catalogView.category === code;
+    try {
+      if (token === categoryTransitions.admin) preserveAdminCatalogControls = false;
+      if (!current()) return;
+      const heading = $("admin-catalog-heading");
+      if (since === viewportFocus?.checkpoint()) heading?.focus({preventScroll:true});
+      await window.PolyRentalMotion?.waitCategory();
+      await settleCategoryScroll(heading, backwards, targetScroll, since, current);
+    } finally { releaseHeight(); }
   }
   function catalogPagePath() {
     return `/api/miniapp/admin/catalog?${new URLSearchParams({page:String(catalogView.page), page_size:"20", q:catalogView.query, condition:catalogView.status, category:catalogView.category})}`;
@@ -2710,7 +2761,7 @@
       const form = catalogEditor(result, editor);
       content.append(form);
       const heading = form.querySelector("h3"); heading.tabIndex = -1;
-      heading.focus({preventScroll:true}); form.scrollIntoView({block:"start"});
+      heading.focus({preventScroll:true}); scrollElementIntoView(form);
       return;
     }
     const canManageItems = ["manager", "admin"].includes(state.role?.staff_role);
@@ -2836,14 +2887,18 @@
       const collapse = card.querySelector(".article-collapse");
       const header = card.querySelector(".article-card-head");
       const toggle = card.querySelector(".article-toggle");
-      const setExpanded = expanded => {
-        collapse.classList.toggle("is-open", expanded); collapse.inert = !expanded;
-        collapse.setAttribute("aria-hidden", String(!expanded));
+      const setExpanded = (expanded, animate) => {
+        collapse.classList.toggle("is-open", expanded);
         toggle.setAttribute("aria-expanded", String(expanded)); toggle.textContent = expanded ? "Скрыть" : "Подробнее";
         if (expanded) catalogView.expanded.add(article.id); else catalogView.expanded.delete(article.id);
+        return settleGridDisclosure(collapse, expanded, animate);
       };
-      setExpanded(catalogView.expanded.has(article.id));
-      const toggleDetails = () => setExpanded(!catalogView.expanded.has(article.id));
+      setExpanded(catalogView.expanded.has(article.id), false);
+      const toggleDetails = () => {
+        const opening = !catalogView.expanded.has(article.id);
+        const after = setExpanded(opening, true);
+        if (opening) scrollElementIntoView(card, {valid: () => !collapse.inert, after});
+      };
       toggle.addEventListener("click", toggleDetails);
       header.addEventListener("click", event => {
         if (!event.target.closest("button, a, input, select, textarea, summary")) toggleDetails();
@@ -3165,7 +3220,7 @@
       const start = dialog.querySelector('[name="start"]'), end = dialog.querySelector('[name="end"]');
       const startTime = dialog.querySelector('.external-start-time'), endTime = dialog.querySelector('.external-end-time');
       const warning = dialog.querySelector('.external-warning'), retry = dialog.querySelector('.external-retry');
-      const overlaps = (left, right, item) => Date.parse(item.start) < right && (!item.end || Date.parse(item.end) > left);
+      const overlaps = (left, right, item) => Date.parse(item.start) < right && (item.held_until_return || !item.end || Date.parse(item.end) > left);
       const update = range => {
         start.value = range.start && startTime.value ? `${range.start}T${startTime.value}` : '';
         end.value = range.end && endTime.value ? `${range.end}T${endTime.value}` : '';
@@ -3216,10 +3271,93 @@
     }
   }
 
-  function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null) {
+  function bindEquipmentPreview(row, surface, article, {keyboard = false} = {}) {
+    const holdDuration = 440;
+    const title = article.title?.trim() || catalogTitle(article);
+    const description = article.description?.trim() || "Описание пока не добавлено.";
+    let gesture = null;
+    let suppressClick = false;
+    let previewOpen = false;
+    surface.classList.add("equipment-preview-trigger");
+    row.classList.add("equipment-preview-source");
+    row.setAttribute("aria-keyshortcuts", keyboard ? "Enter Space" : "Shift+Enter");
+    row.setAttribute("aria-description", "Удерживайте карточку, чтобы посмотреть оборудование.");
+    if (keyboard) {
+      row.tabIndex = 0;
+      if (!row.querySelector("button")) row.setAttribute("role", "button");
+      row.setAttribute("aria-haspopup", "dialog");
+    }
+    const stop = () => {
+      if (!gesture) return;
+      clearTimeout(gesture.timer);
+      gesture.listeners.abort();
+      gesture = null;
+      row.classList.remove("is-preview-pressed");
+    };
+    const show = async (source = row.getBoundingClientRect()) => {
+      if (previewOpen || !row.isConnected || row.closest("[inert]") || !row.getClientRects().length) return;
+      previewOpen = true;
+      const photo = article.image_data || article.image_url ? catalogMedia({...article, name:title}, "equipment-preview") : "";
+      try {
+        await workflowDialog(title, `${photo}<p class="equipment-preview-description">${escapeHtml(description)}</p>`, "Закрыть", dialog => {
+          dialog.querySelector(".workflow-cancel").hidden = true;
+          const close = dialog.querySelector('[type="submit"]');
+          close.dataset.initialFocus = "";
+          window.PolyRentalMotion?.morphEquipmentPreview(dialog, source, getComputedStyle(row).borderRadius, close);
+        }, null, {opener: row, equipmentPreview: true});
+      } finally {
+        previewOpen = false;
+      }
+    };
+    surface.addEventListener("pointerdown", event => {
+      stop();
+      suppressClick = false;
+      if (!event.isPrimary || event.button !== 0 || event.target.closest("button, a, input, select, textarea, label")) return;
+      const {pointerId, clientX, clientY} = event;
+      const listeners = new AbortController();
+      const options = {capture:true, passive:true, signal:listeners.signal};
+      row.classList.add("is-preview-pressed");
+      const timer = setTimeout(() => {
+        const source = row.getBoundingClientRect();
+        stop();
+        suppressClick = true;
+        void show(source);
+      }, holdDuration);
+      gesture = {timer, listeners};
+      window.addEventListener("pointermove", move => {
+        if (move.pointerId === pointerId && Math.hypot(move.clientX - clientX, move.clientY - clientY) > 10) stop();
+      }, options);
+      window.addEventListener("pointerup", up => { if (up.pointerId === pointerId) stop(); }, options);
+      window.addEventListener("pointercancel", cancel => { if (cancel.pointerId === pointerId) stop(); }, options);
+      window.addEventListener("wheel", stop, options);
+      window.addEventListener("blur", stop, options);
+    });
+    surface.addEventListener("contextmenu", event => {
+      if (!event.target.closest("button, a, input, select, textarea")) event.preventDefault();
+    });
+    surface.addEventListener("dragstart", event => event.preventDefault());
+    row.addEventListener("click", event => {
+      if (!suppressClick || event.detail === 0) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+    row.addEventListener("keydown", event => {
+      if (event.target !== row || event.repeat || !(keyboard ? ["Enter", " "].includes(event.key) : event.shiftKey && event.key === "Enter")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void show();
+    });
+  }
+
+  function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null, {opener = null, equipmentPreview = false} = {}) {
     return new Promise((resolve) => {
-      const previous = window.PolyRentalDialogs?.opener() || document.activeElement;
+      const previous = opener || window.PolyRentalDialogs?.opener() || document.activeElement;
       const dialog = document.createElement("section"); dialog.className = "dialog-backdrop workflow-dialog";
+      if (equipmentPreview) {
+        dialog.classList.add("equipment-preview-dialog");
+        dialog.dataset.modalScroll = "overlay";
+      }
       dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-label", title);
       dialog.innerHTML = `<form class="dialog-card"><h2>${escapeHtml(title)}</h2>${content}<div class="action-row"><button type="button" class="button ghost workflow-cancel">Отмена</button><button type="submit" class="button primary">${escapeHtml(submitLabel)}</button></div></form>`;
       let pending=false;
@@ -3240,7 +3378,24 @@
         });
       };
       dialog.querySelector(".workflow-cancel").addEventListener("click", () => finish(null));
-      dialog.addEventListener("click", event => { if (event.target === dialog && window.matchMedia("(min-width: 768px)").matches) finish(null, true); });
+      let previewPress = false;
+      let backdropPress = false;
+      dialog.addEventListener("pointerdown", event => {
+        previewPress = true;
+        backdropPress = event.target === dialog;
+      });
+      if (equipmentPreview) dialog.addEventListener("click", event => {
+        // Android can retarget the click from the original hold to the new dialog.
+        if (!previewPress && event.detail > 0) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+        previewPress = false;
+      }, true);
+      dialog.addEventListener("click", event => {
+        if (event.target === dialog && (equipmentPreview ? backdropPress : window.matchMedia("(min-width: 768px)").matches)) finish(null, true);
+        backdropPress = false;
+      });
       dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") finish(null); if (event.key === "Tab") trapDialogFocus(event, dialog); });
       dialog.querySelector("form").addEventListener("submit", async (event) => {
         event.preventDefault();if(pending)return;
@@ -3264,7 +3419,7 @@
           }
           message.hidden = false;
           message.textContent = error.message;
-          message.scrollIntoView({block:"nearest", behavior:"instant"});
+          scrollElementIntoView(message, {block:"nearest"});
           message.focus({preventScroll:true});
         }
       });
@@ -3272,7 +3427,7 @@
       registerStaffForm(dialog.querySelector("form"));
       const initial = dialog.querySelector("[data-initial-focus]");
       if (initial) { initial.focus({preventScroll:true}); dialog.querySelector(".dialog-card").scrollTop = 0; }
-      else (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus();
+      else (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus({preventScroll:true});
     });
   }
 
@@ -3308,12 +3463,12 @@
   }
 
   function workflowSnapshot(result) {
-    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, identity_status: order.identity_status, change_status: order.change_status, change_type: order.change_type, customer_change_request: order.customer_change_request, can_request_changes: order.can_request_changes, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
+    return JSON.stringify({total: result.total, items: (result.items || []).map(order => ({id: order.id, status: order.status, return_overdue: order.return_overdue, return_risk: order.return_risk, identity_status: order.identity_status, change_status: order.change_status, change_type: order.change_type, customer_change_request: order.customer_change_request, can_request_changes: order.can_request_changes, assignee_id: order.assignee_id, starts_at: order.starts_at, ends_at: order.ends_at, items: order.items, assets: order.assets, inspections: order.inspections, handover: order.handover, receipt_available: order.receipt_available, receipt_preview_available: order.receipt_preview_available, sla: order.sla ? {stage: order.sla.stage, deadline: order.sla.deadline, breached: order.sla.breached, soon: order.sla.soon} : null}))});
   }
 
   function workflowRefreshSafe() {
     const active = document.activeElement;
-    return !document.hidden && !state.busy && !pendingDeletion && !document.querySelector('.workflow-dialog, .identity-check-review, .review-loading, .assignment-editor, .inspection-editor, .inspection-all-pass:disabled, [data-action-pending="true"]') && $("document-viewer").hidden && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden && $("rework-dialog").hidden && $("identity-review-dialog").hidden && !(active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) && ![...document.querySelectorAll(".request-summary input:not([type=checkbox])")].some(input => input.value.trim());
+    return !document.hidden && !state.busy && !viewportFocus?.inProgress() && !pendingDeletion && !document.querySelector('.workflow-dialog, .identity-check-review, .review-loading, .assignment-editor, .inspection-editor, .inspection-all-pass:disabled, [data-action-pending="true"]') && $("document-viewer").hidden && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden && $("rework-dialog").hidden && $("identity-review-dialog").hidden && !(active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) && ![...document.querySelectorAll(".request-summary input:not([type=checkbox])")].some(input => input.value.trim());
   }
 
   async function refreshWorkflow() {
@@ -3386,6 +3541,19 @@
     copy.append(title);
     const summary = item.summary ?? lines.join(' ');
     if (summary) { const message = document.createElement('p'); message.textContent = summary; copy.append(message); }
+    if (item.booking_id) copy.append(plainButton("Открыть заявку", async () => {
+      $("notification-close").click();
+      if (!item.staff) return openCustomerBooking(item.booking_id);
+      selectedRequestId = item.booking_id;
+      state.adminTargetId = item.booking_id;
+      state.adminPage = 0;
+      state.adminRequestFilter = state.adminQueue = state.adminStatus = "all";
+      await revealNavigation(() => showAdmin("orders"), () => document.querySelector(`.request-card[data-booking-id="${item.booking_id}"]`));
+    }, "ghost"));
+    if (item.booking_id && !item.staff) copy.append(plainButton("Связаться с оператором", () => {
+      $("notification-close").click();
+      return openSupport("request", item.booking_id);
+    }, "ghost"));
     const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = notificationTime(item.created_at); date.title = dateText(item.created_at);
     copy.append(date); row.append(icon, copy); $('notification-items').append(row);
   }
@@ -3430,7 +3598,13 @@
     catch (_) { /* Retry while open; unacknowledged invitations are never lost. */ }
   }
   function openCustomerBooking(id) {
-    selectedCustomerOrderId=id; state.profileTargetId=id;state.profileFilter='all';$('profile-filter').value='all';return showOrders();
+    clearTimeout(profileSearchTimer);
+    selectedCustomerOrderId = id;
+    state.profileTargetId = id;
+    state.profilePage = 0;
+    state.profileNumber = $("profile-number").value = "";
+    state.profileFilter = $("profile-filter").value = "all";
+    return revealNavigation(showOrders, () => $("orders-content").querySelector(`[data-booking-id="${id}"]`) || $("orders-content"));
   }
   async function startCustomerReturn(id) {
     const order = await api(`/api/miniapp/bookings/${id}`);
@@ -3771,7 +3945,7 @@
   let assignmentOpening = false;
   async function manualAssign(order) {
     const existing = document.querySelector('.assignment-editor');
-    if (existing) { scrollElementIntoView(existing, {block:'start'}); return; }
+    if (existing) { scrollElementIntoView(existing); return; }
     if (assignmentOpening) return;
     if (!order.lines.some(line => line.quantity > 0)) { showError('В заявке нет оборудования. Верните заявку на доработку или обратитесь к администратору для восстановления позиции.'); return; }
     assignmentOpening = true;
@@ -3834,7 +4008,7 @@
       form.append(group);
     }
     const buttons = document.createElement("div"); buttons.className = "action-row"; buttons.innerHTML = `<button class="button primary" type="submit">Сохранить замену</button>`; form.append(buttons);
-    $("admin-content").prepend(editor); scrollElementIntoView(editor, {block: "start"});
+    $("admin-content").prepend(editor); scrollElementIntoView(editor);
     registerStaffForm(form);
     editor.querySelector(".assignment-close").addEventListener("click", () => { if (!staffFormDirty(form) || window.confirm("Отменить несохранённые изменения?")) editor.remove(); });
     const refreshAssignmentOptions = () => {
@@ -3893,9 +4067,9 @@
     if (targetRow) {
       targetRow.classList.add("has-inspection-editor");
       targetRow.append(card);
-      scrollElementIntoView(card, {block: "nearest"});
+      scrollElementIntoView(card);
     } else {
-      content.prepend(card); scrollElementIntoView(card, {block: "start"});
+      content.prepend(card); scrollElementIntoView(card);
     }
     registerStaffForm(card.querySelector("form"));
     card.querySelector(".inspection-close").addEventListener("click", () => {
@@ -3941,12 +4115,14 @@
   }
 
   $("calendar-feed-load").addEventListener("click", async (event) => {
+    const since = viewportFocus?.checkpoint();
     const button = event.currentTarget; button.disabled = true;
     const status = $("calendar-feed-status"); status.textContent = "Формируем защищённую ссылку…";
     try {
       const result = await api("/api/miniapp/admin/calendar-feed");
       const input = $("calendar-feed-url"); input.value = result.url; $("calendar-feed-field").hidden = false;
       $("calendar-feed-copy").hidden = false;
+      scrollElementIntoView($("calendar-feed-field"), {since});
       status.textContent = "Вставьте эту ссылку в Google Calendar: Другие календари → Добавить по URL. Ссылка даёт доступ к расписанию; не пересылайте её посторонним.";
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
@@ -4119,6 +4295,7 @@
   catalogView.layout = "list"; $("client-categories").classList.add("categories-list");
   async function findNearestPeriod() {
     const sequence = ++nearestSearchSequence;
+    const since = viewportFocus?.checkpoint();
     const button = $("nearest-search"), key = nearestSelectionKey(); nearestProposal = null; $("nearest-apply").hidden = true;
     $("nearest-status").textContent = "Ищем сроки для всей подборки…"; button.disabled = true;
     try {
@@ -4128,6 +4305,7 @@
       nearestProposal = {key, ...result.period};
       $("nearest-status").textContent = `Вся подборка в нужном количестве доступна: ${dateText(result.period.start)} — ${dateText(result.period.end)} МСК. Перед продолжением доступность будет проверена ещё раз.`;
       $("nearest-apply").hidden = false;
+      scrollElementIntoView($("nearest-period"), {since});
     } catch (error) { if (sequence === nearestSearchSequence && key === nearestSelectionKey()) $("nearest-status").textContent = `Не удалось найти сроки: ${error.message}`; }
     finally { if (sequence === nearestSearchSequence) button.disabled = false; }
   }
@@ -4177,15 +4355,19 @@
       selectSettingsTab('notifications'); $('admin-settings').hidden = false; $('admin-panel').classList.add('settings-open');
       changeHeading($('admin-heading'), 'Настройки'); $('operator-notification-settings').open = true;
     });
-    syncCatalogBackButton(); window.scrollTo(0, 0); $('admin-heading').focus({preventScroll:true});
+    syncCatalogBackButton(); $('admin-heading').focus({preventScroll:true});
+    scrollElementIntoView($('admin-settings'));
   });
-  for (const name of ['notifications', 'calendar', 'booking', 'handover', 'staff']) $('settings-tab-' + name).addEventListener('click', () => selectSettingsTab(name));
+  for (const name of ['notifications', 'calendar', 'booking', 'handover', 'staff']) $('settings-tab-' + name).addEventListener('click', () => {
+    selectSettingsTab(name);
+    scrollElementIntoView($(`settings-${name}`));
+  });
   $('admin-settings').querySelector('[role="tablist"]').addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden);
     let index = tabs.indexOf(document.activeElement); if (index < 0) return;
     event.preventDefault(); index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-    tabs[index].click(); tabs[index].focus();
+    tabs[index].click(); tabs[index].focus({preventScroll:true});
   });
   $("admin-back-button").addEventListener("click", () => { if (guardStaffNavigation()) catalogBack(); });
   let supportContext = { screen: "profile", bookingId: null }, supportReturnFocus = null;
@@ -4195,14 +4377,17 @@
     const key = supportDraftKey(supportContext), value = $("support-question").value;
     if (value) supportDrafts.set(key, value); else supportDrafts.delete(key);
   });
-  let releasePending = null, releaseCurrent = null, releaseReturnFocus = null;
+  let releasePending = null, releaseCurrent = null, releaseReturnFocus = null, releaseClosing = null;
   function animateRelease(opening) {
-    const card = $("release-dialog").querySelector('.dialog-card'), from = $("app-version").getBoundingClientRect(), to = card.getBoundingClientRect();
+    const card = $("release-dialog").querySelector('.dialog-card');
+    const current = getComputedStyle(card);
+    const fromCurrent = {transform:current.transform, opacity:current.opacity};
+    card.getAnimations().forEach(animation => animation.cancel());
+    const from = $("app-version").getBoundingClientRect(), to = card.getBoundingClientRect();
     if (reducedMotion?.matches || !to.width || !to.height) return Promise.resolve();
     const x = from.left + from.width / 2 - (to.left + to.width / 2), y = from.top + from.height / 2 - (to.top + to.height / 2);
     const start = {transform:`translate(${x}px, ${y}px) scale(.08)`, opacity:0}, end = {transform:'translate(0, 0) scale(1)',opacity:1};
-    card.getAnimations().forEach(animation => animation.cancel());
-    return card.animate(opening ? [start,end] : [end,start], {duration:280,easing:'cubic-bezier(.22,1,.36,1)'}).finished.catch(()=>{});
+    return card.animate(opening ? [start,end] : [fromCurrent,start], {duration:280,easing:'cubic-bezier(.22,1,.36,1)'}).finished.catch(()=>{});
   }
   function showPendingRelease() {
     if (!releasePending || document.hidden || state.onboardingLoading || document.querySelector('.dialog-backdrop:not([hidden])')) return;
@@ -4227,15 +4412,18 @@
       if (!release.seen) { releasePending = release; showPendingRelease(); }
     } catch (_) { /* Release notes are optional; a later launch retries. */ }
   }
-  async function closeRelease() {
+  function closeRelease() {
+    if (releaseClosing) return releaseClosing;
     if ($("release-dialog").hidden) return;
-    await animateRelease(false);
-    setDialogHidden($("release-dialog"), true);
     const version = releaseCurrent.version;
-    render();
-    if (releaseReturnFocus?.isConnected) releaseReturnFocus.focus({preventScroll:true});
-    // A failed acknowledgement never prevents entry or submitting feedback.
-    void api("/api/miniapp/release/seen", {method:"POST", body:JSON.stringify({version})}).catch(()=>{});
+    releaseClosing = animateRelease(false).then(() => {
+      setDialogHidden($("release-dialog"), true);
+      render();
+      if (releaseReturnFocus?.isConnected) releaseReturnFocus.focus({preventScroll:true});
+      // A failed acknowledgement never prevents entry or submitting feedback.
+      void api("/api/miniapp/release/seen", {method:"POST", body:JSON.stringify({version})}).catch(()=>{});
+    }).finally(() => { releaseClosing = null; });
+    return releaseClosing;
   }
   $("release-close").addEventListener("click", closeRelease);
   $("app-version").addEventListener("click", async () => {
@@ -4257,15 +4445,27 @@
     $("support-submit").textContent = feedback ? "Отправить предложение" : "Отправить вопрос";
     $("support-faq").hidden = feedback; $("support-faq-heading").hidden = feedback;
     setDialogHidden($("support-dialog"), false); $("support-result").textContent = ""; $("support-result").classList.remove("success"); $("support-question").value = supportDrafts.get(supportDraftKey(supportContext)) || ""; render();
-    if (feedback) $("support-question").focus();
-    else { $("support-close").focus(); await loadSupportFaq(); }
+    if (feedback) $("support-question").focus({preventScroll:true});
+    else { $("support-close").focus({preventScroll:true}); await loadSupportFaq(); }
   }
+  let supportFaqSequence = 0;
   async function loadSupportFaq() {
-    const host = $("support-faq"); showLoading(host, "Загружаем частые вопросы…", 2);
+    const sequence = ++supportFaqSequence;
+    const host = $("support-faq");
+    const visible = () => sequence === supportFaqSequence && !$("support-dialog").hidden && !host.hidden;
+    host.setAttribute("aria-busy", "true");
+    showLoading(host, "Загружаем частые вопросы…", 2);
     try {
-      const result = await api("/api/miniapp/support/faq"); host.replaceChildren();
+      const result = await api("/api/miniapp/support/faq");
+      if (!visible()) return;
+      host.replaceChildren();
       for (const item of result.items) { const details = document.createElement("details"); const title = document.createElement("summary"); const answer = document.createElement("p"); title.textContent = item.question; answer.textContent = item.answer; details.append(title, answer); host.append(details); }
-    } catch (_) { host.textContent = "Не удалось загрузить частые вопросы. "; host.append(plainButton("Повторить", loadSupportFaq, "secondary")); }
+    } catch (_) {
+      if (!visible()) return;
+      host.textContent = "Не удалось загрузить частые вопросы. "; host.append(plainButton("Повторить", loadSupportFaq, "secondary"));
+    } finally {
+      if (sequence === supportFaqSequence) host.removeAttribute("aria-busy");
+    }
   }
   function closeSupport() { setDialogHidden($("support-dialog"), true); render(); if (supportReturnFocus?.isConnected) supportReturnFocus.focus({preventScroll:true}); }
   $("profile-support").addEventListener("click", () => openSupport("profile"));
@@ -4283,7 +4483,7 @@
       if (!$("support-dialog").hidden && supportContext === activeSupportContext) {
         if ($("support-question").value === question) $("support-question").value = "";
         $("support-result").textContent = context.screen === "feedback" ? "Спасибо! Мы рассмотрим ваше предложение." : result.status;
-        $("support-result").classList.add("success"); $("support-result").focus(); $("support-result").scrollIntoView({block:"nearest"});
+        $("support-result").classList.add("success"); $("support-result").focus({preventScroll:true}); scrollElementIntoView($("support-result"), {block:"nearest"});
       }
     }
     catch (error) { if (!$("support-dialog").hidden && supportContext === activeSupportContext) $("support-result").textContent = error.message; }
@@ -4321,7 +4521,7 @@
       if (state.role?.pii_admin && thread.owner_id === state.role?.id && thread.status !== "resolved") { const done = document.createElement("button"); done.type="button"; done.className="button ghost"; done.textContent="Закрыть обращение"; done.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/resolve`,{method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(done); }
       if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>`; for (const id of (result.eligible_owners || [])) { const option = document.createElement("option"); option.value = id; option.textContent = (result.eligible_staff || []).find(item => item.id === id)?.name || "Сотрудник"; form.querySelector("select").append(option); } form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("select").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
       content.append(card);
-      if (state.supportTargetId === thread.id) { state.supportTargetId = null; card.scrollIntoView({block:"center"}); }
+      if (state.supportTargetId === thread.id) { state.supportTargetId = null; scrollElementIntoView(card); }
     }
     if (pages > 1) {
       const controls = document.createElement("div"); controls.className = "action-row";
@@ -4347,7 +4547,7 @@
   }
   function openOnboarding() {
     onboardingReturnFocus = document.activeElement; onboardingIndex = 0; drawOnboarding();
-    setDialogHidden($("onboarding-dialog"), false); render(); $("onboarding-next").focus();
+    setDialogHidden($("onboarding-dialog"), false); render(); $("onboarding-next").focus({preventScroll:true});
   }
   async function finishOnboarding() {
     setDialogHidden($("onboarding-dialog"), true); render();
@@ -4377,7 +4577,7 @@
     if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; }
     syncDateFields("start"); syncDateFields("end");
     rangeCalendar.setRange($("start-date").value, $("end-date").value); applyBookingDateLimits(); render();
-    if (state.step === 0) void loadItems();
+    if (state.step === 0) void revealNavigation(loadItems, () => $("step-items"));
     void maybeShowOnboarding();
   }
   $("tab-new").addEventListener("click", enterClientMode);
@@ -4393,7 +4593,7 @@
   $("onboarding-skip").addEventListener("click", finishOnboarding);
   $("onboarding-next").addEventListener("click", () => { if (onboardingIndex + 1 === onboardingSlides.length) void finishOnboarding(); else { onboardingIndex++; drawOnboarding(); } });
   $("onboarding-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("onboarding-dialog")); if (event.key === "Escape") void finishOnboarding(); });
-  $("tab-orders").addEventListener("click", showOrders);
+  $("tab-orders").addEventListener("click", () => revealNavigation(showOrders, () => $("orders-panel")));
   let profileSearchTimer;
   function applyProfileSearch() {
     clearTimeout(profileSearchTimer);
@@ -4423,7 +4623,11 @@
     toggle.hidden=!hasData; toggle.textContent=masked?'Показать данные':'Скрыть данные'; toggle.setAttribute('aria-expanded',String(!masked));
     $("profile-identity-edit").hidden=!hasData; $("profile-identity-edit").disabled=masked;
   }
-  function revealProfileIdentity() { if (profileIdentityData) setProfileIdentityMasked(false); }
+  function revealProfileIdentity() {
+    if (!profileIdentityData) return;
+    setProfileIdentityMasked(false);
+    scrollElementIntoView($("profile-identity-fields"));
+  }
   async function loadProfileIdentity(masked=true) {
     const fields=$("profile-identity-fields"),sequence=++profileIdentitySequence;
     fields.setAttribute('aria-busy','true'); fields.textContent='Загружаем данные анкеты…';
@@ -4451,7 +4655,10 @@
     }finally{if(sequence===profileIdentitySequence)fields.setAttribute('aria-busy','false');}
   }
   $("profile-disclosure").addEventListener('toggle',()=>{if($("profile-disclosure").open)void loadProfileIdentity();else resetProfileIdentity();});
-  $("profile-identity-toggle").addEventListener('click',()=>setProfileIdentityMasked(!$("profile-identity-fields").classList.contains('profile-fields-masked')));
+  $("profile-identity-toggle").addEventListener("click", () => {
+    if ($("profile-identity-fields").classList.contains("profile-fields-masked")) revealProfileIdentity();
+    else setProfileIdentityMasked(true);
+  });
   resetProfileIdentity();
   $("profile-identity-edit").addEventListener("click", async () => {
     if (!profileIdentityData) return;
@@ -4464,7 +4671,7 @@
   $("profile-filter").addEventListener("change", (event) => { state.profileTargetId = null; state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
   $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
-  $("tab-admin").addEventListener("click", () => showAdmin(state.adminMode));
+  $("tab-admin").addEventListener("click", () => revealNavigation(() => showAdmin(state.adminMode), () => $("admin-panel")));
   $("identity-close").addEventListener("click", () => { void showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer();  });
@@ -4479,6 +4686,7 @@
     clearError(); const button = $("consent-next"); button.disabled = true;
     try {
       $("consent-step").hidden = true; $("identity-form").hidden = false;
+      scrollElementIntoView($("identity-form"));
       const reusableDocuments = [...state.identityReusableDocuments];
       if (!reusableDocuments.length) return;
       const status = $("identity-status"), submit = $("identity-submit");
@@ -4522,7 +4730,8 @@
     },"ghost danger"); remove.setAttribute("aria-label","Удалить фото"); buttons.append(remove);
     input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
-  document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () => showAdmin(button.dataset.mode)));
+  document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () =>
+    revealNavigation(() => showAdmin(button.dataset.mode), () => $("admin-content"))));
   $("admin-queue").addEventListener("change", event => { state.adminQueue = event.target.value; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all"; void showAdmin("orders"); });
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
   $("admin-status").addEventListener("change", (event) => { state.adminStatus = event.target.value; state.adminQueue = "all"; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });

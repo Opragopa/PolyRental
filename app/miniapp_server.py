@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -22,11 +22,13 @@ from .sla_escalations import queue_sla_escalations
 from .support import retry_support_replies, purge_expired_support
 from .booking_changes import process_change_deadlines
 from .roadmap import queue_optional_reminders
+from .return_overdue import queue_return_notifications
 from .release_channel import publication_loop
 
 
 async def retention_loop():
     last_purge = None
+    last_return_check = datetime.now(timezone.utc)
     while True:
         await asyncio.sleep(60)
         if last_purge != date.today():
@@ -37,6 +39,12 @@ async def retention_loop():
         await asyncio.to_thread(queue_sla_escalations)
         await asyncio.to_thread(process_change_deadlines)
         await asyncio.to_thread(queue_optional_reminders)
+        try:
+            at = datetime.now(timezone.utc)
+            await asyncio.to_thread(queue_return_notifications, at, since=last_return_check)
+            last_return_check = at
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Return notification worker will retry after %s", type(exc).__name__)
         await retry_support_replies()
 
 
