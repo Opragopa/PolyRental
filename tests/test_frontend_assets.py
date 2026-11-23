@@ -3,6 +3,7 @@ import re
 from fastapi.testclient import TestClient
 
 from app.frontend_assets import frontend_build, versioned_html
+from app.miniapp import miniapp_html
 from app.miniapp_server import app
 
 
@@ -34,3 +35,14 @@ def test_served_html_and_static_revalidate():
         cached = client.get(url, headers={'If-None-Match':asset.headers['etag']})
         assert cached.status_code == 304
         assert cached.headers['cache-control'] == 'no-cache, max-age=0, must-revalidate'
+
+
+def test_continuous_corners_stylesheet_is_acceptance_only(monkeypatch):
+    monkeypatch.delenv('MINIAPP_CONTINUOUS_CORNERS', raising=False)
+    assert 'acceptance-corners.css' not in miniapp_html()
+
+    monkeypatch.setenv('MINIAPP_CONTINUOUS_CORNERS', '1')
+    html = miniapp_html()
+    urls = re.findall(r'/miniapp/static/acceptance-corners\.css\?v=[0-9a-f]{16}', html)
+    assert len(urls) == 1
+    assert html.index(urls[0]) > html.index('/miniapp/static/motion.css')

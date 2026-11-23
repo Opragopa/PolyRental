@@ -5,8 +5,10 @@
   if (!host || !fallback || !button) return;
   let attempt = 0;
   let timer;
-  function loadWidget() {
+  function loadWidget(fromClick = false) {
     const current = ++attempt;
+    const focus = window.PolyRentalViewportFocus;
+    const since = focus?.checkpoint();
     clearTimeout(timer);
     host.replaceChildren();
     fallback.hidden = true;
@@ -19,6 +21,7 @@
       button.textContent = "Повторить загрузку";
       button.removeAttribute("aria-busy");
       host.replaceChildren();
+      if (fromClick) focus?.reveal(fallback, {since});
     };
     const script = document.createElement("script");
     script.async = true;
@@ -38,11 +41,12 @@
         frame.hidden = false;
         button.hidden = true;
         button.removeAttribute("aria-busy");
+        if (fromClick) focus?.reveal(host, {since});
       }, {once: true});
     };
     timer = setTimeout(fail, 10000);
     host.append(script);
   }
-  button.addEventListener("click", () => { if (!fallback.hidden) loadWidget(); });
+  button.addEventListener("click", () => { if (!fallback.hidden) loadWidget(true); });
   loadWidget();
 })();

@@ -62,7 +62,8 @@ const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {prom
    await page.emulateMedia({reducedMotion:'reduce'});
    await page.waitForFunction(()=>matchMedia('(prefers-reduced-motion: reduce)').matches);
    await page.locator('#profile-header > summary').click();
-   const open=page.locator('#profile-support');await open.scrollIntoViewIfNeeded();await page.waitForTimeout(300);
+   await page.waitForFunction(()=>!window.PolyRentalViewportFocus.inProgress());
+   const open=page.locator('#profile-support');await open.scrollIntoViewIfNeeded();
    const before=await open.evaluate(el=>({y:el.getBoundingClientRect().y,scroll:scrollY}));
    await open.click();const dialog=page.locator('#support-dialog');await dialog.waitFor();
    await dialog.locator('#support-question').fill('Неотправленный вопрос');

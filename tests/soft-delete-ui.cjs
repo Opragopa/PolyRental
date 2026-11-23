@@ -37,14 +37,15 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     await first.locator('.request-history-body').getByText('Записей пока нет.').waitFor({state:'attached'});
     assert.equal(await first.locator('details.request-history').evaluate(node=>node.open),false);
     await first.locator('.request-accordion').evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)); });
+    await page.waitForFunction(() => !window.PolyRentalViewportFocus.inProgress());
     await first.getByRole('button',{name:'Удалить позицию Камера'}).evaluate(element => element.scrollIntoView({block:'center'}));
     await page.waitForTimeout(300);
     await page.evaluate(() => document.addEventListener('click', () => { window.__scrollAtClick = window.scrollY; }, {capture:true,once:true}));
-    const scrollBefore = await page.evaluate(() => window.scrollY);
     const targetBefore = await first.getByRole('button',{name:'Удалить позицию Камера'}).boundingBox();
     await page.evaluate(() => { window.__layoutShifts = []; });
     await first.getByRole('button',{name:'Удалить позицию Камера'}).click();
-    assert.equal(await page.evaluate(() => window.scrollY), scrollBefore, `scroll at click: ${await page.evaluate(() => window.__scrollAtClick)} target: ${JSON.stringify(targetBefore)}`);
+    const atClick = await page.evaluate(() => window.__scrollAtClick);
+    assert.equal(await page.evaluate(() => window.scrollY), atClick, `scroll at click: ${atClick} target: ${JSON.stringify(targetBefore)}`);
     await page.locator('#delete-snackbar').waitFor({state:'visible'});
     await page.waitForTimeout(600);
     assert.equal(await page.evaluate(() => window.__layoutShifts.reduce((sum, value) => sum + value, 0)), 0);

@@ -20,7 +20,7 @@ ACTION_LABELS = {
     "request_changes_unanswered": "Истёк срок ответа на изменения",
     "returned_for_rework": "Заявка возвращена на доработку", "contact_updated": "Контакт обновлён",
     "customer_received": "Клиент подтвердил получение", "customer_returning": "Клиент подтвердил сдачу",
-    "operator_return_confirmed": "Сотрудник подтвердил фактический возврат без отметки клиента",
+    "operator_return_confirmed": "Сотрудник подтвердил фактический возврат",
     "paper_issue_signed": "Отмечена подпись при выдаче", "paper_return_signed": "Отмечена подпись при возврате",
     "inspection_saved": "Сохранена проверка оборудования", "composition_updated": "Изменена комплектация",
     "request_deleted": "Заявка удалена", "request_restored": "Заявка восстановлена",

@@ -4,7 +4,7 @@ from html import escape
 
 from sqlalchemy import select, and_, or_
 
-from .db import (Booking, BookingAsset, BookingLine, BookingReminder, ClientProfile, Equipment, EquipmentBlock,
+from .db import (Booking, BookingAsset, BookingHandover, BookingLine, BookingReminder, ClientProfile, Equipment, EquipmentBlock,
                  InventoryAudit, NotificationDelivery, Session, StaffNavigation)
 from .inventory import require_role
 from .rental import Conflict, RESERVING_STATUSES
@@ -28,7 +28,7 @@ def save_external_block(equipment_id, start, end, reason, actor_id, with_warning
             raise Conflict("Карточка экземпляра изменилась; повторите проверку")
         warnings = [item for item in external_schedule(equipment_id, session) if
             datetime.fromisoformat(item["start"]) < end
-            and (item["end"] is None or datetime.fromisoformat(item["end"]) > start)] if with_warnings else []
+            and (item.get("held_until_return") or datetime.fromisoformat(item["end"]) > start)] if with_warnings else []
         row = EquipmentBlock(equipment_id=equipment_id,starts_at=start,ends_at=end,reason=reason.strip(),actor_id=actor_id)
         session.add(row); session.flush()
         session.add(InventoryAudit(equipment_id=equipment_id,actor_id=actor_id,action="external_block_created",
@@ -76,14 +76,21 @@ def external_schedule(equipment_id, session=None):
     article_assigned = select(BookingAsset.equipment_id).join(Equipment, Equipment.id == BookingAsset.equipment_id).where(
         BookingAsset.booking_id == Booking.id, Equipment.article_id == asset.article_id,
         BookingAsset.deleted_at.is_(None)).exists()
-    for booking, is_assigned in session.execute(select(Booking, assigned).where(Booking.status.in_(RESERVING_STATUSES),
+    for booking, is_assigned, handover in session.execute(select(Booking, assigned, BookingHandover.data)
+            .outerjoin(BookingHandover, BookingHandover.booking_id == Booking.id).where(Booking.status.in_(RESERVING_STATUSES),
             or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"),
             or_(assigned, and_(article_line, ~article_assigned)))):
-        overdue = booking.status in {"issued", "return_inspection"} and booking.ends_at <= current
+        held = booking.status in {"issued", "return_inspection"} and booking.ends_at <= current
+        if held:
+            reason = ("Экземпляр остаётся на приёмке" if (handover or {}).get("operator_return")
+                      else "Плановый возврат просрочен; проверьте возврат")
+        else:
+            reason = "Экземпляр назначен на заявку" if is_assigned else "Бронь модели; экземпляр ещё не назначен"
         items.append({"id": booking.id, "kind": "booking", "start": booking.starts_at.isoformat(),
             "end": booking.ends_at.isoformat(),
+            "held_until_return": held and is_assigned,
             "label": f"Заявка {booking.human_number or booking.id}",
-            "reason": "Плановый возврат просрочен; проверьте возврат" if overdue else "Бронь модели; экземпляр ещё не назначен" if not is_assigned else "Экземпляр назначен на заявку"})
+            "reason": reason})
     return sorted(items, key=lambda item: item["start"])
 
 def save_staff_section(actor_id, section):

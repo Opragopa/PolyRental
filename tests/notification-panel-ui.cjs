@@ -64,6 +64,22 @@ const items=[
    assert(offsets.includes(1));assert.equal(await page.locator('#notification-more').isVisible(),false);
    assert.deepEqual(errors,[]);await page.close();
   }
+  {
+   const {page,errors}=await fixture(browser);
+   const late={id:'d:4',kind:'booking',booking_id:7,staff:false,title:'Заявка ТС260007: возврат просрочен',
+    summary:'Срок сдачи прошёл.',created_at:'2026-10-29T09:55:00Z'};
+   await page.route('**/api/miniapp/notifications/inbox?*',r=>r.fulfill({json:{items:[late],unread:false,has_more:false}}));
+   await page.route('**/api/miniapp/notifications/inbox/read',r=>r.fulfill({json:{ok:true}}));
+   await page.locator('#tab-new').click();
+   await page.locator('.catalog-search > .notification-bell').click();
+   const dialog=page.locator('#notification-dialog');
+   await dialog.getByRole('button',{name:'Связаться с оператором'}).waitFor();
+   const history=page.waitForRequest(req=>new URL(req.url()).searchParams.get('booking_id')==='7');
+   await dialog.getByRole('button',{name:'Открыть заявку'}).click();
+   await history;
+   await dialog.waitFor({state:'hidden'});
+   assert.deepEqual(errors,[]);await page.close();
+  }
   console.log(`Compact notification panel (${engine.name()}): passed`);
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

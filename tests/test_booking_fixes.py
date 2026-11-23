@@ -314,7 +314,8 @@ def test_fresh_migration_chain(monkeypatch):
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 14
-            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261113_47"
+            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261123_48"
+            assert connection.scalar(text("SELECT count(*) FROM pg_indexes WHERE schemaname=:schema AND indexname='notification_return_due_unique'"), {"schema": schema}) == 1
             assert connection.scalar(text("SELECT count(*) FROM information_schema.columns WHERE table_schema=:schema AND table_name='client_profiles' AND column_name='display_name'"), {"schema": schema}) == 1
     finally:
         with engine.begin() as connection:

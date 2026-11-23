@@ -84,11 +84,11 @@ async function centeredIcons(page,label) {
   {
    const order=base('issued'),{page,errors}=await fixture(browser,{admin:true,order});let calls=0;
    await page.route('**/return-without-customer',r=>{calls++;order.status='return_inspection';order.handover.operator_return={actor_id:100,at:new Date().toISOString()};return r.fulfill({json:order});});
-   await page.getByRole('button',{name:'Принять без отметки клиента',exact:true}).click();
+   await page.getByRole('button',{name:'Подтвердить получение оборудования',exact:true}).click();
    assert.equal(calls,0);
    const dialog=page.locator('.workflow-dialog');
-   assert.match(await dialog.innerText(),/фактически возвращено/);
-   await dialog.getByRole('button',{name:'Начать приёмку',exact:true}).click();
+   assert.match(await dialog.innerText(),/оборудование уже у вас/);
+   await dialog.getByRole('button',{name:'Подтвердить получение',exact:true}).click();
    await page.getByRole('button',{name:'Завершить заявку',exact:true}).waitFor();
    assert.equal(calls,1);assert.equal(order.handover.returning_at,undefined);
    assert.match(await page.locator('.handover-progress').innerText(),/Сотрудник подтвердил фактический возврат/);

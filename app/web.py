@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
 import hmac
+import logging
 import os
 import time
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
@@ -33,6 +34,7 @@ MOSCOW = ZoneInfo("Europe/Moscow")
 async def expiry_loop():
     last_receipt_purge = None
     last_workflow_tick = None
+    last_return_check = datetime.now(timezone.utc)
     while True:
         await asyncio.sleep(1)
         def expire():
@@ -45,11 +47,18 @@ async def expiry_loop():
         if last_workflow_tick is None or time.monotonic()-last_workflow_tick>=60:
             from .booking_changes import process_change_deadlines
             from .roadmap import queue_optional_reminders
+            from .return_overdue import queue_return_notifications
             from .sla_escalations import queue_sla_escalations
             from .support import retry_support_replies
             await asyncio.to_thread(process_change_deadlines)
             await asyncio.to_thread(queue_optional_reminders)
             await asyncio.to_thread(queue_sla_escalations)
+            try:
+                at = datetime.now(timezone.utc)
+                await asyncio.to_thread(queue_return_notifications, at, since=last_return_check)
+                last_return_check = at
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Return notification worker will retry after %s", type(exc).__name__)
             await retry_support_replies()
             last_workflow_tick=time.monotonic()
         if last_receipt_purge is None or time.monotonic() - last_receipt_purge >= 86400:

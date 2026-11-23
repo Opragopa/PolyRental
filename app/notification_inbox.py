@@ -13,8 +13,9 @@ WITH deliveries AS (
  SELECT DISTINCT ON (COALESCE(event_id, 'delivery:' || id::text))
    'd:' || id::text AS key, id, created_at, 'delivery' AS kind
  FROM notification_deliveries
- WHERE recipient_id = :uid AND cancelled_at IS NULL
-   AND created_at <= now() AND (next_retry_at IS NULL OR next_retry_at <= now() OR sent_at IS NOT NULL)
+ WHERE recipient_id = :uid AND created_at <= now()
+   AND (cancelled_at IS NULL OR event = 'return_overdue_customer')
+   AND (event = 'return_overdue_customer' OR next_retry_at IS NULL OR next_retry_at <= now() OR sent_at IS NOT NULL)
  ORDER BY COALESCE(event_id, 'delivery:' || id::text), id DESC
 ), support AS (
  SELECT 's:' || m.id::text AS key, m.id, m.created_at, 'support' AS kind
@@ -65,8 +66,12 @@ def inbox(uid, offset=0, limit=10):
                 except (ValueError, TypeError):
                     message = "Новое уведомление"
             kind = "support" if row["kind"] == "support" else "booking" if delivery.booking_id else "notification"
-            items.append({"id": row["key"], "message": message, "created_at": row["created_at"].isoformat(),
-                          **_presentation(message, kind)})
+            item = {"id": row["key"], "message": message, "created_at": row["created_at"].isoformat(),
+                    **_presentation(message, kind)}
+            if kind == "booking" and delivery.return_due_at is not None:
+                item["booking_id"] = delivery.booking_id
+                item["staff"] = delivery.event != "return_overdue_customer"
+            items.append(item)
         return {"items": items, "unread": bool(unread), "has_more": len(rows) > limit}
 
 

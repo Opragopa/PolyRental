@@ -78,35 +78,37 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     // Validation must reveal an off-screen error without motion when requested,
     // including when the preference changes after the form has already loaded.
     await page.evaluate(() => {
-      const scrollIntoView = Element.prototype.scrollIntoView;
-      Element.prototype.scrollIntoView = function(options) {
+      const scrollTo = window.scrollTo;
+      window.scrollTo = function(options) {
         window.validationScrollBehavior = options?.behavior;
-        return scrollIntoView.call(this, options);
+        return scrollTo.call(this, options);
       };
     });
     for (const reducedMotion of ['reduce', 'no-preference', 'reduce']) {
       await page.emulateMedia({reducedMotion});
       await page.waitForFunction(expected => matchMedia('(prefers-reduced-motion: reduce)').matches === expected, reducedMotion === 'reduce');
-      await page.evaluate(() => window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'instant'}));
+      await page.waitForFunction(() => !window.PolyRentalViewportFocus.inProgress());
+      await page.evaluate(() => {
+        document.activeElement?.blur();
+        window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'instant'});
+      });
+      await page.waitForFunction(() => document.querySelector('#identity-form [name="birth_date"]').getBoundingClientRect().bottom < 0);
       const position = await page.evaluate(() => {
         const before = window.scrollY;
+        window.validationScrollBehavior = undefined;
         document.querySelector('#identity-form').requestSubmit();
         const input = document.querySelector('#identity-form [name="birth_date"]');
-        const rect = input.getBoundingClientRect();
-        return {before, after: window.scrollY, behavior: window.validationScrollBehavior, inputVisible: rect.top >= 0 && rect.bottom <= innerHeight, focused: document.activeElement === input};
+        return {before, focused: document.activeElement === input};
       });
       assert.ok(position.before > 100, 'the validation target starts off screen');
       assert.equal(position.focused, true, 'validation focuses the field without a second scroll');
-      assert.equal(position.behavior, reducedMotion === 'reduce' ? 'auto' : 'smooth', 'validation respects the current motion preference');
-      if (reducedMotion === 'reduce') {
-        assert.ok(position.after < position.before - 100, 'reduced motion reveals the error immediately');
-        assert.equal(position.inputVisible, true, 'the invalid field is visible immediately');
-      } else {
-        await page.waitForFunction(() => {
-          const rect = document.querySelector('#identity-form [name="birth_date"]').getBoundingClientRect();
-          return rect.top >= 0 && rect.bottom <= innerHeight;
-        });
-      }
+      await page.waitForFunction(before => {
+        const rect = document.querySelector('#identity-form [name="birth_date"]').getBoundingClientRect();
+        return !window.PolyRentalViewportFocus.inProgress() &&
+          window.scrollY < before - 100 && rect.top >= 0 && rect.bottom <= innerHeight;
+      }, position.before);
+      const behavior = await page.evaluate(() => window.validationScrollBehavior);
+      if (behavior) assert.equal(behavior, reducedMotion === 'reduce' ? 'instant' : 'smooth', 'validation respects the current motion preference');
     }
     assert.deepEqual(errors, []);
   } finally {

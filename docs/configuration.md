@@ -26,6 +26,7 @@ docker compose -f compose.yaml -f compose.miniapp.yaml up -d --no-deps --force-r
 | `BOT_TOKEN` | Токен бота из BotFather; нужен боту, проверке подписей и уведомлениям. |
 | `BOT_USERNAME` | Имя бота без `@`, для виджета входа и ссылок. |
 | `PUBLIC_URL` | Внешний базовый адрес без `/miniapp`, query и fragment. Локально `http://localhost:8000`; production `https://polyrental.opragopa.com`. Нужно согласовать с Nginx, Main Mini App и доменом входа в BotFather. |
+| `MINIAPP_CONTINUOUS_CORNERS` | `1` включает плавные углы в Mini App и на сайте. В `compose.miniapp.yaml` это значение по умолчанию с 0.5.13. `0` возвращает обычное CSS-скругление. |
 | `ADMIN_IDS` | Обязательные положительные Telegram ID сотрудников через запятую. Подроли хранятся в `StaffRole`, назначаются в интерфейсе. |
 | `PII_ADMIN_IDS` | Независимый список допущенных к полным ПД, фото и проверке анкеты. Пустой список не даёт PII-доступа; для сбора анкеты нужны заполненные настройки. |
 | `SESSION_SECRET` | Случайный секрет подписи сессии сайта, не менее 32 символов. Смена делает прежние сессии недействительными. |

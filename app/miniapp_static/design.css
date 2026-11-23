@@ -838,6 +838,7 @@ button, summary { -webkit-tap-highlight-color: transparent; }
   font-weight:600;
   line-height:1.3;
 }
+.request-next-head .stage-lock.stage-lock-complete { border-radius:var(--radius-widget, 16px); }
 .request-primary-actions {
   display:flex;
   flex-wrap:wrap;
@@ -1068,13 +1069,15 @@ button, summary { -webkit-tap-highlight-color: transparent; }
   margin-top:8px;
 }
 .equipment-card-drawer-inner {
-  overflow:hidden;
+  min-height:0;
+  overflow:clip;
   display:grid;
   gap:4px;
   padding-top:0;
   border-top:1px solid transparent;
   transition:padding-top .26s cubic-bezier(.4, 0, .2, 1), border-color .2s ease;
 }
+.is-expanded > .equipment-card-drawer.is-settled > .equipment-card-drawer-inner { overflow:visible; }
 .is-expanded > .equipment-card-drawer > .equipment-card-drawer-inner {
   padding-top:8px;
   border-top-color:var(--line);
@@ -1737,6 +1740,7 @@ details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { s
 .article-collapse { display:grid; grid-template-rows:0fr; opacity:0; transition:grid-template-rows .24s ease, opacity .24s ease; }
 .article-collapse.is-open { grid-template-rows:1fr; opacity:1; }
 .article-collapse-inner { min-height:0; overflow:clip; }
+.article-collapse.is-open.is-settled > .article-collapse-inner { overflow:visible; }
 .equipment-row { align-items:flex-start; flex-wrap:nowrap; }
 .equipment-main { flex:1; min-width:0; overflow-wrap:anywhere; }
 .equipment-main > strong, .equipment-main > .condition-pill { display:block; width:fit-content; margin-bottom:6px; }
@@ -1763,7 +1767,16 @@ details, .request-equipment-row.is-expandable, .inspection-row.is-expandable { s
 #range-calendar .calendar-day[data-availability].selected { color:#fff; outline:2px solid var(--day-status-ink); outline-offset:-2px; }
 #range-calendar .calendar-day[data-availability].in-range { color:var(--day-status-ink); font-weight:700; box-shadow:none; }
 #range-calendar .calendar-day[data-availability]::after { display:block; content:""; position:absolute; inset:0; width:auto; height:auto; border-radius:inherit; background:color-mix(in srgb, var(--day-status-ink) 16%, transparent); opacity:0; pointer-events:none; transform:none; }
-#range-calendar .calendar-day[data-availability]::before { background:var(--day-status-bg); }
+#range-calendar .calendar-day { overflow:hidden; overflow:clip; }
+#range-calendar .calendar-availability-fill {
+  position:absolute;
+  z-index:-2;
+  inset:0;
+  border-radius:inherit;
+  corner-shape:inherit;
+  background:var(--day-status-bg, transparent);
+  pointer-events:none;
+}
 #range-calendar .calendar-day[data-availability].in-range::before { background:color-mix(in srgb,var(--day-status-bg) 70%,var(--day-status-ink)); }
 #range-calendar .calendar-day[data-availability].selected::before { background:var(--day-status-ink); }
 #range-calendar .calendar-day[data-availability].selected::after { background:rgba(255,255,255,.08); }
@@ -1956,19 +1969,30 @@ h1, h2, h3 { text-wrap: balance; }
 #admin-queues [data-queue="all"] .queue-count { display:none; }
 @media(max-width:600px) { #admin-queues { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 
-/* Availability paint moves diagonally; cell geometry stays fixed. */
 @media (prefers-reduced-motion:no-preference) {
-  #range-calendar .calendar-status-reveal::before { animation:calendar-status-wipe 200ms ease-out both; animation-delay:var(--availability-reveal-delay,0ms); }
-  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after { opacity:1; animation:calendar-status-wipe 180ms ease-out both; }
-  @keyframes calendar-status-wipe { from { clip-path:polygon(0 0,0 0,0 0); } to { clip-path:polygon(0 0,200% 0,0 200%); } }
+  #range-calendar .calendar-status-reveal > .calendar-availability-fill {
+    animation:calendar-cell-fill 300ms both;
+    animation-delay:var(--availability-reveal-delay, 0ms);
+  }
+  #range-calendar .calendar-day.calendar-day-reveal::before {
+    animation:calendar-cell-fill 300ms both;
+    animation-delay:var(--range-reveal-delay, 0ms);
+    will-change:auto;
+  }
+  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after { opacity:1; animation:calendar-cell-fill 240ms both; }
+  @keyframes calendar-cell-fill {
+    from { clip-path:circle(0% at 50% 50%); transform:scale(1); animation-timing-function:cubic-bezier(.22,.8,.35,1); }
+    76% { clip-path:circle(71% at 50% 50%); transform:scale(1.04); animation-timing-function:ease-out; }
+    88% { clip-path:circle(62% at 50% 50%); transform:scale(1); animation-timing-function:ease-out; }
+    to { clip-path:circle(71% at 50% 50%); transform:scale(1); }
+  }
 }
 @media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
   #range-calendar .calendar-day[data-availability]:not(:disabled):hover::after,
-  #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:calendar-status-wipe 180ms ease-out both; }
+  #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:calendar-cell-fill 240ms both; }
 }
 #range-calendar .calendar-day[data-availability]:focus-visible { outline:2px solid var(--day-status-ink); outline-offset:2px; }
 @media (prefers-reduced-motion:reduce) {
-  #range-calendar .calendar-status-reveal::before { animation:none; clip-path:none; }
   #range-calendar .calendar-day[data-availability]:hover::after,
   #range-calendar .calendar-day[data-availability]:focus-visible::after { opacity:1; animation:none; }
 }
@@ -2058,27 +2082,14 @@ html:has(#admin-panel:not([hidden]) #admin-content.catalog-scroll-stable) { over
 #step-items.catalog-scroll-stable, #admin-content.catalog-scroll-stable { min-height:max(100dvh, var(--category-scroll-floor, 0px)); }
 .catalog-empty { color:var(--muted); padding:16px 0; }
 
-@media (prefers-reduced-motion: no-preference) {
-  #range-calendar .calendar-status-reveal::before { animation-duration:300ms; }
-  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after,
-  #range-calendar .calendar-day[data-availability]:focus-visible::after { animation-duration:240ms; }
-}
-
 .category-empty-overlay { position:fixed; z-index:20; inset:0 0 calc(120px + env(safe-area-inset-bottom)) 0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; pointer-events:none; }
 .category-empty-overlay p { margin:0; padding:8px 14px; border-radius:12px; background:var(--bg); color:var(--text); font-weight:600; }
 .category-empty-overlay button { pointer-events:auto; }
-
-@media (prefers-reduced-motion: no-preference) {
-  #range-calendar .calendar-day.calendar-day-reveal::before { animation:calendar-day-reveal 400ms cubic-bezier(.22,1,.36,1) both; animation-delay:var(--range-reveal-delay,0ms); }
-}
 
 /* Keep the empty state tied to the viewport during tab and card animations. */
 #booking-flow:has(.category-empty-overlay), #admin-panel:has(.category-empty-overlay) { transform:none !important; animation:none !important; }
 .category-empty-overlay { transform:none; }
 
-@media (prefers-reduced-motion:no-preference) {
-  #range-calendar .calendar-day.calendar-day-reveal { background:var(--range-base, var(--surface)); }
-}
 .category-empty-overlay .button { min-width:180px; min-height:56px; padding:16px 28px; font-size:16px; }
 
 /* Empty content stays in the product area rather than detaching from it while a category view changes. */
@@ -2299,6 +2310,27 @@ details[open] > summary::after { transform:rotate(-90deg) !important; }
 .article-card-head { cursor:pointer; }
 .article-summary-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); }
 .article-summary-actions .button { min-width:0; max-width:100%; white-space:normal; }
+
+.equipment-preview-trigger { -webkit-touch-callout:none; user-select:none; touch-action:pan-y pinch-zoom; }
+.equipment-preview-trigger img { pointer-events:none; -webkit-user-drag:none; }
+:is(.request-equipment-row, .inspection-row)[aria-keyshortcuts]:focus-visible {
+  outline:2px solid var(--accent);
+  outline-offset:-2px;
+}
+.equipment-preview-dialog { overflow:hidden; overscroll-behavior:contain; }
+.equipment-preview-dialog .dialog-card { width:min(100%, 440px); touch-action:pan-y pinch-zoom; }
+.equipment-preview-dialog .equipment-preview-media {
+  width:100%;
+  aspect-ratio:16 / 9;
+  max-height:32dvh;
+}
+.equipment-preview-description { margin:0; line-height:1.5; white-space:pre-line; }
+.equipment-preview-dialog .action-row {
+  position:sticky;
+  bottom:0;
+  justify-content:flex-end;
+  background:var(--surface);
+}
 
 .workflow-dialog .workflow-error {
   margin:0;

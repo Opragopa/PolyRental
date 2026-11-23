@@ -282,6 +282,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const before = await page.evaluate(() => scrollY);
       await approve.click();
       await waitUntil(async () => reviews.length === 1 && await selected.getByRole("button", { name: /^Начать подготовку/ }).isVisible(), "Context-preserving refresh did not finish");
+      await page.waitForFunction(() => !window.PolyRentalViewportFocus.inProgress());
       const after = await page.evaluate(() => scrollY);
       assert.ok(after < before && await selected.locator('.request-toggle').isVisible(), 'Approval returns to the selected request');
       assert.equal(await selected.locator(".request-accordion").getAttribute("open") !== null, true);

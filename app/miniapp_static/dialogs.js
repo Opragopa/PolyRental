@@ -4,6 +4,7 @@
   const isolated = new Map();
   const selector = '[role="dialog"][aria-modal="true"]';
   let active = null;
+  let openDialogs = new Set();
   let scrollLock = null;
   let opener = null;
   document.addEventListener('click', event => {
@@ -13,12 +14,13 @@
     return [...dialog.querySelectorAll('button, input, textarea, select, summary, a[href], [tabindex]')]
       .filter(node => !node.disabled && node.tabIndex >= 0 && !node.closest('[hidden], [inert]') && node.getClientRects().length);
   }
-  function focus(dialog, last = false) {
+  function focus(dialog, last = false, reveal = false) {
     if (!dialog || dialog.inert) return;
     const controls = focusables(dialog);
     if (!dialog.hasAttribute('tabindex')) dialog.tabIndex = -1;
-    (last ? controls.at(-1) : controls[0] || dialog)?.focus({preventScroll: true});
-    if (!controls.length) dialog.focus({preventScroll: true});
+    const target = (last ? controls.at(-1) : controls[0]) || dialog;
+    target.focus({preventScroll: true});
+    if (reveal && target !== dialog) window.PolyRentalViewportFocus?.reveal(target, {block: 'nearest'});
   }
   function refresh() {
     const dialogs = [...document.querySelectorAll(selector)]
@@ -27,6 +29,8 @@
         getComputedStyle(node).visibility === 'visible')
       .sort((a, b) => (parseInt(getComputedStyle(a).zIndex) || 0) - (parseInt(getComputedStyle(b).zIndex) || 0));
     active = dialogs.at(-1) || null;
+    const newlyOpened = active && !openDialogs.has(active);
+    openDialogs = new Set(dialogs);
     const outside = new Set();
     for (let branch = active; branch?.parentElement && branch !== document.body; branch = branch.parentElement) {
       for (const sibling of branch.parentElement.children) {
@@ -43,14 +47,14 @@
       isolated.set(node, node.inert);
       node.inert = true;
     }
-    if (active) {
+    const lockBackground = dialogs.some(dialog => dialog.dataset.modalScroll !== 'overlay');
+    if (lockBackground) {
       if (!scrollLock) {
         const body = document.body, root = document.documentElement;
         scrollLock = {x: scrollX, y: scrollY, body: body.getAttribute('style'), overflow: root.style.overflow};
         root.style.overflow = 'hidden';
         Object.assign(body.style, {position: 'fixed', top: `${-scrollLock.y}px`, left: `${-scrollLock.x}px`, width: '100%', overflow: 'hidden'});
       }
-      if (!active.contains(document.activeElement)) focus(active);
     } else if (scrollLock) {
       const saved = scrollLock;
       scrollLock = null;
@@ -58,6 +62,11 @@
       else document.body.setAttribute('style', saved.body);
       document.documentElement.style.overflow = saved.overflow;
       window.scrollTo({left: saved.x, top: saved.y, behavior: 'instant'});
+    }
+    if (active && !active.contains(document.activeElement)) focus(active);
+    if (newlyOpened) {
+      const card = active.querySelector(".dialog-card, .document-viewer-card");
+      if (card) window.PolyRentalViewportFocus?.reveal(card);
     }
   }
   const containsDialog = node => node.nodeType === Node.ELEMENT_NODE &&
@@ -79,19 +88,20 @@
   document.addEventListener('focusin', event => {
     if (active && !active.contains(event.target)) focus(active);
   });
-  document.addEventListener('keydown', event => {
-    if (event.key !== 'Tab' || !active) return;
+  function trap(event, dialog = active) {
+    if (event.defaultPrevented || event.key !== 'Tab' || !active || dialog !== active) return;
     const controls = focusables(active), first = controls[0], last = controls.at(-1);
     if (!controls.length || !active.contains(document.activeElement) || document.activeElement === active ||
         (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
       event.preventDefault();
-      focus(active, event.shiftKey);
+      focus(active, event.shiftKey, true);
     }
-  }, true);
+  }
+  document.addEventListener('keydown', trap, true);
   function restoreFocus(node) {
     refresh();
     if (node?.isConnected && !node.disabled && !node.closest('[inert]') && (!active || active.contains(node))) node.focus({preventScroll: true});
   }
-  window.PolyRentalDialogs = {refresh, focus, restoreFocus, opener: () => opener?.isConnected ? opener : document.activeElement};
+  window.PolyRentalDialogs = {refresh, focus, trap, restoreFocus, opener: () => opener?.isConnected ? opener : document.activeElement};
   refresh();
 })();

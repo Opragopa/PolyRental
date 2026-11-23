@@ -1,6 +1,7 @@
 """Article-based rental, preparation, inspection and return workflows."""
 
 from collections import defaultdict
+from dataclasses import dataclass
 import json
 import math
 import os
@@ -10,7 +11,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, case, delete, func, literal, or_, select, text, union_all
+from sqlalchemy import DateTime, and_, case, delete, func, literal, or_, select, text, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -278,7 +279,25 @@ def _external_block_events(blocks, start, end):
     return events
 
 
-def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None):
+@dataclass(frozen=True)
+class _AssetInterval:
+    equipment_id: int
+    starts_at: datetime
+    ends_at: datetime
+    reason: str
+
+
+def _overdue_intervals(article_ids, end, exclude_booking_id, at):
+    from .return_overdue import overdue_asset_query
+    query = overdue_asset_query(at).where(Equipment.article_id.in_(article_ids),
+        Equipment.condition == "available", Booking.ends_at < end)
+    if exclude_booking_id is not None:
+        query = query.where(Booking.id != exclude_booking_id)
+    return query.with_only_columns(Equipment.article_id, Equipment.id, Booking.ends_at,
+        literal(end, type_=DateTime(timezone=True)), literal(""), literal(True))
+
+
+def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None, *, include_overdue=True, at=None):
     scheduled = and_(
         Booking.status.in_(RESERVING_STATUSES),
         Booking.starts_at < end,
@@ -322,6 +341,10 @@ def _reserved_quantity(session, article_id, start, end, exclude_booking_id=None)
     blocks = session.scalars(select(EquipmentBlock).join(Equipment, Equipment.id == EquipmentBlock.equipment_id).where(
         Equipment.article_id == article_id, EquipmentBlock.released_at.is_(None),
         EquipmentBlock.starts_at < end, EquipmentBlock.ends_at > start)).all()
+    if include_overdue:
+        blocks.extend(_AssetInterval(asset_id, left, right, reason)
+                      for _, asset_id, left, right, reason, _ in session.execute(
+                          _overdue_intervals([article_id], end, exclude_booking_id, at or now())))
     events.extend(_external_block_events(blocks, start, end))
     current = peak = 0
     for _, delta in sorted(events):
@@ -363,6 +386,7 @@ class AvailabilitySnapshot:
         self.owners = defaultdict(set)
         self.reservations = defaultdict(list)
         self.blocks = defaultdict(list)
+        self.overdue_intervals = defaultdict(list)
         if not article_ids:
             return
         equipment_rows = session.execute(select(Equipment.article_id, Equipment.condition, EquipmentOwner.name)
@@ -373,11 +397,15 @@ class AvailabilitySnapshot:
                 self.capacities[article_id] += 1
             if owner and owner.casefold() != MAIN_OWNER.casefold():
                 self.owners[article_id].add(owner)
-        for article_id, block in session.execute(select(Equipment.article_id, EquipmentBlock)
+        external = (select(Equipment.article_id, EquipmentBlock.equipment_id, EquipmentBlock.starts_at,
+                           EquipmentBlock.ends_at, EquipmentBlock.reason, literal(False))
             .join(EquipmentBlock, EquipmentBlock.equipment_id == Equipment.id)
             .where(Equipment.article_id.in_(article_ids), EquipmentBlock.released_at.is_(None),
-                   EquipmentBlock.starts_at < end, EquipmentBlock.ends_at > start)):
-            self.blocks[article_id].append(block)
+                   EquipmentBlock.starts_at < end, EquipmentBlock.ends_at > start))
+        holds = _overdue_intervals(article_ids, end, exclude_booking_id, now())
+        for article_id, asset_id, left, right, reason, overdue in session.execute(external.union_all(holds)):
+            intervals = self.overdue_intervals if overdue else self.blocks
+            intervals[article_id].append(_AssetInterval(asset_id, left, right, reason))
         booking_conditions = (Booking.status.in_(RESERVING_STATUSES),
             or_(Booking.deleted_at.is_(None), Booking.deletion_level == "L2"), Booking.starts_at < end,
             Booking.ends_at > start)
@@ -425,7 +453,7 @@ class AvailabilitySnapshot:
         for left, right, quantity in self.reservations[article_id]:
             if left < end and right > start:
                 events.extend(((max(start, left), quantity), (min(end, right), -quantity)))
-        events.extend(_external_block_events(self.blocks[article_id], start, end))
+        events.extend(_external_block_events(self.blocks[article_id] + self.overdue_intervals[article_id], start, end))
         current = peak = 0
         for _, delta in sorted(events):
             current += delta
@@ -1211,7 +1239,10 @@ def _asset_conflicts(session, booking, equipment_id):
         scheduled,
     )) > 0
     from .db import EquipmentBlock
-    return occupied or session.scalar(select(EquipmentBlock.id).where(EquipmentBlock.equipment_id==equipment_id,
+    from .return_overdue import overdue_asset_query
+    held = overdue_asset_query(now()).where(Equipment.id == equipment_id,
+        Booking.id != booking.id, Booking.ends_at < booking.ends_at)
+    return occupied or session.execute(held.limit(1)).first() is not None or session.scalar(select(EquipmentBlock.id).where(EquipmentBlock.equipment_id==equipment_id,
         EquipmentBlock.released_at.is_(None),EquipmentBlock.starts_at<booking.ends_at,EquipmentBlock.ends_at>booking.starts_at).limit(1)) is not None
 
 
@@ -1486,6 +1517,24 @@ def start_return_without_customer(booking_id, actor_id, actor_name=""):
                       operator_return=True)
 
 
+def _confirm_physical_return(session, booking, actor_id, actor_name):
+    from .db import BookingHandover
+    from .return_overdue import cancel_pending_return_notifications
+    from .user_names import user_name
+    row = session.get(BookingHandover, booking.id)
+    if row is None:
+        raise Conflict("Для старой заявки сначала подготовьте расписку через перенос выдачи")
+    if row.data.get("recipient_id") != booking.customer_id:
+        raise Conflict("Получатель заявки изменился")
+    if not row.data.get("operator_return"):
+        at = now()
+        row.data = {**row.data, "operator_return": {
+            "at": at.isoformat(), "actor_id": actor_id,
+            "actor_name": user_name(session, actor_id, saved=actor_name)}}
+        session.add(Audit(booking_id=booking.id, actor_id=actor_id, action="operator_return_confirmed"))
+        cancel_pending_return_notifications(session, booking.id, at)
+
+
 def transition(booking_id, action, actor_id, customer_id=None, actor_name="", *, operator_return=False):
     if operator_return and (customer_id is not None or action != "return_inspection"):
         raise Conflict("Подтверждение сотрудника доступно только для начала приёмки")
@@ -1501,6 +1550,9 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name="", *,
         if booking is None or booking.deleted_at is not None or (customer_id is not None and booking.customer_id != customer_id):
             raise ValueError("Заявка не найдена")
         if action == "return_inspection" and booking.status == "return_inspection" and customer_id is None:
+            if operator_return:
+                _claim_stage(session, booking, actor_id, actor_name)
+                _confirm_physical_return(session, booking, actor_id, actor_name)
             return booking.status  # The customer's surrender already opened this cycle.
         if customer_id is not None and booking.status not in {"pending", "needs_changes", "confirmed"}:
             raise Conflict("Отмена клиентом доступна только до начала комплектации")
@@ -1557,19 +1609,7 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name="", *,
         elif action == "return_inspection":
             from .handover import validate_return_start
             if operator_return:
-                from .db import BookingHandover
-                row = session.get(BookingHandover, booking.id)
-                if row is None:
-                    raise Conflict("Для старой заявки сначала подготовьте расписку через перенос выдачи")
-                if row.data.get("recipient_id") != booking.customer_id:
-                    raise Conflict("Получатель заявки изменился")
-                if not row.data.get("returning_at"):
-                    from .user_names import user_name
-                    row.data = {**row.data, "operator_return": {
-                        "at": now().isoformat(), "actor_id": actor_id,
-                        "actor_name": user_name(session, actor_id, saved=actor_name)}}
-                    session.add(Audit(booking_id=booking.id, actor_id=actor_id,
-                                      action="operator_return_confirmed"))
+                _confirm_physical_return(session, booking, actor_id, actor_name)
             validate_return_start(session, booking)
             booking.inspection_cycle_started_at = now()
         elif action == "returned":
@@ -1590,6 +1630,8 @@ def transition(booking_id, action, actor_id, customer_id=None, actor_name="", *,
             from .handover import validate_return_finish
             validate_return_finish(session, booking, actor_id, actor_name)
             booking.returned_at = now()
+            from .return_overdue import cancel_pending_return_notifications
+            cancel_pending_return_notifications(session, booking.id, booking.returned_at)
             identity = session.scalar(select(CustomerIdentity).where(CustomerIdentity.booking_id == booking.id))
             if identity:
                 identity.delete_after = now() + timedelta(days=90)
