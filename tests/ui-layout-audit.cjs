@@ -259,6 +259,11 @@ async function capture(page, scope, expected, report, where) {
   assert.deepEqual(result.ids, [], `${where}/${scope}: duplicate element IDs`);
 }
 
+async function activateWithKeyboard(control) {
+  await control.waitFor();
+  await control.press('Enter');
+}
+
 async function installRoutes(page) {
   const json = (pattern, body) => page.route(pattern, route => route.fulfill({json:body}));
   let cart = {start:'', end:'', lines:[], version:0};
@@ -346,7 +351,7 @@ async function settings(page, audit, where) {
   await page.mouse.move(0, 0);
   const managementTabs = await tabs('.admin-tabs');
   await audit.design('management/navigation-text', () => assertContrast(page.locator('.admin-tabs .admin-mode:visible')));
-  await page.locator('#admin-settings-open').click();
+  await activateWithKeyboard(page.locator('#admin-settings-open'));
   await audit('settings/notifications', ['#admin-settings', '.settings-tabs', '#operator-quiet-form']);
   await page.mouse.move(0, 0);
   const opened = await geometry();
@@ -417,11 +422,8 @@ async function operator(page, audit, where, profileSelects) {
   });
   await filters.click();
   await audit.design('management/document-viewer-backdrop', async () => {
-    for (const name of ['Посмотреть анкету', 'Просмотр документов']) {
-      const control = page.getByRole('button', {name, exact:true});
-      await control.waitFor();
-      await control.press('Enter');
-    }
+    await activateWithKeyboard(page.getByRole('button', {name:'Посмотреть анкету', exact:true}));
+    await activateWithKeyboard(page.getByRole('button', {name:'Просмотр документов', exact:true}));
     try {
       await assertModalBackdrop(page.locator(`#document-viewer${modalSelector}`));
     } finally {
@@ -556,6 +558,7 @@ async function restrictedSettings(browser, surface, report) {
     const where = `${surface}/390x844/${role}`;
     const {page,errors} = await fixture(browser, {surface,admin:true,role,piiOnly,piiAdmin:piiOnly,openOrder:false});
     try {
+      await page.emulateMedia({reducedMotion:'reduce'});
       await page.locator('.request-card').first().waitFor({timeout:6000});
       if (surface === 'site') await page.waitForFunction(() => history.scrollRestoration === 'manual');
       assert.equal(await page.locator('#admin-settings-open').isVisible(), !piiOnly, where);

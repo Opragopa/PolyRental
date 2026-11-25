@@ -36,7 +36,7 @@ const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><r
    });
    await page.clock.install({time:new Date('2026-10-29T10:00:00Z')});
    await page.goto('http://polyrental.test/miniapp',{waitUntil:'domcontentloaded'});
-   await page.locator('.item-card').waitFor();
+   await page.locator('.item-card:not(.loading-skeleton)').waitFor();
    assert.equal(await page.locator('#tab-avatar').evaluate(el=>el.classList.contains('avatar-loading')),true);
    assert.equal(await page.locator('#tab-avatar').evaluate(el=>getComputedStyle(el,'::after').animationName),'avatar-light-sweep');
    if (width===320) await avatarRoute.fulfill({contentType:'image/svg+xml',body:svg}); else await avatarRoute.abort();
