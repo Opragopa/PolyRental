@@ -63,8 +63,10 @@ const guide=order=>({booking_id:order.id,human_number:order.human_number,status:
   }
   {
    const {page,errors}=await fixture(browser,{admin:true,role:'manager'});
-   await page.locator('[data-mode="catalog"]').click();await page.locator('.article-toggle').click();
-   await page.getByRole('button',{name:'Загрузить фото модели',exact:true}).click();const dialog=page.locator('.catalog-photo-dialog');
+   await page.locator('[data-mode="catalog"]').click();
+   const camera=page.locator('.article-card').filter({has:page.locator('[aria-controls="catalog-article-1-assets"]')});
+   await camera.locator('.article-toggle').click();
+   await camera.getByRole('button',{name:'Загрузить фото модели',exact:true}).click();const dialog=page.locator('.catalog-photo-dialog');
    await dialog.locator('.file-drop-zone').waitFor();
    const drop=async count=>dialog.locator('.file-drop-zone').evaluate((zone,count)=>{
     const canvas=document.createElement('canvas');canvas.width=10;canvas.height=10;
@@ -79,8 +81,9 @@ const guide=order=>({booking_id:order.id,human_number:order.human_number,status:
   }
   {
    const {page,errors}=await fixture(browser,{admin:true,role:'admin'});let saved=null;
-   await page.route('**/api/miniapp/admin/handover-settings',r=>{if(r.request().method()==='PUT')saved=r.request().postDataJSON();return r.fulfill({json:saved||{pickup_location:'',pickup_instructions:''}});});
+   await page.route('**/api/miniapp/admin/handover-settings',r=>{if(r.request().method()==='PUT')saved=r.request().postDataJSON();return r.fulfill({json:saved||{pickup_location:'Прежний склад',pickup_instructions:''}});});
    await page.locator('#admin-settings-open').click();await page.locator('#settings-tab-handover').click();
+   await page.waitForFunction(()=>document.querySelector('#handover-settings-form [name=pickup_location]').value==='Прежний склад');
    await page.locator('#handover-settings-form [name=pickup_location]').fill('Тестовый склад');
    await page.locator('#handover-settings-form [name=pickup_instructions]').fill('Приходите по времени заявки');
    await page.locator('#handover-settings-form button').click();await page.getByText('Настройки выдачи сохранены').waitFor();

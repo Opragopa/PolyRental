@@ -159,7 +159,12 @@ const output=process.env.PHOTO_QA_OUTPUT;
    order.article_media={1:{name:'Камера Sony',category:'camera',image_data:preview}};
    const {page,errors}=await fixture(browser,{admin:true,role:'manager',order,width,isMobile:width<768});
    const thumbs=page.locator('.request-equipment-thumb:visible');
-   assert.ok(await thumbs.count()>0);
+   if(status==='preparing'){
+    await page.locator('.next-step-list .next-step-slot svg').first().waitFor();
+    assert.equal(await thumbs.count(),0,'the preparation checklist uses equipment icons');
+   }else{
+    await thumbs.first().waitFor();
+   }
    for(const thumb of await thumbs.all()){
     await thumb.scrollIntoViewIfNeeded();
     await page.waitForFunction(node=>node.querySelector('.catalog-media')?.dataset.photoState==='loaded',await thumb.elementHandle());

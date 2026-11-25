@@ -34,14 +34,17 @@ const { fixture, base } = require('./completion-ui.cjs');
     await page.locator('#admin-next').click();
     await page.locator('.request-card[data-booking-id="8"]').waitFor();
     assert.equal(last.page,'1');
-    for (const width of [320,390,440,1440]) {
+    for (const [width, queue] of [[320,'review'],[390,'handover'],[440,'return'],[1440,'all']]) {
       await page.setViewportSize({width,height:900});
-      await page.clock.runFor(300);
+      await page.clock.fastForward(5100);
       const before=await page.locator('#admin-queues').boundingBox();
       const select=page.locator('#admin-queue');
       await select.evaluate(el=>{window.__queueSelect=el;el.focus();});
-      const response=page.waitForResponse(r=>r.url().includes('/api/miniapp/admin/bookings?'));
-      await select.selectOption('review'); await response; await page.clock.runFor(300);
+      const response=page.waitForResponse(r=>{
+        const url=new URL(r.url());
+        return url.pathname==='/api/miniapp/admin/bookings' && url.searchParams.get('queue')===queue && url.searchParams.get('page')==='0';
+      });
+      await select.selectOption(queue); await response; await page.clock.runFor(300);
       const after=await page.locator('#admin-queues').boundingBox();
       assert.ok(Math.abs(before.height-after.height)<1,`${width}: filter height changed`);
       assert.equal(await select.evaluate(el=>el===window.__queueSelect),true,'filter DOM must survive refresh');
