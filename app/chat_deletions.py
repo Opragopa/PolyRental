@@ -33,7 +33,7 @@ def pending_intents(actor):
 async def pending_list(message,actor):
     entries=await asyncio.to_thread(pending_intents,actor)
     if not entries:return await message.answer('Ожидающих удалений нет. Для восстановления администратором: /deleted.')
-    rows=[[button(f"Отменить · заявка {entry['booking_id']} · {DELETION_TARGETS.get(entry['target_type'], 'объект')}",f"dl:undo:{entry['booking_id']}:{UUID(entry['id']).hex}")] for entry in entries]
+    rows=[[button(f"Отменить удаление: заявка {entry['booking_id']}, {DELETION_TARGETS.get(entry['target_type'], 'объект')}",f"dl:undo:{entry['booking_id']}:{UUID(entry['id']).hex}")] for entry in entries]
     await message.answer('Ожидающие удаления:',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -72,13 +72,13 @@ async def deleted_list(message, page):
     page = max(0, page)
     entries = await asyncio.to_thread(deleted_intents, page)
     names = {'request': 'Заявка', 'line': 'Позиция', 'asset': 'Экземпляр'}
-    rows = [[button(f"{names.get(kind, kind)} · заявка {booking_id}" +
-                    (f" · ID {target_id}" if target_id else ''),
+    rows = [[button(f"{names.get(kind, kind)}, заявка {booking_id}" +
+                    (f" (ID {target_id})" if target_id else ''),
                     f'dr:ask:{kind}:{booking_id}:{target_id or 0}')]
             for booking_id, kind, target_id in entries[:PAGE_SIZE]]
     nav = []
-    if page: nav.append(button('← Назад', f'dr:list:{page-1}'))
-    if len(entries) > PAGE_SIZE: nav.append(button('Далее →', f'dr:list:{page+1}'))
+    if page: nav.append(button('Назад', f'dr:list:{page-1}'))
+    if len(entries) > PAGE_SIZE: nav.append(button('Далее', f'dr:list:{page+1}'))
     if nav: rows.append(nav)
     if not rows:
         return await message.answer('Удалённых объектов пока нет.')
@@ -136,14 +136,14 @@ async def target_list(message,actor,booking_id,target_type,page):
         identifier=lambda item:item.id
     elif target_type=='asset' and booking.status=='preparing':
         items=booking.assets
-        label=lambda item:f"{item.equipment.name} · {item.equipment.inventory_number}"
+        label=lambda item:f"{item.equipment.name} ({item.equipment.inventory_number})"
         identifier=lambda item:item.equipment_id
     else:raise Conflict('Состояние заявки изменилось')
     page=max(0,min(page,max(0,(len(items)-1)//PAGE_SIZE)))
     rows=[[button(label(item)[:60],f'dl:ask:{target_type}:{booking_id}:{identifier(item)}')] for item in items[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
-    if page:nav.append(button('← Назад',f'dl:list:{target_type}:{booking_id}:{page-1}'))
-    if (page+1)*PAGE_SIZE<len(items):nav.append(button('Далее →',f'dl:list:{target_type}:{booking_id}:{page+1}'))
+    if page:nav.append(button('Назад',f'dl:list:{target_type}:{booking_id}:{page-1}'))
+    if (page+1)*PAGE_SIZE<len(items):nav.append(button('Далее',f'dl:list:{target_type}:{booking_id}:{page+1}'))
     if nav:rows.append(nav)
     rows.append([button('К заявке',f'sw:open:{booking_id}')])
     await message.answer('Выберите позицию для удаления:',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))

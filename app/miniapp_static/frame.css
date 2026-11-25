@@ -124,8 +124,7 @@
 :root[data-style="frame"] .button.primary { border:0; border-radius:14px; background:var(--accent); color:var(--on-accent); font-weight:600; }
 :root[data-style="frame"] .button.ghost { border-color:var(--line); }
 :root[data-style="frame"] .field input,
-:root[data-style="frame"] .field select,
-:root[data-style="frame"] .field textarea { border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+:root[data-style="frame"] .field textarea { border:1px solid var(--line); border-radius:12px; background-color:var(--surface); }
 :root[data-style="frame"] .cart-item,
 :root[data-style="frame"] .contact-card,
 :root[data-style="frame"] .customer-order-card,

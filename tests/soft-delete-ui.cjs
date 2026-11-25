@@ -26,6 +26,7 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if (url.pathname === '/api/miniapp/me') return route.fulfill({json:{id:100,admin:true,pii_admin:false}});
       if (url.pathname === '/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,start_screen:'management',reminders_enabled:true}});
       if (url.pathname === '/api/miniapp/admin/bookings' && route.request().method() === 'GET') return route.fulfill({json:{items:orders,undo_seconds:2}});
+      if (url.pathname === '/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[]}});
       if (url.pathname.includes('/api/miniapp/admin/bookings/') && route.request().method() === 'DELETE') { deleted.push(url.pathname); return route.fulfill({json:{status:'deleted'}}); }
       if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:'text/html'});
@@ -64,9 +65,18 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
     assert.equal(deleted.length, 1);
     const third = page.locator('.request-card[data-booking-id="3"]');
     await third.locator('.request-toggle').click();
-    await third.getByRole('button',{name:'Удалить экземпляр Камера',exact:true}).click();
-    await page.getByRole('button',{name:'Отменить',exact:true}).click();
-    assert.equal(await third.getByRole('button',{name:'Удалить экземпляр Камера',exact:true}).isVisible(), true);
+    const edit = third.getByRole('button',{name:'Редактировать состав',exact:true});
+    await edit.click();
+    const editor = page.locator('.next-step-editor');
+    const remove = editor.getByRole('button',{name:/^Удалить: Камера,/});
+    await remove.click();
+    await editor.getByText('Экземпляр не назначен').waitFor();
+    await editor.getByRole('button',{name:'Отмена',exact:true}).click();
+    await editor.waitFor({state:'detached'});
+    await edit.click();
+    await remove.waitFor();
+    await editor.getByRole('button',{name:'Отмена',exact:true}).click();
+    assert.equal(deleted.length, 1);
     await first.locator('.request-toggle').click();
     await first.locator('.request-more-actions > summary').click();
     await first.getByRole('button',{name:'Удалить заявку ТС260001'}).click();

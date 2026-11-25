@@ -18,6 +18,7 @@ const orderFor = (status='ready') => ({id:7,human_number:'ТС260007',status,ide
 async function fixture(browser,{admin=false,role='operator',status='ready',width=440,dark=false}={}) {
   const page=await browser.newPage({viewport:{width,height:956},deviceScaleFactor:3,isMobile:true,hasTouch:true,colorScheme:dark?'dark':'light'});
   const errors=[],writes=[],order=orderFor(status);
+  let cart={version:0,start:'',end:'',lines:[]};
   const categories=[{code:'camera',name:'Камера'},{code:'optics',name:'Оптика'},{code:'generic',name:'Оборудование'}];
   page.on('pageerror',e=>errors.push(e.message));
   await page.clock.install({time:new Date('2026-10-26T10:00:00Z')});
@@ -30,7 +31,10 @@ async function fixture(browser,{admin=false,role='operator',status='ready',width
     if(p==='/api/miniapp/profile') return route.fulfill({json:{display_name:'Анна',onboarding_seen:true,client_allowed:true,system_admin:admin&&role==='admin',start_screen:admin?'management':'booking',reminders_enabled:true}});
     if(p==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
     if(p===`/api/miniapp/bookings/${order.id}`) return route.fulfill({json:order});
-    if(p==='/api/miniapp/cart') return route.fulfill({json:{version:0,start:'',end:'',lines:[]}});
+    if(p==='/api/miniapp/cart') {
+      if(method==='PUT') cart={...route.request().postDataJSON(),version:cart.version+1};
+      return route.fulfill({json:cart});
+    }
     if(p==='/api/miniapp/catalog') return route.fulfill({json:{items,selected_items:items,page:0,page_size:20,total:items.length}});
     if(p==='/api/miniapp/availability') return route.fulfill({json:{items,unavailable:[],unavailable_count:0}});
     if(p==='/api/miniapp/catalog/categories') return route.fulfill({json:{items:categories}});
@@ -39,7 +43,6 @@ async function fixture(browser,{admin=false,role='operator',status='ready',width
     if(p.endsWith('/history')) return route.fulfill({json:{items:[]}});
     if(p==='/api/miniapp/admin/catalog') return route.fulfill({json:{articles:items.map(i=>({...i,inspection_profile:'camera',active:true,composition:'Корпус\nКабель\nКрышка',equipment:Array.from({length:3},(_,index)=>({id:i.id*20+index,asset_code:`${i.sku}-${index+1}`,condition:'available',location:'А-01',serial:`SERIAL-${index+1}`}))})),dependencies:[]}});
     if(p==='/api/miniapp/admin/assignees') return route.fulfill({json:{items:[{id:100,name:'Оператор Анна'},{id:200,name:'Менеджер Мария'}]}});
-    if(p.endsWith('/receipt') && url.searchParams.has('preview')) return route.fulfill({json:{blocks:[{type:'paragraph',text:'Сохранная расписка'},{type:'table',rows:[['Камера','1']]}]}});
     if(p==='/api/miniapp/support/faq') return route.fulfill({json:{items:[{question:'Как получить оборудование?',answer:'Дождитесь статуса готовности и приходите в выбранное время.'}]}});
     if(['POST','PUT','DELETE'].includes(method)) {writes.push({path:p,body:route.request().postDataJSON()});return route.fulfill({json:order});}
     if(p.startsWith('/api/')) return route.fulfill({json:{items:[],total:0}});
@@ -72,8 +75,8 @@ async function capture(page,name) {
       await page.locator('.category-card').getByText('Камера', {exact:true}).tap();
       await page.locator('.item-card').first().waitFor();await capture(page,`catalog-${suffix}`);
       await page.locator('.item-card .plus').first().tap();await page.locator('#main-button').tap();
-
-      await capture(page,`contact-${suffix}`);await page.locator('#main-button').tap();
+      await page.locator('#step-contact').waitFor();
+      await capture(page,`contact-${suffix}`);await page.locator('#main-button').click();
       await page.locator('[data-date="2026-10-30"]').tap();await page.locator('[data-date="2026-11-02"]').tap();
       await page.locator('#start-time').fill('10:00');await page.locator('#end-time').fill('16:00');
       await capture(page,`dates-${suffix}`);await page.locator('#main-button').tap();await page.locator('#step-review').waitFor();await capture(page,`review-${suffix}`);
@@ -81,12 +84,8 @@ async function capture(page,name) {
       assert.ok(await page.locator('.customer-order-period').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'rental period must not be clipped');
       await capture(page,`profile-${suffix}`);
       await page.locator('.customer-actions > summary').tap();
-      await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).tap();
-      await page.locator('.receipt-docx-preview').waitFor();
-      assert.match(await page.locator('.receipt-docx-preview').innerText(),/Сохранная расписка/);
-      assert.ok(await page.getByRole('button',{name:'Скачать DOCX',exact:true}).isVisible());
-      await capture(page,`docx-summary-${suffix}`);
-      await page.getByRole('button',{name:'Назад к заявке',exact:true}).tap();
+      assert.ok(await page.getByRole('button',{name:'Скачать расписку',exact:true}).isVisible());
+      assert.equal(await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).count(),0);
       await page.getByRole('button',{name:'Сдать оборудование',exact:true}).tap();await capture(page,`receipt-dialog-${suffix}`);
       await page.locator('.workflow-dialog').getByRole('button',{name:'Отмена',exact:true}).tap();
       await page.locator('#profile-header > summary').tap();await page.locator('#profile-support').tap();

@@ -24,6 +24,7 @@ from .document_check import check_documents, Verdict
 
 
 DOCUMENT_KINDS = {"passport_main", "passport_registration", "student_front"}
+REQUIRED_DOCUMENT_KINDS = {"passport_main", "passport_registration"}
 MAX_FILE_SIZE = 8 * 1024 * 1024
 MAX_TOTAL_SIZE = 32 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 30_000_000
@@ -172,18 +173,17 @@ def consent_text():
         "Перечень данных: фамилия, имя, отчество, дата рождения; серия, номер, дата выдачи, орган выдачи и "
         "код подразделения паспорта; адрес регистрации и фактического проживания; номер студенческого билета и "
         "Telegram ID, телефон или иной предоставленный контакт; фотографии "
-        "разворота паспорта с фотографией, страницы регистрации и лицевой стороны студенческого билета.\n\n"
+        "разворота паспорта с фотографией и страницы регистрации. Фото лицевой стороны студенческого билета можно приложить по желанию.\n\n"
         "Оператор выполняет сбор, запись, систематизацию, хранение, уточнение, извлечение, использование, "
         "предоставление допущенным сотрудникам, блокирование и уничтожение данных. Фотографии проверяются "
-        "локально для предварительного определения типа документа, затем сотрудником. Распознанный текст не сохраняется; "
-        "изображения не передаются внешним сервисам, пересохраняются без EXIF и шифруются. "
+        "для предварительного определения типа документа, затем сотрудником. Изображения не передаются внешним сервисам. "
         "Реквизиты и фотографии не передаются в сообщения Telegram и не используются для рекламы.\n\n"
         "Полные данные доступны только сотрудникам, включённым в закрытый список проверки документов. "
         "Анкета и фотографии хранятся во время оформления и исполнения аренды, затем удаляются через 90 дней после возврата оборудования; "
         "если в этот период оформляется новая заявка, реквизиты и фотографии могут быть предложены для повторного заполнения; "
         "новая фотография заменяет сохранённую. Согласие на обработку для новой заявки запрашивается отдельно. "
-        "PDF сохранной расписки хранится зашифрованно пять лет и доступен мне для скачивания. "
-        "После этого PDF и отдельная копия ФИО получателя удаляются; номер, даты и факт подписания сохраняются. "
+        "Сохранная расписка хранится пять лет и доступна для скачивания. "
+        "После этого расписка и отдельная копия ФИО получателя удаляются; номер, даты и факт подписания сохраняются. "
         "При открытом ремонте срок хранения отсчитывается после его закрытия. Данные могут быть удалены раньше при наличии законного основания и обращения. "
         "Запрос, уточнение, отзыв согласия или обращение по удалению можно направить через "
         + os.environ["OPERATOR_CONTACT"] + ". Отказ предоставить данные означает невозможность оформить документы "
@@ -392,11 +392,13 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
     merged_payload = {**existing_payload, **payload}
     payload = validate_identity_payload(merged_payload,
                                         legacy_institution=existing_payload.get("student_institution"), require_phone=True)
+    if set(documents) - DOCUMENT_KINDS:
+        raise ValueError("Выберите фотографию запрошенного документа")
     if existing_payload:
         if not documents and not existing_kinds:
             raise ValueError("Загрузите исправленное изображение документа")
-    elif set(documents) != DOCUMENT_KINDS:
-        raise ValueError("Нужны три изображения документов")
+    elif not REQUIRED_DOCUMENT_KINDS.issubset(documents):
+        raise ValueError("Нужны разворот паспорта с фото и страница регистрации")
     if sum(len(data[0]) for data in documents.values()) > MAX_TOTAL_SIZE:
         raise ValueError("Общий размер комплекта документов превышает 32 МБ")
     if not existing_payload:
@@ -433,8 +435,8 @@ def submit_identity(booking_id, customer_id, payload, documents, policy_version=
                     f"{booking.id}:{document.kind}".encode()), document.media_type)
         documents = {**old_documents, **documents}
         checks = {**old_checks, **checks}
-        if set(documents) != DOCUMENT_KINDS:
-            raise ValueError("Нужны три изображения документов")
+        if not REQUIRED_DOCUMENT_KINDS.issubset(documents):
+            raise ValueError("Нужны разворот паспорта с фото и страница регистрации")
         dek = AESGCM.generate_key(bit_length=256)
         encrypted_payload, payload_nonce = _encrypt_payload(payload, dek)
         key_nonce = os.urandom(12)
@@ -549,6 +551,8 @@ def review_identity(booking_id, actor_id, approved, comment="", fields=None):
         allowed = {"full_name", "phone", "birth_date", "passport_combined", "passport_issued_at", "passport_issuer",
                    "passport_division_code", "registration_address", "residential_address", "student_id_number",
                    "student_institution", "passport_main", "passport_registration", "student_front"}
+        if not any(document.kind == "student_front" for document in identity.documents):
+            allowed.discard("student_front")
         identity.review_comment = _encrypted_review_comment(booking_id, comment.strip()[:500])
         identity.review_fields = json.dumps([field for field in (fields or []) if field in allowed], ensure_ascii=False)
         booking.identity_status = identity.status

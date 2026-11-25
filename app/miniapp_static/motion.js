@@ -3,6 +3,7 @@
 (() => {
   "use strict";
   const preference = matchMedia("(prefers-reduced-motion: reduce)");
+  const desktop = matchMedia("(min-width: 769px)");
   const exits = new Map();
   const entries = new Map();
   const feedbackAnimations = new Map();
@@ -15,15 +16,25 @@
     void animation.finished.catch(()=>{}).then(()=>{ if (feedbackAnimations.get(element) === animation) feedbackAnimations.delete(element); });
   }
   function quantityFeedback(value, target) {
+    if (desktop.matches) {
+      feedbackAnimation(value, [{opacity:.65}, {opacity:1}], {duration:140});
+      feedbackAnimation(target, [{boxShadow:"0 0 0 2px var(--accent)"}, {boxShadow:"0 0 0 2px transparent"}], {duration:180});
+      return;
+    }
     // Only the number deforms; neither the text around it nor the hit area moves.
     feedbackAnimation(value, [{transform:"scale(1)"}, {transform:"scale(1.16,.84)",offset:.22}, {transform:"scale(.94,1.09)",offset:.6}, {transform:"scale(1)"}]);
     const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
     feedbackAnimation(target, [{boxShadow:"0 0 0 0 transparent"}, {boxShadow:`0 0 0 3px ${color}`,offset:.35}, {boxShadow:"0 0 0 0 transparent"}], {duration:280, delay:80});
   }
   function stage(element, direction = 1) {
+    if (desktop.matches) { enter(element); return; }
     feedbackAnimation(element, [{opacity:.5,transform:`translateY(${direction * 10}px)`}, {opacity:1,transform:"translateY(0)"}], {duration:220});
   }
   function result(element) {
+    if (desktop.matches) {
+      feedbackAnimation(element, [{opacity:.6,transform:"scale(.97)"}, {opacity:1,transform:"none"}], {duration:160});
+      return;
+    }
     feedbackAnimation(element, [{transform:"perspective(600px) rotateX(12deg) scale(.82)"}, {transform:"perspective(600px) rotateX(-2deg) scale(1.08)",offset:.65}, {transform:"perspective(600px) rotateX(0) scale(1)"}], {duration:320});
   }
   function startPress(key, button) {
@@ -32,13 +43,13 @@
     const layer = document.createElement('div'); layer.className='press-feedback'; layer.inert=true; layer.setAttribute('aria-hidden','true');
     layer.style.cssText=`left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;border-radius:${getComputedStyle(button).borderRadius}`;
     document.body.append(layer);
-    const animation=layer.animate([{transform:'scale(.94)',opacity:.04},{transform:'scale(1)',opacity:.14}],{duration:90,easing:'ease-out',fill:'forwards'});
+    const animation=layer.animate(desktop.matches ? [{opacity:.02},{opacity:.10}] : [{transform:'scale(.94)',opacity:.04},{transform:'scale(1)',opacity:.14}],{duration:desktop.matches ? 70 : 90,easing:'ease-out',fill:'forwards'});
     presses.set(key,{layer,animation});
   }
   function endPress(key, cancelled = false) {
     const state=presses.get(key); if (!state) return; presses.delete(key); state.animation.cancel();
     if (cancelled || preference.matches) { state.layer.remove(); return; }
-    const animation=state.layer.animate([{transform:'scale(1)',opacity:.14},{transform:'scale(1.035)',opacity:0}],{duration:140,easing:'ease-out'});
+    const animation=state.layer.animate(desktop.matches ? [{opacity:.10},{opacity:0}] : [{transform:'scale(1)',opacity:.14},{transform:'scale(1.035)',opacity:0}],{duration:desktop.matches ? 100 : 140,easing:'ease-out'});
     state.animation=animation;
     // Keep releasing cues tracked so navigation and reduced motion remove them.
     const releaseKey=Symbol('release'); presses.set(releaseKey,state);
@@ -50,10 +61,10 @@
   document.addEventListener('keydown',event=>{if (!event.repeat && ['Enter',' '].includes(event.key)) startPress('keyboard',event.target.closest?.('button'));},true);
   document.addEventListener('keyup',event=>{if (['Enter',' '].includes(event.key)) endPress('keyboard');},true);
   window.addEventListener('blur',()=>{for(const key of presses.keys())endPress(key,true);});
-  function enter(element, direction = 1) {
+  function enter(element) {
     if (!element || preference.matches || typeof element.animate !== "function") return;
     entries.get(element)?.cancel();
-    const animation = element.animate([{opacity: .55}, {opacity: 1}], {duration: 300, easing: "cubic-bezier(.22, 1, .36, 1)"});
+    const animation = element.animate([{opacity: desktop.matches ? .82 : .55}, {opacity: 1}], {duration: desktop.matches ? 160 : 300, easing: "cubic-bezier(.22, 1, .36, 1)"});
     entries.set(element, animation);
     void animation.finished.catch(() => {}).then(() => {if (entries.get(element) === animation) entries.delete(element);});
   }
@@ -68,7 +79,7 @@
     }
     const card = dialog.querySelector(".dialog-card");
     const current = card && getComputedStyle(card);
-    const frames = card && [{opacity: current.opacity, transform: current.transform}, {opacity: 0, transform: "translateY(8px) scale(.99)"}];
+    const frames = card && [{opacity: current.opacity, transform: current.transform}, {opacity: 0, transform: desktop.matches ? "scale(.985)" : "translateY(8px) scale(.99)"}];
     const opacity = getComputedStyle(dialog).opacity;
     dialog.getAnimations({subtree: true}).forEach(animation => animation.cancel());
     const style = getComputedStyle(dialog);
@@ -92,6 +103,11 @@
   }
   function morphEquipmentPreview(dialog, source, radius, close) {
     if (preference.matches) {
+      close.focus({preventScroll:true});
+      return;
+    }
+    if (desktop.matches) {
+      feedbackAnimation(dialog.querySelector(".dialog-card"), [{opacity:.7,transform:"scale(.985)"}, {opacity:1,transform:"none"}], {duration:160});
       close.focus({preventScroll:true});
       return;
     }
@@ -141,18 +157,44 @@
   }
 
   const headingAnimations = new Map();
-  function morphText(element, nextText) {
+  function morphText(element, nextText, {direction = 0} = {}) {
     if (!element || element.textContent === nextText) return;
-    const old = headingAnimations.get(element); old?.animations.forEach(animation=>animation.cancel()); old?.layer.remove();
+    const old = headingAnimations.get(element);
+    const current = old && direction ? getComputedStyle(element) : null;
+    const outgoingOpacity = current?.opacity || 1;
+    const outgoingTransform = current?.transform || "none";
+    const returning = direction && old?.layer.textContent === nextText ? getComputedStyle(old.layer) : null;
+    const incomingOpacity = returning?.opacity || 0;
+    const incomingTransform = returning?.transform;
+    old?.animations.forEach(animation=>animation.cancel()); old?.layer.remove();
+    if (desktop.matches && !direction) {
+      element.textContent = nextText;
+      feedbackAnimation(element, [{opacity:.75}, {opacity:1}], {duration:140});
+      return;
+    }
     const previous = element.textContent;
     const previousRect = element.getBoundingClientRect();
     element.textContent = nextText;
     if (preference.matches || typeof element.animate !== "function" || !element.isConnected || !element.getClientRects().length) return;
     const rect = element.getBoundingClientRect(); if (!rect.width || !rect.height) return;
-    const layer = element.cloneNode(false); layer.removeAttribute("id"); layer.classList.add("heading-morph-copy"); layer.setAttribute("aria-hidden","true"); layer.textContent = previous;
-    layer.style.cssText = `left:${previousRect.left}px;top:${previousRect.top}px;width:${previousRect.width}px;height:${previousRect.height}px`; document.body.append(layer);
-    const exit = layer.animate([{opacity:1,transform:"scaleX(1)"},{opacity:0,transform:"scaleX(1.02)"}],{duration:160,easing:"ease-in",fill:"forwards"});
-    const entry = element.animate([{opacity:0,transform:"scaleX(.98)"},{opacity:1,transform:"scaleX(1)"}],{duration:240,easing:"cubic-bezier(.22, 1, .36, 1)"});
+    const layer = element.cloneNode(false); layer.removeAttribute("id"); layer.removeAttribute("tabindex");
+    layer.setAttribute("aria-hidden","true"); layer.inert = true; layer.textContent = previous;
+    let exit, entry;
+    if (direction) {
+      const distance = Math.min(56, rect.width / 4) * direction;
+      const options = {duration:260, easing:"cubic-bezier(.3, .1, .25, 1)"};
+      layer.classList.add("admin-heading-copy"); element.before(layer);
+      exit = layer.animate([{opacity:outgoingOpacity,transform:outgoingTransform},
+        {opacity:0,transform:`translateX(${-distance}px)`}], {...options, fill:"forwards"});
+      entry = element.animate([{opacity:incomingOpacity,transform:incomingTransform || `translateX(${distance}px)`},
+        {opacity:1,transform:"translateX(0px)"}], options);
+    } else {
+      layer.classList.add("heading-morph-copy");
+      layer.style.cssText = `left:${previousRect.left}px;top:${previousRect.top}px;width:${previousRect.width}px;height:${previousRect.height}px`;
+      document.body.append(layer);
+      exit = layer.animate([{opacity:1,transform:"scaleX(1)"},{opacity:0,transform:"scaleX(1.02)"}],{duration:160,easing:"ease-in",fill:"forwards"});
+      entry = element.animate([{opacity:0,transform:"scaleX(.98)"},{opacity:1,transform:"scaleX(1)"}],{duration:240,easing:"cubic-bezier(.22, 1, .36, 1)"});
+    }
     const state = {animations:[exit,entry], layer}; headingAnimations.set(element,state);
     void Promise.allSettled(state.animations.map(animation=>animation.finished)).then(()=>{layer.remove(); if(headingAnimations.get(element)===state) headingAnimations.delete(element);});
   }
@@ -162,6 +204,7 @@
     if (!panel || preference.matches) return null;
     const rect = panel.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
+    if (desktop.matches) return {};
     const copy = panel.cloneNode(true);
     copy.querySelectorAll('.category-empty-overlay').forEach(node => node.remove());
     copy.inert = true;
@@ -172,6 +215,13 @@
     categoryEntries.forEach(animation => animation.cancel()); categoryEntries = [];
     categoryAnimation = null; categoryLayer = null;
     if (!snapshot || !panel || preference.matches) return;
+    if (desktop.matches) {
+      const current = panel.animate([{opacity:.82},{opacity:1}], {duration:160,easing:'ease-out'});
+      categoryAnimation = current;
+      void current.finished.catch(()=>{}).then(()=>{if (categoryAnimation === current) categoryAnimation = null;});
+      return;
+    }
+    if (!snapshot.copy) return;
     const layer = document.createElement('div');
     layer.className = 'category-level-transition'; layer.setAttribute('aria-hidden', 'true'); layer.inert = true;
     layer.style.cssText = `left:${snapshot.left}px;top:${snapshot.top}px;width:${snapshot.width}px;height:${snapshot.height}px`;
@@ -232,6 +282,7 @@
   const cartFlights = new Set();
   function flyToCart(card, target) {
     if (preference.matches || !card || !target || target.hidden) return;
+    if (desktop.matches) return; // quantityFeedback already highlights the counter and cart button.
     const source = card.querySelector('.catalog-media') || card;
     const start = source.getBoundingClientRect(), end = target.getBoundingClientRect();
     if (!start.width || !start.height || !end.width || !end.height) return;
@@ -253,9 +304,9 @@
     surfaces.delete(host); state.observer?.disconnect(); cancelAnimationFrame(state.resizeFrame); state.animation?.cancel();
     host.style.overflow = state.overflow;
   }
-  function surface(host, change) {
+  function surface(host, change, {fade = true} = {}) {
     const height = host.getBoundingClientRect().height;
-    const opacity = surfaces.has(host) ? getComputedStyle(host).opacity : .65;
+    const opacity = fade ? (surfaces.has(host) ? getComputedStyle(host).opacity : .65) : 1;
     cancelSurface(host);
     change();
     if (preference.matches || !host.getClientRects().length || typeof host.animate !== 'function') return;
@@ -266,7 +317,7 @@
       state.animation?.cancel();
       const target = host.getBoundingClientRect().height;
       state.animation = host.animate([{height:`${from}px`,opacity:fromOpacity},{height:`${target}px`,opacity:1}],
-        {duration:220,easing:'cubic-bezier(.22,1,.36,1)'});
+        {duration:desktop.matches ? 170 : 220,easing:'cubic-bezier(.22,1,.36,1)'});
       const current = state.animation;
       void current.finished.catch(()=>{}).then(()=>{
         if (surfaces.get(host) === state && state.animation === current) cancelSurface(host);
@@ -302,15 +353,25 @@
     change();
     for (const {host, height, children} of before) {
       const animations = [], nextHeight = host.getBoundingClientRect().height;
-      if (height && nextHeight && height !== nextHeight) animations.push(host.animate([{height:`${height}px`},{height:`${nextHeight}px`}], {duration:300,easing:"cubic-bezier(.22, 1, .36, 1)"}));
+      if (!desktop.matches && height && nextHeight && height !== nextHeight) animations.push(host.animate([{height:`${height}px`},{height:`${nextHeight}px`}], {duration:300,easing:"cubic-bezier(.22, 1, .36, 1)"}));
       for (const [node, old] of children) {
         const current = node.getBoundingClientRect(), x = old.left-current.left, y = old.top-current.top;
-        if ((x || y) && old.width && current.width) animations.push(node.animate([{transform:`translate(${x}px, ${y}px)`,opacity:.85},{transform:"none",opacity:1}], {duration:340,easing:"cubic-bezier(.22, 1, .36, 1)"}));
+        if ((x || y) && old.width && current.width) {
+          const ratio = desktop.matches ? Math.min(1, 12 / Math.hypot(x, y)) : 1;
+          animations.push(node.animate([{transform:`translate(${x * ratio}px, ${y * ratio}px)`,opacity:.85},{transform:"none",opacity:1}], {duration:desktop.matches ? 160 : 340,easing:"cubic-bezier(.22, 1, .36, 1)"}));
+        }
       }
       reflows.set(host, animations);
       void Promise.allSettled(animations.map(animation => animation.finished)).then(() => { if (reflows.get(host) === animations) reflows.delete(host); });
     }
   }
+  function resetViewportMotion() {
+    cancelTransient();
+    cancelReflow([...reflows.keys()]);
+    for (const animation of entries.values()) animation.cancel();
+  }
+  desktop.addEventListener("change", resetViewportMotion);
+  matchMedia("(min-width: 1024px)").addEventListener("change", resetViewportMotion);
   preference.addEventListener("change", () => {
     if (preference.matches) {
       for (const host of surfaces.keys()) cancelSurface(host);

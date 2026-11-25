@@ -7,9 +7,10 @@ const {fixture,base} = require('./completion-ui.cjs');
   const browser = await engine.launch({headless:true, ...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
     const {page,errors} = await fixture(browser,{admin:true,role:'admin',order:base('pending')});
+    const article = {id:1,name:'Камера Sony',sku:'CAM',category:'camera',active:true,equipment:[]};
     await page.route('**/api/miniapp/admin/catalog?*', route => route.fulfill({json:{
       categories:[{code:'camera',name:'Камера'},{code:'generic',name:'Оборудование'}],
-      articles:[{id:1,name:'Камера Sony',sku:'CAM',category:'camera',active:true,equipment:[]}],dependencies:[],page:0,page_size:20,total:1,
+      articles:[article],dependencies:[],page:0,page_size:20,total:1,
     }}));
     await page.locator('[data-mode="catalog"]').click();
     await page.getByRole('button',{name:'Новый артикул',exact:true}).click();
@@ -54,11 +55,67 @@ const {fixture,base} = require('./completion-ui.cjs');
     await form.getByRole('button',{name:'Отмена'}).click();
     await page.route('**/api/miniapp/admin/catalog/articles', route => route.fulfill({status:409,json:{detail:'Карточка модели изменилась. Откройте её заново'}}));
     await page.getByRole('button',{name:'Камера',exact:true}).click();
-    await page.getByRole('button',{name:/Изменить артикул:/}).click();
+    const card = page.locator('.article-card');
+    const toggle = card.locator('.article-toggle');
+    const edit = card.locator('[data-edit-article-id="1"]');
+    await page.locator('#admin-catalog-level .product-layout').getByRole('button',{name:'Плитка'}).click();
+    assert.equal(await toggle.innerText(),'Экземпляры');
+    await page.locator('#admin-catalog-level .product-layout').getByRole('button',{name:'Список'}).click();
+    assert.equal((await toggle.innerText()).trim(),'0 экземпляров');
+    await toggle.click();
+    await edit.click();
+    const editor = page.locator('.article-editor');
     await form.locator('[name="name"]').fill('Мои несохранённые изменения');
     await form.getByRole('button',{name:'Сохранить артикул'}).click();
     await page.getByText('Карточка модели изменилась. Откройте её заново',{exact:false}).waitFor();
     assert.equal(await form.locator('[name="name"]').inputValue(),'Мои несохранённые изменения');
+    await editor.getByRole('tab',{name:'Комплект'}).click();
+    await form.locator('[name="composition"]').fill('Камера\nКрышка');
+    const telegramBack = () => page.evaluate(() => window.Telegram.WebApp.BackButton.press());
+    page.once('dialog', dialog => dialog.dismiss());
+    await telegramBack();
+    assert.equal(await form.locator('[name="composition"]').inputValue(),'Камера\nКрышка');
+    page.once('dialog', dialog => dialog.accept());
+    await telegramBack();
+    await edit.waitFor();
+    assert.equal(await edit.evaluate(button => button === document.activeElement),true);
+    assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+    await edit.click();
+    await editor.getByRole('tab',{name:'Описание'}).click();
+    await form.locator('[name="key_spec"]').fill('4K, полный кадр');
+    await editor.getByRole('tab',{name:'Фото'}).click();
+    const photo = await page.evaluate(()=>document.createElement('canvas').toDataURL('image/png').split(',')[1]);
+    await form.locator('input[type="file"]').setInputFiles({name:'camera.png',mimeType:'image/png',buffer:Buffer.from(photo,'base64')});
+    let metadataWrites = 0, photoWrites = 0;
+    await page.route('**/api/miniapp/admin/catalog/articles', route => {
+      metadataWrites++;
+      const body = route.request().postDataJSON();
+      assert.equal(body.expected_before.key_spec,'');
+      Object.assign(article,{key_spec:body.key_spec});
+      return route.fulfill({json:{id:1}});
+    });
+    await page.route('**/api/miniapp/admin/catalog/articles/1/photo', route => {
+      if (route.request().method()==='DELETE') {
+        article.image_data = "";
+        return route.fulfill({json:{ok:true}});
+      }
+      if (++photoWrites === 1) return route.fulfill({status:503,json:{detail:'Фото временно недоступно'}});
+      article.image_data = 'data:image/webp;base64,UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/vtV4/+lwf/S4P/pcH/pcH8bss4bpAAA';
+      return route.fulfill({json:{image_data:article.image_data}});
+    });
+    await form.getByRole('button',{name:'Сохранить артикул'}).click();
+    await editor.getByText('Поля сохранены. Повторите сохранение фото.',{exact:true}).waitFor();
+    await form.getByRole('button',{name:'Сохранить артикул'}).click();
+    await editor.getByText('Артикул сохранён',{exact:true}).waitFor();
+    assert.equal(metadataWrites,1);
+    assert.equal(photoWrites,2);
+    await editor.getByRole('button',{name:'Удалить фото',exact:true}).click();
+    await form.getByRole('button',{name:'Сохранить артикул'}).click();
+    await editor.getByText('Артикул сохранён',{exact:true}).waitFor();
+    assert.equal(article.image_data,'');
+    await editor.getByRole('button',{name:'Назад',exact:true}).click();
+    await card.getByText('4K, полный кадр',{exact:true}).waitFor();
+    assert.equal(await toggle.getAttribute('aria-expanded'),'true');
     assert.deepEqual(errors,[]);
     console.log('Staff draft recovery and navigation guard: passed');
     await page.close();

@@ -50,7 +50,7 @@
     const footer = document.querySelector(".action-bar");
     if (tabs) {
       const style = getComputedStyle(tabs);
-      const height = tabs.getBoundingClientRect().height - parseFloat(style.paddingBottom);
+      const height = style.flexDirection === 'column' ? 0 : tabs.getBoundingClientRect().height - parseFloat(style.paddingBottom);
       writes.push(() => root.style.setProperty("--nav-height", `${height}px`));
     }
     if (footer) {

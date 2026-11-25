@@ -18,6 +18,11 @@ const waitForState=(page,state)=>page.waitForFunction(state=>document.querySelec
   await page.locator('[data-mode="catalog"]').click();
   await page.waitForFunction(()=>document.querySelector('.article-media')?.getAttribute('aria-busy')==='true');
   assert.ok(await page.locator('.article-media .catalog-photo-progress').isVisible());
+  const centers=await page.locator('.article-media .loading-spinner').evaluate(spinner=>{
+   const ring=spinner.getBoundingClientRect(),photo=spinner.closest('.article-media').getBoundingClientRect();
+   return {x:(ring.left+ring.right-photo.left-photo.right)/2,y:(ring.top+ring.bottom-photo.top-photo.bottom)/2};
+  });
+  assert(Math.abs(centers.x)<1 && Math.abs(centers.y)<1,JSON.stringify(centers));
   releaseImage();await waitForState(page,'error');
   assert.ok(await page.locator('.catalog-photo-retry').isVisible());
   assert.equal(await page.locator('.article-media').getAttribute('aria-busy'),'false');

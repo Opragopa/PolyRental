@@ -75,7 +75,12 @@ async function assertFits(page) {
           await assertFullWidth(action);
           await page.locator('#tab-orders').click();
           const support = page.locator('#profile-support');
-          await assertFullWidth(support);
+          if (width < 1024) await assertFullWidth(support);
+          else {
+            const button = await support.boundingBox();
+            const entry = await page.locator('.profile-support-entry').boundingBox();
+            assert.ok(Math.abs(button.x - entry.x) < 2 && button.width < entry.width && button.height >= 44);
+          }
           await support.click();
           const dialog = page.locator('#support-dialog .dialog-card');
           await dialog.waitFor({ state: 'visible' });
@@ -117,7 +122,13 @@ async function assertFits(page) {
       await cartItem.waitFor();
       assert.equal(await cartItem.evaluate(el => getComputedStyle(el).borderTopLeftRadius), '24px');
       assert.ok(await page.locator('#clear-cart').isHidden());
-      await assertFullWidth(page.locator('#main-button'));
+      const mainButton = page.locator('#main-button');
+      if (page.viewportSize().width < 1024) await assertFullWidth(mainButton);
+      else {
+        const button = await mainButton.boundingBox();
+        const footer = await page.locator('#action-bar').boundingBox();
+        assert.ok(button.width <= 280 && Math.abs(button.x + button.width - footer.x - footer.width) < 2);
+      }
       await assertFits(page);
       assert.deepEqual(errors, []);
       await page.close();

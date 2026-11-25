@@ -48,9 +48,9 @@ const assertHistory = async (page, id) => {
   await entries.nth(1).waitFor({ state: "visible" });
   assert.deepEqual(await entries.locator("strong").allTextContents(), ["Заявка подтверждена", "Анкета одобрена", "Анкета отправлена", "Клиент подтвердил получение", "Бумажная подпись при выдаче отмечена", "Клиент подтвердил сдачу", "Бумажная подпись при возврате отмечена"]);
   const actors = await entries.locator("span").allTextContents();
-  assert.match(actors[0], /МСК · QA admin$/);
-  assert.match(actors[1], /МСК · QA operator$/);
-  assert.match(actors[2], /МСК · Пользователь$/);
+  assert.match(actors[0], /МСК, QA admin$/);
+  assert.match(actors[1], /МСК, QA operator$/);
+  assert.match(actors[2], /МСК, Пользователь$/);
   assert.doesNotMatch(actors.join('\n'), /\bID\b/);
 };
 const waitUntil = async (predicate, message) => {
@@ -99,10 +99,11 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const payload = route.request().postDataJSON();
       if (payload.equipment_id === inspectionFailEquipment) return route.fulfill({ status: 409, json: { detail: "QA inspection conflict" } });
       const selected = orders.find(item => item.id === bookingId);
+      selected.inspections = selected.inspections.filter(item => item.equipment_id !== payload.equipment_id || item.stage !== payload.stage);
       selected.inspections.push(payload);
       const lease = { stage: selected.status, actor_id: 200, actor_name: "QA self", expires_at: "2026-10-26T10:10:00Z", expired: false };
       selected.operation_lease = selected.operation_lease_state = lease;
-      return route.fulfill({ json: { status: "saved" } });
+      return route.fulfill({ json: { status: "saved", operation_lease_state:lease } });
     }
     if (url.pathname.endsWith("/history")) return route.fulfill({ json: { items: [
       { id: "audit:1", action: "confirmed", actor_id: 100, actor_name: "QA admin", created_at: "2026-10-26T09:00:00Z", category: "status" },
@@ -127,7 +128,8 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
     return route.fulfill({ body: html, contentType: "text/html" });
   });
   await page.goto("http://polyrental.test/miniapp");
-  await card(page, orders[0].id).waitFor();
+  try { await card(page, orders[0].id).waitFor({timeout:8000}); }
+  catch (error) { throw new Error(await page.locator('#global-error').innerText() || errors.join('\n') || error.message, {cause:error}); }
   return { page, errors, requests, reviews, orders, forceEdits };
 }
 
@@ -327,7 +329,7 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       const { page, errors } = await fixture(browser, { orders: [order(7, { status: "preparing", identity_status: "verified", operation_lease: lease, operation_lease_state: lease })] });
       await openCard(page, 7);
       const selected = card(page, 7);
-      const replacement = selected.getByRole("button", { name: "Заменить экземпляры", exact: true });
+      const replacement = selected.getByRole("button", { name: "Редактировать состав", exact: true });
       const ready = selected.getByRole("button", { name: /^Подтвердить готовность к выдаче/ });
       assert.equal(await replacement.isDisabled(), true);
       assert.equal(await ready.isDisabled(), true);
@@ -393,14 +395,43 @@ async function fixture(browser, { pii = true, width = 390, dark = false, orders 
       assert.match(await selected.locator('.inspection-row[data-equipment-id="12"]').innerText(), /QA-12/);
       assert.doesNotMatch(await selected.locator('.inspection-row[data-equipment-id="12"]').innerText(), /undefined|null/);
       assert.match(await selected.locator(".stage-lock").innerText(), /Ожидает сотрудника/);
-      await selected.getByRole("button", { name: "Все исправны", exact: true }).click();
-      await waitUntil(async () => (await selected.locator(".stage-lock").innerText()).includes("QA self"), "Bulk inspection did not refresh the lock holder");
+      const first = selected.locator('[data-equipment-id="11"] .next-step-mark');
+      const second = selected.locator('[data-equipment-id="12"] .next-step-mark');
+      await first.click();
+      await waitUntil(async () => (await selected.locator(".stage-lock").innerText()).includes("QA self"), "Inspection did not refresh the lock holder");
+      await second.click();
+      await waitUntil(async () => await second.isEnabled() && requests.filter(request => request.path.endsWith("/inspection")).length === 2, "Second check did not settle");
       assert.match(await selected.locator(".stage-lock").innerText(), /Вы обрабатываете/);
       assert.match(await selected.locator(".inspection-progress").innerText(), partialFailure ? /Проверено 1 из 2/ : /Проверено 2 из 2/);
       assert.equal(await selected.getByRole("button", { name: /^Подтвердить готовность к выдаче/ }).isDisabled(), partialFailure);
       assert.equal(requests.filter(request => request.path.endsWith("/inspection")).length, 2);
       if (partialFailure) assert.match(await page.locator("#global-error").innerText(), /QA inspection conflict/);
-      assert.deepEqual(errors, []); passed.push(`bulk inspection lock refresh${partialFailure ? " after partial failure" : ""}`); await page.close();
+      assert.deepEqual(errors, []); passed.push(`individual inspection lock refresh${partialFailure ? " after a failed save" : ""}`); await page.close();
+    }
+    {
+      const assets = [{id:11, name:'Камера', serial:'QA-11', condition:'available',
+        components:[{name:'Аккумулятор',state:'issued'}, {name:'Кабель',state:'issued'}]}];
+      const {page, errors, orders} = await fixture(browser, {orders:[order(7, {status:'preparing', identity_status:'verified', assets})]});
+      await openCard(page, 7);
+      const selected = card(page, 7);
+      await selected.getByRole('button', {name:/Комплектующие: Камера/}).press('Enter');
+      await selected.getByRole('checkbox', {name:'Аккумулятор'}).press('Space');
+      const mark = selected.getByRole('checkbox', {name:/Проверка комплекта: Камера/});
+      await waitUntil(async () => await mark.getAttribute('aria-checked') === 'mixed', 'First component did not produce a partial check');
+      assert.equal(orders[0].inspections[0].result, 'partial');
+      await page.reload();
+      await openCard(page, 7);
+      assert.equal(await mark.getAttribute('aria-checked'), 'mixed');
+      await mark.press('Space');
+      await waitUntil(async () => await mark.getAttribute('aria-checked') === 'true', 'Whole check did not complete the kit');
+      const confirm = selected.getByRole('button', {name:'Подтвердить готовность к выдаче'});
+      assert.equal(await confirm.isEnabled(), true);
+      await mark.press('Space');
+      await waitUntil(async () => await mark.getAttribute('aria-checked') === 'false', 'Removing the whole check did not reset it');
+      assert.equal(await confirm.isDisabled(), true);
+      assert.deepEqual(errors, []);
+      await page.close();
+      passed.push('component and whole-kit checks, including reload');
     }
     console.log(JSON.stringify({ engine: engineName, passed: passed.length, cases: passed }, null, 2));
   } finally { await browser.close(); }

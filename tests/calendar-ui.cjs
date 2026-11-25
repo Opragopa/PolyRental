@@ -100,6 +100,14 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
         await page.locator('#top-back-button').click();
         assert.equal(await page.locator("#start-time").inputValue(),"10:00");
         assert.equal(await page.locator("#start-date").inputValue(),"2026-10-30");
+        await page.locator('[data-date="2026-10-26"]').click();
+        await page.locator('[data-date="2026-10-27"]').click();
+        assert.equal(await page.locator("#start-date").inputValue(), "2026-10-26");
+        await page.locator("#start-time").fill("09:30");
+        await page.locator("#end-time").focus();
+        assert.equal(await page.locator("#start-time").inputValue(), "13:00", 'past start becomes current Moscow time');
+        assert.match(await page.locator("#period-summary").innerText(), /13:00/);
+        assert.equal(await page.locator("#main-button").isEnabled(), true, 'current minute is a valid start');
         assert.equal(requests.filter(url=>url.startsWith("/api/")).length,0);
         const media = await page.evaluate(async () => {
           const host=document.createElement("div"); host.className="article-card-head";
@@ -153,7 +161,10 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     });
     const cell=hover.locator('[data-date="2026-10-30"]');const before=await cell.boundingBox();
     await cell.hover();
-    assert.equal(await cell.evaluate(el=>getComputedStyle(el,'::after').animationName),'calendar-cell-fill');
+    assert.deepEqual(await cell.evaluate(el => {
+      const style = getComputedStyle(el, '::after');
+      return [style.animationName, style.transitionProperty, style.transitionDuration];
+    }), ['none', 'opacity', '0.1s']);
     const after=await cell.boundingBox();assert.equal(before.width,after.width);assert.equal(before.height,after.height);
     const fills = await cell.evaluate(el => {
       el.click();
@@ -207,7 +218,7 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       if(url.pathname==="/api/miniapp/me")return route.fulfill({json:{id:piiAdmin?200:100,admin:true,pii_admin:piiAdmin}});
       if(url.pathname==="/api/miniapp/admin/bookings")return route.fulfill({json:{items:[order]}});
       if(url.pathname.endsWith("/identity/review")){reviews.push(route.request().postDataJSON());return route.fulfill({json:{status:"saved"}});}
-      if(url.pathname.endsWith("/identity"))return route.fulfill({json:{document_checks:{student_front:{document:"not_document",student:"unknown",reason:"blank_image",manual_review:true}}}});
+      if(url.pathname.endsWith("/identity"))return route.fulfill({json:{documents:["student_front"],document_checks:{student_front:{document:"not_document",student:"unknown",reason:"blank_image",manual_review:true}}}});
       if(url.pathname.startsWith("/api/"))return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:"text/html"});
     });
@@ -244,11 +255,17 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
           enable:()=>window.__qaSdk.enabled=true,disable:()=>window.__qaSdk.enabled=false,
           onClick:fn=>window.__qaSdk.click=fn,showProgress:()=>{},hideProgress:()=>{}},
         BackButton:{show:()=>{},hide:()=>{},onClick:()=>{}},ready:()=>{},expand:()=>{}}};`;
+    let nativeCart = {version:0,start:'',end:'',lines:[]};
     await native.route("**/*",async route=>{
       const url=new URL(route.request().url());
       if(url.hostname==="telegram.org")return route.fulfill({contentType:"text/javascript",body:sdk});
       if(url.pathname.startsWith("/miniapp/static/")){const file=path.join(assets,path.basename(url.pathname));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith("css")?"text/css":"text/javascript"});}
       if(url.pathname==="/api/miniapp/me")return route.fulfill({json:{id:42,admin:false,pii_admin:false}});
+      if(url.pathname==="/api/miniapp/profile")return route.fulfill({json:{display_name:'QA',onboarding_seen:true,start_screen:'booking'}});
+      if(url.pathname==="/api/miniapp/cart") {
+        if(route.request().method()==='PUT') nativeCart={...route.request().postDataJSON(),version:nativeCart.version+1};
+        return route.fulfill({json:nativeCart});
+      }
       if(url.pathname==="/api/miniapp/catalog")return route.fulfill({json:{items:[{id:1,name:"Камера",available_quantity:1}],selected_items:[],page:0,page_size:20,total:1}});
       if(url.pathname.startsWith("/api/"))return route.fulfill({json:{items:[]}});
       return route.fulfill({body:html,contentType:"text/html"});
@@ -260,7 +277,8 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
     assert.equal(await native.locator(".tabs").isVisible(),true);
     assert.deepEqual(await native.evaluate(()=>[__qaSdk.visible,__qaSdk.enabled]),[false,false]);
     await native.locator(".item-card .plus").first().tap(); await native.locator("#main-button").tap();
-      await native.locator("#main-button").tap();
+    await native.locator("#step-contact").waitFor();
+    await native.locator("#main-button").click();
     await native.locator('[data-date="2026-10-30"]').tap();
     await native.locator('[data-date="2026-10-31"]').tap();
     assert.equal(await native.locator("#main-button").isEnabled(),true);

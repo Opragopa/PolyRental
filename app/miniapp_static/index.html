@@ -7,27 +7,38 @@
   <meta name="app-version" content="__APP_VERSION__">
   <meta name="description" content="Бронирование фото- и видеотехники ПолиРентал: выберите сроки, оборудование и следите за статусом заявки в Telegram.">
   <title>ПолиРентал — бронирование</title>
+  <script src="/miniapp/static/startup.js"></script>
+  <link rel="stylesheet" href="/miniapp/static/startup.css">
   <link rel="stylesheet" href="/miniapp/static/style.css?v=__APP_VERSION__-compact2">
   <link rel="stylesheet" href="/miniapp/static/design.css?v=__APP_VERSION__-client-qa1">
   <link rel="stylesheet" href="/miniapp/static/frame.css?v=__APP_VERSION__-frame1">
   <link rel="stylesheet" href="/miniapp/static/customer-home.css?v=__APP_VERSION__-customer1">
   <link rel="stylesheet" href="/miniapp/static/interaction.css?v=__APP_VERSION__-principles1">
   <link rel="stylesheet" href="/miniapp/static/motion.css?v=__APP_VERSION__-principles1">
-  <script src="/miniapp/static/theme.js?v=__APP_VERSION__-frame1"></script>
-  <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
-  <script>
-    if (window.Telegram?.WebApp?.initData) document.documentElement.classList.add("role-pending");
-    else if (location.pathname === "/site") document.documentElement.classList.add("site-view");
-  </script>
+  <link rel="stylesheet" href="/miniapp/static/desktop.css">
+  <link rel="stylesheet" href="/miniapp/static/next-step.css">
+  <link rel="stylesheet" href="/miniapp/static/new-year-garland.css">
+  <script defer src="/miniapp/static/new-year-garland.js"></script>
+  <script defer src="/miniapp/static/theme.js?v=__APP_VERSION__-frame1"></script>
+  <script defer id="telegram-sdk" src="https://telegram.org/js/telegram-web-app.js?64"></script>
   <script defer src="/miniapp/static/range-calendar.js?v=__APP_VERSION__-make6"></script>
   <script defer src="/miniapp/static/motion.js?v=__APP_VERSION__-principles1"></script>
   <script defer src="/miniapp/static/viewport-focus.js"></script>
+  <script defer src="/miniapp/static/site-navigation.js"></script>
   <script defer src="/miniapp/static/dialogs.js?v=__APP_VERSION__-focus2"></script>
-  <script defer src="/miniapp/static/app.js?v=__APP_VERSION__-principles1"></script>
+  <script defer id="app-script" src="/miniapp/static/app.js?v=__APP_VERSION__-principles1"></script>
   <script defer src="/miniapp/static/file-drop.js?v=__APP_VERSION__-drop1"></script>
   <script defer src="/miniapp/static/responsive.js?v=__APP_VERSION__-fluid1"></script>
 </head>
 <body class="dates-view">
+  <section id="miniapp-startup" aria-label="Запуск приложения" hidden>
+    <p class="startup-brand">ПолиРентал</p>
+    <div class="startup-progress">
+      <span class="loading-spinner startup-spinner" aria-hidden="true"></span>
+      <p id="startup-status" role="status">Открываем ПолиРентал…</p>
+    </div>
+    <button id="startup-retry" type="button" hidden>Повторить</button>
+  </section>
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="icon-back" viewBox="0 0 24 24"><path d="M19 12H5m6-6-6 6 6 6"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
@@ -41,6 +52,7 @@
     <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12.5 4.2 4.2L19.5 6.5"/></symbol>
     <symbol id="icon-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".75" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r=".75" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r=".75" fill="currentColor" stroke="none"/></symbol>
     <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-8v.01"/></symbol>
+    <symbol id="icon-support-message" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9l-5 3v-3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="M7 10h10M7 14h6"/></symbol>
     <symbol id="icon-lens" viewBox="0 0 24 24"><path d="M6 8h12v8H6Z"/><path d="M4 10h2m12 0h2M4 14h2m12 0h2"/><circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="icon-light" viewBox="0 0 24 24"><path d="M9 18h6m-5 3h4m2.4-11.5a4.5 4.5 0 1 0-8.8 0c.4 1.4 1.6 2.2 2.2 3.5h4.4c.6-1.3 1.8-2.1 2.2-3.5Z"/></symbol>
     <symbol id="icon-battery" viewBox="0 0 24 24"><rect x="3" y="7" width="17" height="10" rx="1.5"/><path d="M21 10v4M12 9l-2 4h3l-2 3"/></symbol>
@@ -64,29 +76,34 @@
     <symbol id="icon-cart" viewBox="0 0 24 24"><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/><path d="M3.5 5h2.2l1.9 9.5h10.2l1.8-7H6.5"/></symbol>
   </svg>
   <div class="shell">
+    <div class="new-year-garland" hidden aria-hidden="true"></div>
     <header class="topbar">
       <div class="brand"><span>ПолиРентал</span></div>
       <button id="app-version" class="app-version" type="button" aria-label="Что нового в этой версии">v__APP_VERSION__</button>
     </header>
 
-    <main>
-      <button id="top-back-button" class="button ghost" type="button">← Назад</button>
+    <main id="main-content" role="main" tabindex="-1">
+      <div class="workspace-intro">
+      <button id="top-back-button" class="button ghost" type="button">Назад</button>
       <div id="mode-banner" class="mode-banner" hidden></div>
       <div class="heading-row">
-        <div><p class="eyebrow">БРОНИРОВАНИЕ В TELEGRAM</p><h1 id="page-title">Найдём всё для вашей съёмки</h1></div>
-        <span class="timezone">Время · МСК</span>
+        <h1 id="page-title">Бронирование техники</h1>
+        <span class="timezone">Время (МСК)</span>
       </div>
       <p id="page-intro" class="intro">Выберите оборудование, затем укажите сроки аренды.</p>
+      </div>
 
       <nav class="tabs" aria-label="Разделы">
         <button id="tab-admin" type="button" class="tab" hidden><svg class="tab-icon icon" aria-hidden="true"><use href="#icon-settings"></use></svg>Управление</button>
         <button id="tab-new" type="button" class="tab active" aria-current="page"><svg class="tab-icon icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>Бронирование</button>
         <button id="tab-orders" type="button" class="tab"><span id="tab-avatar" class="tab-avatar avatar-placeholder" aria-hidden="true"></span>Профиль</button>
       </nav>
+      <div class="workspace-content">
       <div id="global-error" class="notice error" role="alert" hidden></div><section id="cart-sync-notice" class="notice cart-sync-notice" role="alert" hidden><p id="cart-sync-message"></p><p id="cart-sync-summary"></p><div class="action-row"><button id="cart-sync-server" class="button secondary" type="button">Использовать серверную подборку</button><button id="cart-sync-local" class="button primary" type="button">Сохранить мои изменения</button></div></section>
 
       <section id="booking-blocked" class="panel" hidden><h2>Бронирование недоступно</h2><p>Обратитесь в поддержку, чтобы уточнить причину.</p><button id="blocked-support" class="button secondary" type="button">Поддержка</button></section>
       <section id="booking-flow" aria-label="Оформление бронирования">
+        <span id="booking" class="site-anchor" tabindex="-1"></span>
         <section id="customer-next" class="customer-next" aria-label="Ваши активные заявки и следующие действия" hidden></section>
         <ol id="frame-progress" class="frame-progress" aria-label="Этапы бронирования" hidden>
           <li><span class="frame-step-number" aria-hidden="true">1</span><span>Техника</span></li>
@@ -95,12 +112,13 @@
           <li><span class="frame-step-number" aria-hidden="true">4</span><span>Проверка</span></li>
         </ol>
         <div id="step-dates" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 3 ИЗ 4</p><h2>Когда нужна техника?</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-calendar"></use></svg></span></div>
+          <div class="panel-head"><div><h2>Когда нужна техника?</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-calendar"></use></svg></span></div>
           <p class="date-instruction">Выберите даты и время. Чтобы изменить период, нажмите новую дату начала.</p>
           <div class="date-grid">
-            <label class="field"><span id="start-time-label">Начало (дата)</span><input id="start-date" type="hidden"><input id="start" type="hidden"><input id="start-time" type="time" required step="900" aria-labelledby="start-time-label"><small id="start-error" class="field-error" role="alert" hidden></small></label>
+            <label class="field"><span id="start-time-label">Начало (дата)</span><input id="start-date" type="hidden"><input id="start" type="hidden"><input id="start-time" type="time" required step="60" aria-labelledby="start-time-label"><small id="start-error" class="field-error" role="alert" hidden></small></label>
             <label class="field"><span id="end-time-label">Конец (дата)</span><input id="end-date" type="hidden"><input id="end" type="hidden"><input id="end-time" type="time" required step="900" aria-labelledby="end-time-label"><small id="end-error" class="field-error" role="alert" hidden></small></label>
           </div>
+          <div class="booking-calendar-column">
           <div id="range-calendar" class="range-calendar" aria-label="Календарь аренды"></div>
           <ul class="calendar-legend" aria-label="Обозначения цветов календаря">
             <li><span class="calendar-legend-dot calendar-availability-all" aria-hidden="true"></span><span>Хватает всего оборудования</span></li>
@@ -108,17 +126,21 @@
             <li><span class="calendar-legend-dot calendar-availability-none" aria-hidden="true"></span><span>Нет свободных экземпляров</span></li>
           </ul>
           <p class="calendar-legend-note supporting">Цвет ячейки — доступность на полный день. Выбранные даты и время проверяются отдельно.</p>
+          </div>
+          <div class="booking-summary-column">
           <div class="period-row"><p id="period-summary" aria-live="polite">Выберите начало и конец периода</p></div>
           <p id="period-error" class="period-error" role="status"></p>
           <p id="start-hint" class="date-instruction"></p>
           <div id="availability-result" class="notice" role="status" hidden></div><button id="availability-edit-cart" class="button secondary" type="button" hidden>Изменить оборудование</button>
           <div id="nearest-period" class="nearest-period" hidden><button id="nearest-search" class="button secondary" type="button">Найти ближайшие сроки для подборки</button><p id="nearest-status" role="status"></p><button id="nearest-apply" class="button primary" type="button" hidden>Выбрать эти сроки</button></div>
+          </div>
         </div>
 
         <div id="step-items" class="panel step-panel">
+          <span id="catalog" class="site-anchor" tabindex="-1"></span>
           <div class="catalog-search"><label class="field"><span class="sr-only" id="client-catalog-search-label">Поиск по всему каталогу</span><span class="catalog-search-input"><input id="client-catalog-search" type="search" placeholder="Название, модель или характеристика"><button id="client-search-hide-keyboard" type="button" aria-label="Скрыть клавиатуру" title="Скрыть клавиатуру"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M5 8h1m2 0h1m2 0h1m2 0h1m2 0h1M5 11h1m2 0h1m2 0h1m2 0h1m2 0h1M7 14h10m-7 5 2 2 2-2"/></svg></button></span></label><button class="notification-bell" type="button" aria-label="Уведомления" title="Уведомления"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2 7-2 9h16c0-2-2-2-2-9ZM10 20h4"/></svg><span class="notification-dot" aria-hidden="true" hidden></span></button></div>
-          <div id="client-catalog-level" class="catalog-level"><div class="panel-head category-title-row"><button id="client-catalog-back" class="catalog-search-back" type="button" aria-label="Назад"><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg></button><div><p class="step-kicker">ШАГ 1 ИЗ 4</p><p id="client-catalog-path" class="catalog-path"></p><h2 id="catalog-page-title" tabindex="-1">Каталог оборудования</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-camera"></use></svg></span></div>
-          <div class="catalog-period" hidden><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты <span aria-hidden="true">›</span></button></div>
+          <div id="client-catalog-level" class="catalog-level"><div class="panel-head category-title-row"><button id="client-catalog-back" class="catalog-search-back" type="button" aria-label="Назад" hidden><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg></button><div><p id="client-catalog-path" class="catalog-path"></p><h2 id="catalog-page-title" tabindex="-1">Каталог оборудования</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-camera"></use></svg></span></div>
+          <div class="catalog-period" hidden><p id="period-label" class="supporting"></p><button id="change-dates" class="button ghost" type="button">Изменить даты</button></div>
           <div id="items-status" class="notice" role="status" hidden></div>
           <button id="retry-items" class="button secondary" type="button" hidden>Повторить загрузку</button>
           <div id="client-product-layout" hidden></div><button id="recent-category" class="button ghost recent-category" type="button" hidden></button><div id="client-categories" class="client-categories" aria-label="Категории оборудования"></div><div id="items-grid" class="items-grid" aria-label="Оборудование"></div><div id="client-catalog-pagination" class="action-row" hidden><button id="client-catalog-prev" class="button secondary" type="button">Назад</button><span id="client-catalog-page"></span><button id="client-catalog-next" class="button secondary" type="button">Далее</button></div>
@@ -127,12 +149,12 @@
         </div>
 
         <div id="step-contact" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 2 ИЗ 4</p><h2>Ваша подборка</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-bag"></use></svg></span></div>
-          <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p><p class="supporting">Заявка будет оформлена на ваш аккаунт Telegram. ФИО и телефон заполняются в анкете после подтверждения заявки.</p>
+          <div class="panel-head"><div><h2>Ваша подборка</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-bag"></use></svg></span></div>
+          <div id="cart-items" aria-label="Подборка оборудования"></div><p id="cart-total" role="status"></p>
         </div>
 
         <div id="step-review" class="panel step-panel" hidden>
-          <div class="panel-head"><div><p class="step-kicker">ШАГ 4 ИЗ 4</p><h2>Проверьте заявку</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-check"></use></svg></span></div>
+          <div class="panel-head"><div><h2>Проверьте заявку</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-check"></use></svg></span></div>
           <div id="review-content"></div>
           <label id="rental-purpose-field" class="field" hidden><span>Для чего вам оборудование?</span><span class="supporting">Необязательно</span><textarea id="rental-purpose" maxlength="2000" rows="3" placeholder="Съёмка интервью или мероприятия"></textarea></label>
           <div class="info-strip"><svg class="info-icon icon" aria-hidden="true"><use href="#icon-info"></use></svg><p>Аренда бесплатная. Отправка заявки ещё не резервирует оборудование: дождитесь подтверждения сотрудника. Затем заполните анкету с ФИО и телефоном для связи. До анкеты заявка привязана к вашему аккаунту Telegram.</p></div>
@@ -140,13 +162,14 @@
 
         <div id="step-done" class="panel done-panel" hidden>
           <div class="success-mark" aria-hidden="true"><svg class="icon"><use href="#icon-check"></use></svg></div>
-          <p class="step-kicker">ЗАЯВКА ОТПРАВЛЕНА</p><h2 id="done-title">Готово!</h2>
+          <h2 id="done-title">Заявка оформлена</h2>
           <p id="done-description"></p>
           <div class="done-actions"><button id="done-orders" class="button secondary" type="button">Мои заявки</button><button id="done-chat" class="button primary" type="button">Вернуться в чат</button></div>
         </div>
       </section>
 
       <section id="orders-panel" class="panel" hidden aria-label="Мои заявки">
+        <span id="profile" class="site-anchor" tabindex="-1"></span>
         <details id="profile-disclosure" class="profile-overview profile-disclosure">
           <summary class="profile-card" aria-label="Профиль и данные анкеты">
             <div class="profile-avatar"><img id="profile-avatar-image" alt="" hidden><span id="profile-avatar-fallback" aria-hidden="true">П</span></div>
@@ -159,10 +182,10 @@
           <p class="supporting">Вопрос по бронированию? Напишите оператору.</p>
           <div id="profile-support-status" aria-live="polite"></div>
         </div>
-        <section class="profile-history" aria-labelledby="profile-history-title">
-          <div class="panel-head"><div><p class="step-kicker">ИСТОРИЯ</p><h2 id="profile-history-title">Мои заявки</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-list"></use></svg></span></div>
+        <section id="my-requests" class="profile-history site-anchor-target" tabindex="-1" aria-labelledby="profile-history-title">
+          <div class="panel-head"><div><h2 id="profile-history-title">Мои заявки</h2></div><span class="panel-icon" aria-hidden="true"><svg class="icon"><use href="#icon-list"></use></svg></span></div>
           <div class="profile-toolbar">
-            <form id="profile-search"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260001 или 0001"></label></form>
+            <form id="profile-search"><label class="field"><span>Номер заявки</span><input id="profile-number" type="search" maxlength="32" placeholder="ТС260007 или 7"></label></form>
             <label class="field"><span>Статус</span><select id="profile-filter"><option value="all" selected>Все заявки</option><option value="pending">Ожидает проверки</option><option value="needs_changes">Нужно исправить</option><option value="confirmed">Подтверждена</option><option value="preparing">Комплектуется</option><option value="ready">Готова</option><option value="issued">В аренде</option><option value="return_inspection">Проверяется</option><option value="returned">Завершена</option><option value="status_cancelled">Отменена</option><option value="expired">Удержание истекло</option></select></label>
             <label class="field"><span>Сортировка</span><select id="profile-sort"><option value="date">По дате создания</option><option value="status">По статусу</option></select></label>
           </div>
@@ -172,12 +195,12 @@
         <div class="profile-preferences">
           <div class="profile-theme"><span class="profile-theme-label">Стиль интерфейса</span><div class="style-switch theme-switch" role="radiogroup" aria-label="Стиль интерфейса"><label><input type="radio" name="visual-style" value="classic"><span>Классический</span></label><label><input type="radio" name="visual-style" value="studio"><span>Медиастудия</span></label><label><input type="radio" name="visual-style" value="frame"><span>Кадр</span></label></div></div>
           <div class="profile-theme"><span class="profile-theme-label">Тема оформления</span><div class="theme-switch" role="radiogroup" aria-label="Тема оформления"><label><input type="radio" name="theme" value="light"><span>Светлая</span></label><label><input type="radio" name="theme" value="dark"><span>Тёмная</span></label><label><input type="radio" name="theme" value="auto"><span>Авто</span></label></div></div>
-          <details id="profile-header" class="profile-settings"><summary>Настройки и помощь</summary><p class="profile-version">ПолиРентал · v__APP_VERSION__</p><div class="profile-settings-actions"><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></details>
+          <details id="profile-header" class="profile-settings"><summary>Настройки и помощь</summary><label class="field profile-date-format"><span>Формат даты</span><select id="profile-date-format"><option value="dmy">ДД.ММ.ГГГГ (25.11.2026)</option><option value="mdy">ММ/ДД/ГГГГ (11/25/2026)</option></select></label><p class="profile-version">ПолиРентал v__APP_VERSION__</p><div class="profile-settings-actions"><button id="onboarding-reopen" class="button secondary" type="button">Как пользоваться</button></div><label class="check-row"><input id="reminders-enabled" type="checkbox" disabled><span>Получать необязательные напоминания</span></label><p class="supporting">Напоминания о выдаче и возврате приходят за сутки и за 2 часа. Важные сообщения о заявках от этой настройки не зависят.</p></details>
         </div>
       </section>
 
       <section id="identity-panel" class="panel" hidden aria-label="Анкета для договора">
-        <div class="panel-head"><div><p class="step-kicker">ЗАЩИЩЁННАЯ ФОРМА</p><h2>Данные для договора</h2></div><button id="identity-close" class="button ghost compact" type="button">Закрыть</button></div>
+        <div class="panel-head"><div><h2>Данные для договора</h2></div><button id="identity-close" class="button ghost compact" type="button">Закрыть</button></div>
         <div id="identity-status" class="notice" hidden></div>
         <div id="consent-step">
           <p class="supporting">Сначала ознакомьтесь с отдельным согласием на обработку персональных данных.</p>
@@ -187,15 +210,14 @@
         </div>
         <div id="identity-feedback" class="identity-feedback" hidden></div>
         <form id="identity-form" hidden autocomplete="off" novalidate>
-          <p class="supporting">Поля отправляются напрямую в ПолиРентал. Выбранные фото временно сохраняются только на этом устройстве до отправки анкеты (не более 24 часов) и удаляются после отправки.</p>
           <section class="identity-section" aria-labelledby="identity-personal-heading"><h3 id="identity-personal-heading">Личные данные</h3><div class="form-grid">
             <label class="field wide"><span>ФИО</span><input name="full_name" required maxlength="200" pattern="[А-Яа-яЁёA-Za-z .'\-]{2,200}"></label>
             <label class="field"><span>Телефон для связи</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" required maxlength="30" placeholder="+7 999 123-45-67"></label>
-            <label class="field"><span>Дата рождения</span><input name="birth_date" type="date" required></label>
+            <label class="field"><span>Дата рождения</span><input name="birth_date" data-form-date inputmode="numeric" maxlength="10" autocomplete="bday" placeholder="ДД.ММ.ГГГГ" required></label>
           </div></section>
           <section class="identity-section" aria-labelledby="identity-passport-heading"><h3 id="identity-passport-heading">Паспорт</h3><div class="form-grid">
             <label class="field wide"><span>Серия и номер паспорта</span><input name="passport_combined" required maxlength="11" inputmode="numeric" pattern="[0-9]{4} [0-9]{6}" placeholder="0000 000000" title="4 цифры, пробел, 6 цифр"></label>
-            <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" type="date" required></label>
+            <label class="field"><span>Дата выдачи</span><input name="passport_issued_at" data-form-date inputmode="numeric" maxlength="10" placeholder="ДД.ММ.ГГГГ" required></label>
             <label class="field"><span>Код подразделения</span><input name="passport_division_code" required maxlength="7" inputmode="numeric" pattern="[0-9]{3}-[0-9]{3}" placeholder="000-000" title="Формат 000-000"></label>
             <label class="field wide"><span>Кем выдан</span><input name="passport_issuer" required maxlength="500"></label>
           </div></section>
@@ -208,13 +230,12 @@
           </div></section>
           <section class="identity-section" aria-labelledby="identity-photos-heading">
           <h3 id="identity-photos-heading">Фотографии документов</h3>
-          <p class="supporting">Фото автоматически преобразуются в JPEG перед защищённой отправкой.</p>
           <div class="document-photo-grid">
             <div class="document-photo-group"><h4>Паспорт с пропиской</h4>
               <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Разворот с фото</span><input name="passport_main" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Паспорт: разворот с фото"><small class="file-draft-status" aria-live="polite"></small></label>
               <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Страница регистрации</span><input name="passport_registration" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Паспорт: страница регистрации"><small class="file-draft-status" aria-live="polite"></small></label>
             </div>
-            <div class="document-photo-group"><h4>Студенческий</h4>
+            <div class="document-photo-group"><h4>Студенческий (необязательно)</h4>
               <label class="field photo-field"><span class="photo-placeholder"><span aria-hidden="true">+</span>Лицевая сторона</span><input name="student_front" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Студенческий: лицевая сторона"><small class="file-draft-status" aria-live="polite"></small></label>
             </div>
           </div>
@@ -223,25 +244,25 @@
         </form>
       </section>
 
-      <section id="support-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="support-title">
+      <section id="support-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="support-title" data-dialog-close="#support-close">
         <div class="dialog-card"><h2 id="support-title">Поддержка</h2><p id="support-faq-heading">Частые вопросы</p><div id="support-faq"></div><form id="support-form"><label class="field"><span id="support-question-label">Написать оператору</span><textarea id="support-question" maxlength="3000" required></textarea></label><div class="action-row"><button id="support-close" class="button ghost" type="button">Закрыть</button><button id="support-submit" class="button primary" type="submit">Отправить вопрос</button></div><p id="support-result" role="status" tabindex="-1"></p></form></div>
       </section>
-      <section id="release-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="release-title" aria-describedby="release-version">
+      <section id="release-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="release-title" aria-describedby="release-version" data-dialog-close="#release-close">
         <div class="dialog-card"><p id="release-version" class="supporting"></p><h2 id="release-title" tabindex="-1">Что нового</h2><div id="release-items" class="release-items"></div><div class="release-actions"><button id="release-feedback" class="button secondary" type="button">Помогите нам стать лучше</button><button id="release-close" class="button primary" type="button">Понятно</button></div></div>
       </section>
-      <section id="notification-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="notification-title">
+      <section id="notification-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="notification-title" data-dialog-close="#notification-close">
         <div class="dialog-card">
-          <div class="notification-header"><h2 id="notification-title" tabindex="-1">Уведомления</h2><button id="notification-close" type="button" aria-label="Закрыть уведомления"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button></div>
+          <div class="notification-header"><h2 id="notification-title" tabindex="-1">Уведомления</h2><span id="notification-count" hidden></span><button id="notification-close" type="button" aria-label="Закрыть уведомления"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button></div>
           <div id="notification-items" aria-label="Список уведомлений"></div>
           <p id="notification-status" role="status"></p>
           <button id="notification-retry" class="notification-text-button" type="button" hidden>Повторить загрузку</button>
           <button id="notification-more" class="notification-text-button" type="button" hidden>Показать ещё</button>
         </div>
       </section>
-      <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy">
-        <div class="dialog-card"><p id="onboarding-progress" class="step-kicker" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
+      <section id="onboarding-dialog" class="dialog-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-copy" data-dialog-close="#onboarding-skip">
+        <div class="dialog-card"><p id="onboarding-progress" class="supporting" aria-live="polite"></p><h2 id="onboarding-title"></h2><p id="onboarding-copy"></p><div class="action-row"><button id="onboarding-skip" class="button ghost" type="button">Пропустить</button><button id="onboarding-next" class="button primary" type="button">Далее</button></div></div>
       </section>
-      <section id="rework-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="rework-title">
+      <section id="rework-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="rework-title" data-dialog-close="#rework-cancel">
         <form id="rework-form" class="dialog-card">
           <h2 id="rework-title">Вернуть на доработку</h2>
           <p id="rework-target"></p>
@@ -249,7 +270,7 @@
           <div class="action-row"><button id="rework-cancel" class="button ghost" type="button">Отмена</button><button class="button primary" type="submit">Вернуть на доработку</button></div>
         </form>
       </section>
-      <section id="identity-review-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="identity-review-title">
+      <section id="identity-review-dialog" class="dialog-backdrop" hidden aria-modal="true" role="dialog" aria-labelledby="identity-review-title" data-dialog-close="#identity-review-cancel">
         <form id="identity-review-form" class="dialog-card">
           <h2 id="identity-review-title">Что нужно исправить?</h2>
           <p class="supporting">Отметьте поля, которые клиенту нужно обновить. Для фото потребуется загрузить новый файл.</p>
@@ -259,7 +280,7 @@
         </form>
       </section>
 
-      <section id="document-viewer" class="document-viewer" hidden aria-modal="true" role="dialog" aria-label="Просмотр документа">
+      <section id="document-viewer" class="document-viewer" hidden aria-modal="true" role="dialog" aria-label="Просмотр документа" data-dialog-close="#document-viewer-close">
         <div class="document-viewer-card">
           <div class="panel-head"><h2 id="document-viewer-title">Документ</h2><button id="document-viewer-close" class="button ghost compact" type="button" aria-label="Закрыть просмотр документа"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button></div>
           <div class="document-viewer-body"><button id="document-viewer-prev" class="button ghost document-nav" type="button">Предыдущее</button><img id="document-viewer-image" alt="Документ"><button id="document-viewer-next" class="button ghost document-nav" type="button">Следующее</button></div>
@@ -267,14 +288,23 @@
       </section>
 
       <section id="admin-panel" class="panel" hidden aria-label="Управление арендой">
-        <div class="panel-head admin-panel-heading"><button id="admin-back-button" class="catalog-search-back" type="button" aria-label="Назад"><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg></button><h2 id="admin-heading" tabindex="-1">Управление</h2><button id="admin-settings-open" class="catalog-search-back" type="button" aria-label="Настройки" title="Настройки"><svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button></div>
+        <span id="management" class="site-anchor" tabindex="-1"></span>
+        <span id="management-orders" class="site-anchor admin-section-anchor" tabindex="-1"></span>
+        <span id="management-settings" class="site-anchor" tabindex="-1" hidden></span>
+        <div class="panel-head admin-panel-heading"><button id="admin-back-button" class="catalog-search-back" type="button" aria-label="Назад"><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg></button><div class="admin-heading-viewport"><h2 id="admin-heading" tabindex="-1">Управление</h2></div><button id="admin-settings-open" class="catalog-search-back" type="button" aria-label="Настройки" title="Настройки"><svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button></div>
         <div class="admin-tabs">
           <button class="button secondary admin-mode" data-mode="orders" type="button">Заказы</button>
           <button class="button ghost admin-mode" data-mode="catalog" type="button">Каталог</button>
           <button class="button ghost admin-mode" data-mode="repairs" type="button">Ремонт</button><button class="button ghost admin-mode" data-mode="support" type="button">Поддержка</button>
         </div>
-        <div class="admin-tools">
-        <section id="admin-settings" class="admin-settings" hidden aria-label="Настройки управления"><div class="settings-tabs" role="tablist" aria-label="Разделы настроек"><button type="button" role="tab" id="settings-tab-notifications" aria-controls="settings-notifications">Уведомления</button><button type="button" role="tab" id="settings-tab-calendar" aria-controls="settings-calendar">Календарь</button><button type="button" role="tab" id="settings-tab-booking" aria-controls="settings-booking" hidden>Оформление заявки</button><button type="button" role="tab" id="settings-tab-handover" aria-controls="settings-handover" hidden>Выдача и возврат</button><button type="button" role="tab" id="settings-tab-staff" aria-controls="settings-staff">Сотрудники</button></div>
+        <section id="admin-settings" class="admin-settings" hidden aria-label="Настройки управления">
+          <div class="settings-tabs" role="tablist" aria-label="Разделы настроек">
+            <button type="button" role="tab" id="settings-tab-notifications" aria-controls="settings-notifications">Уведомления</button>
+            <button type="button" role="tab" id="settings-tab-calendar" aria-controls="settings-calendar">Календарь</button>
+            <button type="button" role="tab" id="settings-tab-booking" aria-controls="settings-booking" hidden>Бронирование</button>
+            <button type="button" role="tab" id="settings-tab-handover" aria-controls="settings-handover" hidden>Выдача и возврат</button>
+            <button type="button" role="tab" id="settings-tab-staff" aria-controls="settings-staff" hidden>Сотрудники</button>
+          </div>
         <div id="settings-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications"><details id="operator-notification-settings" class="calendar-sync"><summary>Тихие часы уведомлений</summary><p>Обязательные уведомления будут доставлены после тихих часов. Пустые поля означают доставку в рабочее время.</p><form id="operator-quiet-form" class="form-grid"><label class="field"><span>Начало</span><input name="quiet_start" type="time"></label><label class="field"><span>Конец</span><input name="quiet_end" type="time"></label><button class="button secondary" type="submit">Сохранить</button><p id="operator-quiet-status" role="status"></p></form></details></div>
         <div id="settings-calendar" role="tabpanel" aria-labelledby="settings-tab-calendar" hidden><details class="calendar-sync" open>
           <summary>Подписка Google Calendar</summary>
@@ -284,10 +314,12 @@
           <p id="calendar-feed-status" class="calendar-sync-status" role="status" aria-live="polite"></p>
         </details></div><div id="settings-booking" role="tabpanel" aria-labelledby="settings-tab-booking" hidden><h3>Оформление заявки</h3><form id="booking-settings-form"><label class="check-row"><input type="checkbox" name="rental_purpose_enabled"><span>Спрашивать цель аренды</span></label><p class="supporting">Необязательный вопрос для всей заявки в приложении, на сайте и в боте.</p><button type="submit" class="button primary">Сохранить</button><p id="booking-settings-status" role="status"></p></form></div><div id="settings-handover" role="tabpanel" aria-labelledby="settings-tab-handover" hidden><h3>Место получения оборудования</h3><p>Эти сведения увидят клиенты. Они не меняют юридический адрес оператора.</p><form id="handover-settings-form"><label class="field"><span>Место получения</span><textarea name="pickup_location" maxlength="500"></textarea></label><label class="field"><span>Инструкция</span><textarea name="pickup_instructions" maxlength="2000"></textarea></label><button type="submit" class="button primary">Сохранить</button><p id="handover-settings-status" role="status"></p></form></div><div id="settings-staff" role="tabpanel" aria-labelledby="settings-tab-staff" hidden></div>
         </section>
+        <div class="admin-tools">
         <button id="catalog-import-open" class="button secondary compact" type="button" hidden>Импорт CSV</button>
         </div>
         <div id="admin-order-controls" class="admin-order-controls" hidden><label id="admin-queues" class="admin-queues"><span class="sr-only">Очередь заявок</span><select id="admin-queue" aria-label="Очередь заявок"></select></label><details class="admin-filters"><summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M7 12h10M10 17h4"/><circle cx="8" cy="7" r="1.5" fill="currentColor"/><circle cx="15" cy="12" r="1.5" fill="currentColor"/></svg>Фильтры</summary><div class="admin-filter-fields"><label id="admin-request-filter-field" class="field"><span>Заявки</span><select id="admin-request-filter"><option value="all">Все</option><option value="mine">Мои</option><option value="unassigned">Без ответственного</option><option value="overdue">Просроченные</option><option value="soon">Скоро дедлайн</option></select></label><label id="admin-status-field" class="field"><span>Статус заявки</span><select id="admin-status"><option value="all">Все статусы</option><option value="pending">Ожидает проверки</option><option value="needs_changes">Нужно исправить</option><option value="confirmed">Подтверждена</option><option value="preparing">Комплектуется</option><option value="ready">Готова</option><option value="issued">В аренде</option><option value="return_inspection">Проверяется</option><option value="returned">Завершена</option><option value="cancelled">Отменена</option><option value="expired">Удержание истекло</option></select></label><label id="admin-sort-field" class="field"><span>Сортировка</span><select id="admin-sort"><option value="date">По дате создания</option><option value="status">По статусу</option></select></label></div></details></div><button id="admin-clear-target" type="button" class="button ghost compact" hidden>Показать все заявки</button><div id="admin-content" role="status"></div><div id="admin-pagination" class="action-row" hidden><button id="admin-prev" class="button secondary" type="button">Назад</button><span id="admin-page"></span><button id="admin-next" class="button secondary" type="button">Далее</button></div>
       </section>
+      </div>
     </main>
 
     <div id="delete-snackbar" class="delete-snackbar" role="status" aria-live="polite" hidden><span id="delete-message"></span><button id="delete-undo" class="button secondary" type="button">Отменить</button><button id="delete-retry" class="button secondary" type="button" hidden>Повторить</button></div>

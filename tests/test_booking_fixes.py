@@ -8,12 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.enums import ParseMode
 from aiogram.methods import EditMessageText, SendMessage
 from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
 
-from app.booking_events import claim_notices
+from app.booking_events import claim_notices, render_card
 from app.catalog_categories import create_category, list_categories
 from app.catalog_import import import_catalog_csv
 from app.db import (Audit, Booking, BookingBotCard, BookingEvent, BookingEventRecipient,
@@ -141,6 +142,7 @@ def test_card_is_edited_recovered_and_older_delivery_cannot_revert_it(monkeypatc
         async def __aexit__(self, *_): pass
         async def send_message(self, recipient, text, **kwargs):
             assert kwargs["link_preview_options"].is_disabled is True
+            assert kwargs["parse_mode"] == ParseMode.HTML
             sent.append((recipient, text))
             return SimpleNamespace(message_id=len(sent))
         async def edit_message_text(self, **kwargs):
@@ -153,13 +155,29 @@ def test_card_is_edited_recovered_and_older_delivery_cannot_revert_it(monkeypatc
     monkeypatch.setattr("app.bot.make_bot", lambda _: bot)
     first = next(row for row in deliveries(events(booking_id)[0].id, "card") if row.recipient_id == 42)
     assert asyncio.run(deliver_notification(first.id))
+    with Session.begin() as session:
+        booking = session.get(Booking, booking_id)
+        booking.customer_name = "Alex <Team> & Co"
+        booking.lines[0].article.name = "LEASE <24> & комплект"
+        number = booking.human_number
     transition(booking_id, "confirmed", 100)
     second = next(row for row in deliveries(events(booking_id)[-1].id, "card") if row.recipient_id == 42)
     assert asyncio.run(deliver_notification(second.id))
     assert len(sent) == 1 and len(edited) == 1
-    assert "Создана:" in sent[0][1] and "Кем:" in sent[0][1]
+    assert sent[0][1].startswith("<b>Заявка на проверке</b>\n\n")
+    assert "<b>Создана</b>" in sent[0][1] and "<b>Кем</b>" in sent[0][1]
     assert edited[0]["link_preview_options"].is_disabled is True
-    assert "подтверждена" in edited[0]["text"]
+    assert edited[0]["parse_mode"] == ParseMode.HTML
+    confirmed = edited[0]["text"]
+    assert confirmed.startswith(f"<b>Бронирование подтверждено</b>\n\n<b>Заявка</b> <code>{number}</code>\n<b>Аренда</b>")
+    assert "<b>Кем</b> Alex &lt;Team&gt; &amp; Co" in confirmed
+    assert "\n\n<b>Оборудование</b>\n• LEASE &lt;24&gt; &amp; комплект × 1" in confirmed
+    assert "\n\n<i>Заполните документы в приложении.</i>\n\n<a href=" in confirmed
+    assert confirmed.endswith(">Открыть заявку</a>")
+    with Session() as session:
+        booking = session.get(Booking, booking_id)
+        booking.identity_status = "verified"
+        assert "<i>Оборудование готовится к выдаче." in render_card(session, booking)
     assert asyncio.run(deliver_notification(first.id))
     assert len(edited) == 1
     bot.missing = True
@@ -314,9 +332,10 @@ def test_fresh_migration_chain(monkeypatch):
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             assert connection.scalar(text(f'SELECT count(*) FROM "{schema}".catalog_categories')) == 14
-            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261123_48"
+            assert connection.scalar(text(f'SELECT version_num FROM "{schema}".alembic_version')) == "20261124_50"
             assert connection.scalar(text("SELECT count(*) FROM pg_indexes WHERE schemaname=:schema AND indexname='notification_return_due_unique'"), {"schema": schema}) == 1
             assert connection.scalar(text("SELECT count(*) FROM information_schema.columns WHERE table_schema=:schema AND table_name='client_profiles' AND column_name='display_name'"), {"schema": schema}) == 1
+            assert connection.scalar(text("SELECT count(*) FROM information_schema.columns WHERE table_schema=:schema AND table_name='client_profiles' AND column_name='telegram_username'"), {"schema": schema}) == 1
     finally:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

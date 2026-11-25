@@ -14,8 +14,20 @@ def test_customer_booking_buttons_use_russian_and_keep_callback(monkeypatch, sta
     message = SimpleNamespace(answer=AsyncMock())
     asyncio.run(chat.customer_list(message, 7))
     button = message.answer.call_args.kwargs['reply_markup'].inline_keyboard[0][0]
-    assert button.text == f'TC42 · {label}'
+    assert button.text == f'TC42: {label}'
     assert button.callback_data == 'cw:open:42'
+
+
+def test_customer_booking_pagination_uses_plain_labels(monkeypatch):
+    booking = SimpleNamespace(id=42, human_number='TC42', status='pending')
+    monkeypatch.setattr(chat, 'customer_history_page', lambda *args: ([booking], chat.PAGE_SIZE * 3))
+    message = SimpleNamespace(answer=AsyncMock())
+    asyncio.run(chat.customer_list(message, 7, page=1))
+    navigation = message.answer.call_args.kwargs['reply_markup'].inline_keyboard[-1]
+    assert [(button.text, button.callback_data) for button in navigation] == [
+        ('Назад', 'cw:page:0'),
+        ('Далее', 'cw:page:2'),
+    ]
 
 
 @pytest.mark.parametrize('status,label', SUPPORT_STATUSES.items())

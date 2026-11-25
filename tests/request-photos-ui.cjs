@@ -11,11 +11,27 @@ const output=process.env.PHOTO_QA_OUTPUT;
    const order=base('pending');
    order.article_media={1:{title:'Sony FX3',name:'Камера Sony FX3',category:'camera',description:'Полнокадровая кинокамера.',image_data:preview}};
    order.items[0].title=order.lines[0].title='Sony FX3';
-   const {page,errors}=await fixture(browser,{admin,role:'manager',order,width:390,isMobile:false});
+   const {page,errors}=await fixture(browser,{admin,role:'operator',order,width:390,isMobile:false});
    const row=page.locator('.request-equipment-row:visible').first();
    const trigger=row.locator('.equipment-preview-trigger');
    const dialog=page.getByRole('dialog',{name:'Sony FX3',exact:true});
    await page.emulateMedia({reducedMotion:'reduce'});
+   const photo=row.getByRole('button',{name:/Открыть фото/});
+   await photo.click();
+   const photoDialog=page.locator('.catalog-photo-dialog-view');
+   await photoDialog.waitFor();
+   assert.equal(await photoDialog.locator('.catalog-photo-full').getAttribute('src'),preview);
+   const download=photoDialog.getByRole('button',{name:'Скачать фото'});
+   if(admin){
+    const started=page.waitForEvent('download');
+    await download.click();
+    const file=await started;
+    assert.match(file.suggestedFilename(),/Sony FX3.*\.webp$/i);
+    assert.equal(await file.failure(),null);
+   } else assert.equal(await download.count(),0);
+   await page.keyboard.press('Escape');
+   await photoDialog.waitFor({state:'detached'});
+   await page.waitForFunction(el=>document.activeElement===el,await photo.elementHandle());
    await trigger.scrollIntoViewIfNeeded();
    const {x,y}=await trigger.boundingBox();
    await page.mouse.move(x+20,y+20);
@@ -143,7 +159,12 @@ const output=process.env.PHOTO_QA_OUTPUT;
    order.article_media={1:{name:'Камера Sony',category:'camera',image_data:preview}};
    const {page,errors}=await fixture(browser,{admin:true,role:'manager',order,width,isMobile:width<768});
    const thumbs=page.locator('.request-equipment-thumb:visible');
-   assert.ok(await thumbs.count()>0);
+   if(status==='preparing'){
+    await page.locator('.next-step-list .next-step-slot svg').first().waitFor();
+    assert.equal(await thumbs.count(),0,'the preparation checklist uses equipment icons');
+   }else{
+    await thumbs.first().waitFor();
+   }
    for(const thumb of await thumbs.all()){
     await thumb.scrollIntoViewIfNeeded();
     await page.waitForFunction(node=>node.querySelector('.catalog-media')?.dataset.photoState==='loaded',await thumb.elementHandle());

@@ -147,11 +147,26 @@ def test_customer_cannot_cancel_during_preparation():
 def test_calendar_keeps_preparing_and_ready_orders(monkeypatch):
     from fastapi.testclient import TestClient
     from icalendar import Calendar
+    from app.db import Article, BookingLine, CatalogCategory
     from app.miniapp_server import app
-    booking_id, _ = prepared_booking()
+    from app.user_names import remember_user_name
+    booking_id, camera_id = prepared_booking("Sony FX3")
+    lens_id = article_with_assets("Объектив 24–70 мм", 2, category="camera")
+    light_id = article_with_assets("Aputure 300D", 1, category="light")
+    remember_user_name({"id": 42, "first_name": "Анна", "username": "anna_media"})
+    with Session.begin() as session:
+        session.get(Article, camera_id).category = "camera"
+        session.get(Booking, booking_id).customer_contact = "+7 999 123 45 67"
+        session.add_all([
+            BookingLine(booking_id=booking_id, article_id=lens_id, quantity=2, hourly_rate=0),
+            BookingLine(booking_id=booking_id, article_id=light_id, quantity=1, hourly_rate=0),
+        ])
+        categories = [session.get(CatalogCategory, code).name for code in ("camera", "light")]
+    expected_summary = f"@anna_media. {', '.join(categories)}"
+    expected_description = "• Sony FX3 × 1\n• Объектив 24–70 мм × 2\n• Aputure 300D × 1"
     monkeypatch.setenv("ICAL_TOKEN", "qa-calendar")
     client = TestClient(app)
-    for status in ("preparing", "ready", "issued", "return_inspection"):
+    for status in ("confirmed", "preparing", "ready", "issued", "return_inspection"):
         with Session.begin() as session:
             session.get(Booking, booking_id).status = status
         response = client.get("/calendar/qa-calendar.ics")
@@ -160,9 +175,20 @@ def test_calendar_keeps_preparing_and_ready_orders(monkeypatch):
         assert response.headers["cache-control"] == "no-store"
         events = Calendar.from_ical(response.content).walk("VEVENT")
         assert len(events) == 1
-        assert "DESCRIPTION" not in events[0]
-        assert "Анна" not in str(events[0].get("SUMMARY"))
-        assert get_booking(booking_id).human_number not in str(events[0].get("SUMMARY"))
+        assert str(events[0]["SUMMARY"]) == expected_summary
+        assert str(events[0]["DESCRIPTION"]) == expected_description
+        assert "Анна" not in response.text
+        assert "999 123" not in response.text
+        assert get_booking(booking_id).human_number not in str(events[0]["SUMMARY"])
+    query_feed = client.get("/calendar.ics", params={"token": "qa-calendar"})
+    assert str(Calendar.from_ical(query_feed.content).walk("VEVENT")[0]["SUMMARY"]) == expected_summary
+    remember_user_name({"id": 42, "first_name": "Анна"})
+    fallback_feed = client.get("/calendar/qa-calendar.ics")
+    assert str(Calendar.from_ical(fallback_feed.content).walk("VEVENT")[0]["SUMMARY"]).startswith("Клиент без ника. ")
+    with Session.begin() as session:
+        session.get(Booking, booking_id).customer_contact = "legacy_nick"
+    legacy_feed = client.get("/calendar/qa-calendar.ics")
+    assert str(Calendar.from_ical(legacy_feed.content).walk("VEVENT")[0]["SUMMARY"]).startswith("@legacy_nick. ")
     for status in ("pending", "needs_changes", "returned", "cancelled"):
         with Session.begin() as session:
             session.get(Booking, booking_id).status = status

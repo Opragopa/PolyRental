@@ -28,7 +28,7 @@ const {fixture, base} = require('./completion-ui.cjs');
         await page.locator('#admin-settings-open').click();
         await page.locator('#settings-tab-booking').click();
         const checkbox = page.locator('#booking-settings-form input');
-        await checkbox.waitFor();
+        await page.locator('#booking-settings-form button:enabled').waitFor();
         assert.equal(await checkbox.isChecked(), true);
         await checkbox.uncheck();
         await page.locator('#booking-settings-form button').click();

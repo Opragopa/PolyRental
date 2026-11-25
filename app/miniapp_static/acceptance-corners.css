@@ -64,7 +64,7 @@
 :is(.profile-theme, .catalog-controls, .catalog-period, .info-strip, .notice,
     .request-next-overview.request-actions, .request-next-head .stage-lock-complete,
     .customer-status-panel, .receipt-section,
-    .identity-section, .document-group, .catalog-skeleton .catalog-skeleton-card),
+    .identity-section, .document-group, .catalog-skeleton-card),
 :root[data-style="frame"] .info-strip {
   border-radius: var(--radius-widget);
   corner-shape: squircle;

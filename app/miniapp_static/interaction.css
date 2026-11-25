@@ -42,11 +42,12 @@ details > summary { min-height:44px; align-content:center; }
 .quantity-control { isolation:isolate; }
 .quantity-control strong { display:inline-block; transform-origin:center; }
 .button[aria-busy="true"]::before {
-  content:""; display:inline-block; width:14px; height:14px; margin-right:8px;
-  border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px;
-  animation:action-working .7s linear infinite;
+  content:""; display:inline-block; flex:none; width:14px; height:14px; margin-inline-end:6px;
+  border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:middle;
 }
-@keyframes action-working { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:no-preference) {
+  .button[aria-busy="true"]::before { animation:loading-spin .8s linear infinite; }
+}
 .press-feedback { position:fixed; z-index:1001; pointer-events:none; background:var(--accent); opacity:.12; transform-origin:center; }
 .success-mark { box-shadow:0 8px 28px color-mix(in srgb,var(--accent) 18%,transparent); }
 /* Interaction targets stay put: motion belongs to ink, numbers and surfaces. */
@@ -64,5 +65,4 @@ details > summary { min-height:44px; align-content:center; }
 @media (min-width:900px) { .frame-progress { max-width:580px; } }
 @media (prefers-reduced-motion:reduce) {
   .press-feedback { display:none; }
-  .button[aria-busy="true"]::before { animation:none; border-right-color:currentColor; }
 }

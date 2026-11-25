@@ -21,6 +21,11 @@ def telegram_name(user, fallback="Пользователь"):
     return name or (f"@{username.lstrip('@')}"[:200] if username else fallback)
 
 
+def normalize_telegram_username(value):
+    username = str(value or "").strip().removeprefix("@")
+    return username if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", username) else None
+
+
 def user_names(session, user_ids):
     # Callers also resolve names while constructing transactional workflow rows.
     with session.no_autoflush:
@@ -79,13 +84,22 @@ def remember_user_name(user):
     from .db import ClientProfile, Session, StaffRole
     uid = user.get("id") if isinstance(user, dict) else user.id
     name = telegram_name(user, "")
+    username = normalize_telegram_username(user.get("username") if isinstance(user, dict) else getattr(user, "username", None))
     if name:
         with Session.begin() as session:
             profile = session.get(ClientProfile, uid)
             if profile is None:
-                session.execute(text("INSERT INTO client_profiles (telegram_id, display_name, created_at) VALUES (:id, :name, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now())) ON CONFLICT (telegram_id) DO UPDATE SET display_name=EXCLUDED.display_name"), {"id": uid, "name": name})
-            elif profile.display_name != name:
-                profile.display_name = name
+                session.execute(text("""
+                    INSERT INTO client_profiles (telegram_id, display_name, telegram_username, created_at)
+                    VALUES (:id, :name, :username, COALESCE((SELECT MIN(created_at) FROM bookings WHERE customer_id=:id), now()))
+                    ON CONFLICT (telegram_id) DO UPDATE
+                    SET display_name=EXCLUDED.display_name, telegram_username=EXCLUDED.telegram_username
+                """), {"id": uid, "name": name, "username": username})
+            else:
+                if profile.display_name != name:
+                    profile.display_name = name
+                if profile.telegram_username != username:
+                    profile.telegram_username = username
             staff = session.get(StaffRole, uid)
             if staff and staff.display_name != name:
                 staff.display_name = name

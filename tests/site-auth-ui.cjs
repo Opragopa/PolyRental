@@ -7,6 +7,7 @@ const assets=path.resolve(__dirname,'../app/miniapp_static');
  await page.route('**/*',async route=>{const url=new URL(route.request().url());
  if(url.hostname==='telegram.org')return route.fulfill({body:'',contentType:'text/javascript'});
  if(url.pathname.startsWith('/miniapp/static/')) {const file=path.resolve(assets,url.pathname.slice('/miniapp/static/'.length));return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});}
+ if(url.pathname==='/site/login')return route.fulfill({contentType:'text/html',body:'<meta charset="utf-8"><script defer src="/miniapp/static/site-navigation.js"></script><a id="continue" href="/site">Войти</a>'});
  if(url.pathname==='/api/site/session')return route.fulfill({json:{id:42,first_name:'Ирина'}});
  if(url.pathname==='/api/miniapp/me')return route.fulfill({json:{id:42,admin:false}});
  if(url.pathname==='/api/miniapp/profile')return route.fulfill({json:{onboarding_seen:true,start_screen:'booking'}});
@@ -17,13 +18,29 @@ const assets=path.resolve(__dirname,'../app/miniapp_static');
  await page.goto('http://polyrental.test/site');
  await page.getByRole('button',{name:'Выйти'}).waitFor();
  assert.equal(await page.locator('#customer-name,#customer-contact').count(),0);
- const versionBox=await page.locator('#app-version').boundingBox();
- const headerBox=await page.locator('.topbar').boundingBox();
- const logoutBox=await page.getByRole('button',{name:'Выйти'}).boundingBox();
  assert.equal(await page.locator('.topbar .brand').isVisible(),true);
- assert.ok(Math.abs(versionBox.x+versionBox.width-headerBox.x-headerBox.width)<1);
- assert.ok(logoutBox.y>=versionBox.y+versionBox.height);
+ for (const [width,height] of [[390,844],[1280,720]]) {
+  await page.setViewportSize({width,height});
+  const versionBox=await page.locator('#app-version').boundingBox();
+  const headerBox=await page.locator('.topbar').boundingBox();
+  const logoutBox=await page.getByRole('button',{name:'Выйти'}).boundingBox();
+  if (width >= 1024) {
+   assert.ok(Math.abs(logoutBox.x+logoutBox.width-headerBox.x-headerBox.width)<1);
+   assert.ok(versionBox.x+versionBox.width<=logoutBox.x);
+   assert.ok(Math.abs(versionBox.y+versionBox.height/2-logoutBox.y-logoutBox.height/2)<1);
+  } else {
+   assert.ok(Math.abs(versionBox.x+versionBox.width-headerBox.x-headerBox.width)<1);
+   assert.ok(logoutBox.y>=versionBox.y+versionBox.height);
+  }
+ }
  assert.match(await page.locator('#mode-banner').innerText(),/Вы вошли через Telegram/);
+ await page.goto('http://polyrental.test/site/login#my-requests');
+ await page.locator('#continue').click();
+ await page.waitForURL('**/site#my-requests');
+ await page.locator('#my-requests').waitFor();
+ await page.goto('http://polyrental.test/site#management-catalog');
+ await page.getByText('Раздел управления недоступен для вашей роли.',{exact:true}).waitFor();
+ assert.equal(await page.locator('#admin-panel').isHidden(),true);
  assert.deepEqual(errors,[]);await page.close();
  const login=await browser.newPage();await login.clock.install();let attempts=0;
  await login.route('**/telegram-widget.js*',route=>{attempts++;if(attempts===1)return route.abort();return route.fulfill({contentType:'text/javascript',body:'const f=document.createElement("iframe");f.src="about:blank";document.currentScript.parentNode.insertBefore(f,document.currentScript);setTimeout(()=>f.dispatchEvent(new Event("load")),20);'});});

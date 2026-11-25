@@ -1,0 +1,200 @@
+:is(.request-next-overview.request-actions, .request-next-overview.customer-status-panel):has(> .next-step) {
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  padding: 0;
+}
+.request-next-overview:has(> .next-step) > .request-next-head:not(:has(.stage-lock:not([hidden]))) {
+  display: none;
+}
+.next-step, .next-step-editor {
+  --pickup-edge: color-mix(in srgb, var(--text) 60%, var(--surface));
+  --pickup-well: color-mix(in srgb, var(--surface) 94%, var(--text));
+  --pickup-accent-well: color-mix(in srgb, var(--surface) 89%, var(--accent));
+  --pickup-done: #17614c;
+  --pickup-fault: #8d3029;
+  --pickup-done-well: #e8f5ef;
+  --pickup-fault-well: #fff0ed;
+}
+:root[data-theme="dark"] :is(.next-step, .next-step-editor) {
+  --pickup-done: #a5e6c9;
+  --pickup-fault: #ffc0b7;
+  --pickup-done-well: #20433d;
+  --pickup-fault-well: #502e34;
+}
+.next-step {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: clamp(10px, 2vw, 20px);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 14px);
+  background: var(--surface);
+}
+.next-step h4, .next-step h5, .next-step p { margin: 0; overflow-wrap: anywhere; }
+.request-next-overview .next-step h4 { color: var(--text); font-size: 18px; line-height: 1.3; text-transform: none; letter-spacing: normal; }
+.next-step h5 { font-size: 14px; line-height: 1.35; }
+.next-step .next-step-banner {
+  --pickup-ink: var(--text);
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 66px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--pickup-well);
+}
+.next-step[data-tone="clipboard"] .next-step-banner {
+  grid-template-columns: 30px minmax(0, 1fr) 44px;
+  background: var(--pickup-accent-well);
+}
+.next-step[data-tone="done"] .next-step-banner {
+  --pickup-ink: var(--pickup-done);
+  background: var(--pickup-done-well);
+}
+.next-step .next-step-banner :is(h5, .next-step-slot) { color: var(--pickup-ink); }
+.next-step .next-step-banner h5 { font-size: 16px; }
+.next-step .next-step-banner p {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--pickup-ink);
+  background: none;
+  font-size: 14px;
+}
+.next-step-slot, :is(.next-step, .next-step-editor) .next-step-icon.button {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+:is(.next-step, .next-step-editor) .next-step-icon.button {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--pickup-edge);
+  border-radius: 9px;
+  padding: 0;
+  margin: 0;
+  color: var(--text);
+  background: var(--surface);
+}
+:is(.next-step, .next-step-editor) .next-step-icon.button:not(:disabled):hover,
+.next-step button.next-step-client-row:hover { background: var(--pickup-well); }
+:is(.next-step, .next-step-editor) .next-step-icon.button.next-step-arrow {
+  border-color: transparent;
+  background: transparent;
+}
+:is(.next-step, .next-step-editor) .next-step-icon.button.next-step-remove { color: var(--pickup-fault); }
+:is(.next-step, .next-step-editor) .next-step-icon.button.next-step-mark[aria-checked="mixed"] {
+  color: var(--text);
+  background: var(--pickup-accent-well);
+}
+:is(.next-step, .next-step-editor) .next-step-icon.button.next-step-mark[aria-checked="true"] {
+  color: var(--pickup-done);
+  background: var(--pickup-done-well);
+  border-color: var(--pickup-done);
+}
+.next-step .next-step-mark[aria-checked="true"]:disabled { opacity: 1; }
+.next-step-progress { height: 5px; border-radius: 20px; background: var(--pickup-well); overflow: hidden; }
+.next-step-progress > div {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms cubic-bezier(.22, 1, .36, 1);
+}
+.next-step-list { list-style: none; padding: 0; margin: 0; border-block: 1px solid var(--line); }
+.next-step-list > .next-step-row {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: none;
+}
+.next-step-list > .next-step-row + .next-step-row { border-top: 1px solid var(--line); }
+.next-step-line {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 44px 44px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  min-height: 56px;
+  min-width: 0;
+}
+.next-step-line strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
+.next-step-client-row {
+  grid-template-columns: 24px minmax(0, 1fr) 32px 29px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.next-step-slot .icon, .next-step-icon .icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.next-step-banner .next-step-slot .icon { width: 25px; height: 25px; }
+.next-step-arrow .icon { transition: transform 150ms ease; }
+.next-step-arrow[aria-expanded="true"] .icon,
+.next-step-client-row[aria-expanded="true"] .next-step-arrow .icon { transform: rotate(180deg); }
+.next-step-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-inline-start: 28px;
+  transition: grid-template-rows 220ms var(--motion-ease, ease), opacity 160ms ease;
+}
+.next-step-row.is-expanded > .next-step-drawer { grid-template-rows: 1fr; opacity: 1; }
+.next-step-drawer-inner { overflow: hidden; min-height: 0; border-radius: 8px; background: var(--pickup-well); }
+.next-step-drawer-inner > ul { padding: 8px 12px 8px 30px; margin: 0; overflow-wrap: anywhere; }
+.next-step-drawer-inner > :is(p, label, .component-slot) { padding-inline: 8px; }
+.next-step-drawer-inner > p { padding-block: 8px; }
+.next-step-drawer-inner > :last-child { margin-bottom: 4px; }
+.next-step-component {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.next-step-component input[type="checkbox"] { width: 19px; height: 19px; margin: 0; flex: none; accent-color: var(--accent); }
+.next-step :is(.next-step-defect, .next-step-details-button).button { margin: 3px 5px; }
+.next-step .next-step-defect.button { color: var(--pickup-fault); }
+.next-step :is(.next-step-row-fault, .next-step-fault p) { font-size: 14px; color: var(--pickup-fault); }
+.next-step-fault { padding: 10px 12px; color: var(--pickup-fault); background: var(--pickup-fault-well); border-radius: 8px; }
+.next-step .next-step-confirm.button { width: 100%; margin: 0; min-height: 44px; white-space: normal; }
+.next-step .next-step-confirm.button:disabled {
+  border: 1px solid var(--pickup-edge);
+  color: var(--text);
+  background: var(--pickup-well);
+  opacity: 1;
+}
+.next-step-editor .dialog-card { width: min(100%, 34rem); }
+.next-step-editor-help { margin: 0 0 12px; }
+.next-step-editor .next-step-add { display: grid; gap: 8px; min-width: 0; margin-top: 14px; }
+.next-step-editor .next-step-editor-row small { color: var(--muted); }
+.next-step-editor .next-step-add p { margin: 0; }
+.next-step-editor :is(select, input) { max-width: 100%; min-width: 0; }
+.next-step :is(button, input):focus-visible, .next-step-editor :is(button, input, select):focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .next-step-arrow .icon, .next-step-drawer, .next-step-progress > div { transition: none; }
+}

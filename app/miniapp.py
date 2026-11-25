@@ -23,7 +23,6 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from aiogram.enums import ParseMode
-from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func, and_, or_, text
@@ -38,7 +37,7 @@ from .booking_events import claim_notices
 from .request_sla import request_sla
 from .support import (SupportConflict, submit_question, list_threads as list_support_threads, support_threads_page,
                       claim_thread, read_messages as read_support_messages, reply as support_reply,
-                      resolve_thread, reassign_thread, deliver_reply)
+                      resolve_thread, reassign_thread, deliver_reply, deliver_operator_copy, deliver_thread_copies)
 from .client_profile import profile_state, mark_onboarding_shown, complete_onboarding, record_client_mode, set_reminders_enabled, set_client_block
 from .booking_messages import booking_status_text
 from .notification_outbox import notify, notify_actionable
@@ -148,9 +147,21 @@ async def claim_booking_notifications(user=Depends(require_customer)):
 
 
 @router.get("/api/miniapp/notifications/inbox")
-async def notification_inbox(offset: int = Query(0, ge=0), user=Depends(require_customer)):
+async def notification_inbox(offset: int = Query(0, ge=0), support_preview: bool = False, user=Depends(require_customer)):
     from .notification_inbox import inbox
-    return await asyncio.to_thread(inbox, user["id"], offset)
+    return await asyncio.to_thread(inbox, user["id"], offset, support_preview=support_preview)
+
+
+@router.get("/api/miniapp/notifications/inbox/support/{message_id}")
+async def notification_support_detail(message_id: int, user=Depends(require_customer)):
+    from .notification_inbox import support_detail
+    try:
+        body = await asyncio.to_thread(support_detail, user["id"], message_id)
+    except Conflict as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if body is None:
+        raise HTTPException(404, "Сообщение недоступно")
+    return {"text": body}
 
 
 class NotificationReadRequest(BaseModel):
@@ -365,9 +376,31 @@ def booking_article_media(session, article_ids):
             for article in session.scalars(select(Article).where(Article.id.in_(article_ids)))}
 
 
+def pickup_items(session, booking_id):
+    from .db import BookingAsset, Equipment
+    from .handover import asset_components
+    rows = session.scalars(select(Equipment).join(BookingAsset, BookingAsset.equipment_id == Equipment.id).where(
+        BookingAsset.booking_id == booking_id, BookingAsset.deleted_at.is_(None)).order_by(
+        BookingAsset.booking_line_id, Equipment.id)).all()
+    grouped = {}
+    for asset in rows:
+        article = asset.article
+        name = article.name if article else asset.name
+        title = catalog_title(name, article.kind, article.brand, article.key_spec) if article else name
+        composition = tuple(part["replacement_name"] or part["name"]
+                            for part in asset_components(session, booking_id, asset.id)
+                            if part["state"] not in {"missing", "faulty"})
+        key = (asset.article_id, name, composition)
+        item = grouped.setdefault(key, {"id": asset.article_id, "name": name, "title": title, "quantity": 0,
+                                        "category": article.category if article else "generic", "composition": list(composition)})
+        item["quantity"] += 1
+    return list(grouped.values())
+
+
 def booking_view(booking):
     from .handover import handover_state
     from .customer_next import public_features, next_action, get_settings
+    from .inventory import composition_items
     handover = handover_state(booking.id)
     # Customer JSON never includes manufacturer serials or internal asset codes.
     handover = {**handover,
@@ -375,7 +408,9 @@ def booking_view(booking):
         "exceptions": [{**row, "replacement_name": row.get("replacement_name","") if row.get("component") else row.get("replacement_title", "")} for row in handover.get("exceptions", [])]}
     from .db import BookingChange
     with Session() as session:
-        article_media = booking_article_media(session, {line.article_id for line in booking.lines})
+        packed_items = pickup_items(session, booking.id) if booking.status in {"preparing", "ready"} else []
+        article_ids = {line.article_id for line in booking.lines} | {item["id"] for item in packed_items if item["id"]}
+        article_media = booking_article_media(session, article_ids)
         change = session.scalar(select(BookingChange).where(BookingChange.booking_id == booking.id).order_by(BookingChange.id.desc()).limit(1))
         from .db import BookingRework
         rework=session.scalar(select(BookingRework).where(BookingRework.booking_id==booking.id).order_by(BookingRework.id.desc()).limit(1))
@@ -392,6 +427,7 @@ def booking_view(booking):
         "receipt_preview_available":booking.status=="ready" and bool(handover.get("snapshot")),
         "handover": handover,
         "equipment_details": public_features(booking.id),
+        "pickup_items": packed_items,
         "next_action": guidance,
         "return_overdue": guidance["return_overdue"],
         "partial_issue": bool(handover.get("exceptions")),
@@ -409,7 +445,8 @@ def booking_view(booking):
         "estimated_until": request_sla(booking)["deadline"],
         "items": [{"id": line.article_id, "name": line.article.name,
                    "title": catalog_title(line.article.name, line.article.kind, line.article.brand, line.article.key_spec), "quantity": line.quantity,
-                   "auto_added": line.auto_added}
+                   "auto_added": line.auto_added,
+                   "composition": composition_items(line.article)}
                   for line in booking.lines],
     }
 
@@ -523,21 +560,8 @@ def _calendar_feed_response(token: str):
     expected = os.getenv("ICAL_TOKEN", "")
     if not expected or not hmac.compare_digest(token, expected):
         raise HTTPException(404)
-    calendar = Calendar()
-    calendar.add("prodid", "-//PolyRental//Calendar//RU")
-    calendar.add("version", "2.0")
-    reserving = {"confirmed", "preparing", "ready", "issued", "return_inspection"}
-    for booking in list_bookings(limit=None):
-        if booking.status not in reserving:
-            continue
-        event = Event()
-        event.add("uid", f"booking-{booking.id}@polyrental")
-        equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
-        event.add("summary", equipment or "Оборудование")
-        event.add("dtstart", booking.starts_at)
-        event.add("dtend", booking.ends_at)
-        calendar.add_component(event)
-    return Response(calendar.to_ical(), media_type="text/calendar")
+    from .calendar_feed import calendar_bytes
+    return Response(calendar_bytes(), media_type="text/calendar")
 
 
 @router.get("/api/miniapp/availability/events")
@@ -755,7 +779,8 @@ async def support_faq(user=Depends(require_customer)):
 
 
 async def notify_support_owner(owner_id: int, thread_id: int, number: str):
-    await notify_actionable(None, owner_id, "support_action", f"Новое обращение №{thread_id}" + (f" · заявка {number}" if number else "") + ". Откройте поддержку в Mini App.")
+    if not await deliver_thread_copies(thread_id):
+        await notify_actionable(None, owner_id, "support_action", f"Вам назначено обращение №{thread_id}" + (f" (заявка {number})" if number else "") + ". Откройте поддержку в Mini App.")
 
 
 @router.post("/api/miniapp/support/questions")
@@ -767,7 +792,7 @@ async def support_question(payload: SupportQuestion, tasks: BackgroundTasks, use
     except Conflict as exc:
         raise HTTPException(503, str(exc)) from exc
     if result["owner_id"]:
-        tasks.add_task(notify_support_owner, result["owner_id"], result["id"], result["request_number"])
+        tasks.add_task(deliver_operator_copy, result["message_id"])
     return {"status": "Спасибо! Мы рассмотрим ваше предложение." if payload.screen == "feedback" else "Обращение получено", "id": result["id"]}
 
 
@@ -800,13 +825,14 @@ async def admin_support_threads(page: int | None = Query(default=None, ge=0, le=
 
 
 @router.post("/api/miniapp/admin/support/{thread_id}/claim")
-async def admin_claim_support(thread_id: int, user=Depends(require_support_staff)):
+async def admin_claim_support(thread_id: int, tasks: BackgroundTasks, user=Depends(require_support_staff)):
     try:
         await asyncio.to_thread(claim_thread, thread_id, user["id"])
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except SupportConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    tasks.add_task(deliver_thread_copies, thread_id)
     return {"status": "in_progress"}
 
 
@@ -950,7 +976,7 @@ async def client_history(category: str = Query(default="active", pattern="^(acti
     try:
         bookings, total = await asyncio.to_thread(customer_history_page, user["id"], category, page, 10, number, booking_id, sort)
     except ValueError as exc:
-        raise HTTPException(422, "Введите полный номер заявки или последние четыре цифры") from exc
+        raise HTTPException(422, "Введите полный номер заявки или короткий номер, например 7") from exc
     with Session() as session:
         available = set(session.scalars(select(BookingDocument.booking_id).outerjoin(
             ReceiptArchive, ReceiptArchive.booking_id == BookingDocument.booking_id).where(
@@ -1139,9 +1165,10 @@ async def customer_identity_submit(
                 documents[kind] = await asyncio.to_thread(sanitize_image, raw, upload.content_type or "")
             except ValueError as exc:
                 raise HTTPException(422, {"field": kind, "message": str(exc)}) from exc
-        photo_order = ("passport_main", "passport_registration", "student_front")
+        required_photo_order = ("passport_main", "passport_registration")
+        photo_order = (*required_photo_order, "student_front")
         if current["status"] != "needs_changes":
-            for kind in photo_order:
+            for kind in required_photo_order:
                 if kind not in documents:
                     label = {"passport_main": "паспорт — страница с фото",
                              "passport_registration": "паспорт — страница регистрации",
@@ -1193,15 +1220,18 @@ def admin_booking_view(booking):
                          "article_id": asset.equipment.article_id,
                          "name": catalog_title(asset.equipment.article.name, asset.equipment.article.kind, asset.equipment.article.brand, asset.equipment.article.key_spec) if asset.equipment.article else asset.equipment.name,
                          "location": asset.equipment.storage_location,
+                         "condition": asset.equipment.condition,
                          "inspection_profile": asset.equipment.article.inspection_profile if asset.equipment.article else "generic"}
                         for asset in ordered_assets]
-    from .handover import asset_components
+    from .handover import asset_components, composition_signature
     with Session() as session:
         for item in result["assets"]:
             item["components"]=asset_components(session,booking.id,item["id"])
+            item["composition_signature"] = composition_signature(item["components"])
     result["pick_list"] = result["assets"]
     result["inspections"] = [{"equipment_id": inspection.equipment_id, "stage": inspection.stage,
                               "result": inspection.result, "notes": inspection.notes,
+                              "checklist": inspection.checklist or {},
                               "defect": inspection.defect, "estimated_cost": str(inspection.estimated_cost),
                               "charge_customer": inspection.charge_customer,
                               "created_at": inspection.created_at.isoformat() if inspection.created_at else None}
@@ -1306,8 +1336,9 @@ async def admin_reassign_booking(booking_id: int, payload: ReassignRequest, user
 @router.put("/api/miniapp/admin/support/{thread_id}/owner")
 async def admin_reassign_support(thread_id: int, payload: ReassignRequest, tasks: BackgroundTasks, user=Depends(require_admin)):
     try:
-        await asyncio.to_thread(reassign_thread, thread_id, user["id"], payload.assignee_id)
-        tasks.add_task(notify_support_owner, payload.assignee_id, thread_id, "")
+        changed = await asyncio.to_thread(reassign_thread, thread_id, user["id"], payload.assignee_id)
+        if changed:
+            tasks.add_task(notify_support_owner, payload.assignee_id, thread_id, "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except SupportConflict as exc:
@@ -1821,6 +1852,7 @@ class InspectionRequest(BaseModel):
     stage: str
     result: str
     checklist: dict[str, bool] = Field(default_factory=dict)
+    composition_signature: str | None = Field(default=None, min_length=64, max_length=64)
     notes: str = Field(default="", max_length=2000)
     defect: str = Field(default="", max_length=4000)
     estimated_cost: Decimal = Field(default=0, ge=0, max_digits=12, decimal_places=2)
@@ -1832,11 +1864,11 @@ async def admin_inspection(booking_id: int, payload: InspectionRequest, user=Dep
     if not await asyncio.to_thread(staff_allows, user["id"], "operator"):
         raise HTTPException(403, "Недостаточно прав для этого действия")
     try:
-        await asyncio.to_thread(record_inspection, booking_id, payload.equipment_id, payload.stage,
+        lease = await asyncio.to_thread(record_inspection, booking_id, payload.equipment_id, payload.stage,
                                 payload.result, payload.checklist, payload.notes, user["id"],
                                 payload.defect, payload.estimated_cost, payload.charge_customer,
-                                operator_name(user))
-        return {"status": "saved"}
+                                operator_name(user), expected_components_signature=payload.composition_signature)
+        return {"status": "saved", "operation_lease_state": lease}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Conflict as exc:

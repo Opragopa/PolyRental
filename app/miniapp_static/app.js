@@ -12,9 +12,16 @@
   }
 
   // Animate the element's height so the surrounding document follows the reveal.
+  const desktopMotion = window.matchMedia("(min-width: 769px)");
+  const desktopWorkspace = window.matchMedia("(min-width: 1024px)");
+  function enterWorkspace(element) {
+    if (desktopWorkspace.matches) window.PolyRentalMotion?.enter(element);
+  }
   const disclosureAnimations = new Map();
   const gridDisclosures = new WeakMap();
   const viewportFocus = window.PolyRentalViewportFocus;
+  const siteNavigationAPI = window.PolyRentalSiteNavigation;
+  let siteNavigation;
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   reducedMotion?.addEventListener("change", () => {
     if (!reducedMotion.matches) return;
@@ -86,10 +93,12 @@
     // Management cards contain the page's main content. Keep them in normal
     // flow: a clipped, animated details becomes a nested scrolling surface in
     // mobile WebViews, and revealing it can override the user's scroll gesture.
-    if (details.matches(".request-accordion") || reducedMotion?.matches || typeof details.animate !== "function") {
+    const workspaceCard = desktopMotion.matches && details.matches(".request-accordion, .customer-order-accordion");
+    if (workspaceCard || details.matches(".request-accordion") || reducedMotion?.matches || typeof details.animate !== "function") {
       details.style.overflow = previous?.overflow ?? details.style.overflow;
       details.open = opening;
-      if (opening && focus) scrollElementIntoView(details, {valid: () => details.open});
+      if (opening && workspaceCard) window.PolyRentalMotion?.enter(details.querySelector(".request-body, .customer-order-body"));
+      if (opening && focus) scrollElementIntoView(details, {block: workspaceCard ? "nearest" : undefined, valid: () => details.open});
       return;
     }
     const overflow = previous?.overflow ?? details.style.overflow;
@@ -104,7 +113,7 @@
       endHeight = summary.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
     }
     const animation = details.animate([{height: `${startHeight}px`}, {height: `${endHeight}px`}], {
-      duration: 220, easing: "cubic-bezier(.22, 1, .36, 1)"
+      duration: desktopMotion.matches ? 170 : 220, easing: "cubic-bezier(.22, 1, .36, 1)"
     });
     const state = {animation, opening, overflow};
     disclosureAnimations.set(details, state);
@@ -150,6 +159,20 @@
     if (window.PolyRentalMotion?.morphText) window.PolyRentalMotion.morphText(element, text); else element.textContent = text;
   }
   const tg = window.Telegram?.WebApp;
+  if (tg?.onEvent) {
+    const viewportState = () => JSON.stringify([tg.isFullscreen, tg.safeAreaInset, tg.contentSafeAreaInset]);
+    let previous = viewportState();
+    for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenChanged"]) {
+      tg.onEvent(event, () => {
+        const current = viewportState();
+        if (current !== previous) window.PolyRentalMotion?.cancelTransient();
+        previous = current;
+      });
+    }
+  }
+  const startup = window.PolyRentalStartup;
+  startup?.start(tg);
+  if (startup?.failed()) return;
   function calendarImpact() {
     try { tg?.HapticFeedback?.impactOccurred?.("light"); } catch (_) { /* Older clients may not support haptics. */ }
   }
@@ -158,11 +181,15 @@
   const preview = new URLSearchParams(location.search).get("preview") === "1";
   let siteProfile = null;
   if (!tg?.initData && location.pathname === "/site") {
-    try { const response = await fetch("/api/site/session", {cache:"no-store"}); if (response.ok) siteProfile = await response.json(); else { location.replace("/site/login"); return; } }
+    try { const response = await fetch("/api/site/session", {cache:"no-store"}); if (response.ok) siteProfile = await response.json(); else { siteNavigationAPI?.rememberLoginRoute(); location.replace("/site/login"); return; } }
     catch (_) { document.body.textContent = "Не удалось проверить вход. Обновите страницу."; return; }
   }
   const authorized = Boolean(tg?.initData || siteProfile);
   const keyboardMode = !authorized && !preview && Boolean(tg?.sendData) && Boolean(tg?.platform) && tg.platform !== "unknown";
+  if (startup?.active() && !authorized && !keyboardMode) {
+    startup.fail("Не удалось подтвердить вход. Откройте приложение из Telegram ещё раз.");
+    return;
+  }
   const draftKey = `polyrental-booking-draft-v2:${tg?.initDataUnsafe?.user?.id || siteProfile?.id || "local"}`;
   const contactKey = `polyrental-booking-contact-v1:${tg?.initDataUnsafe?.user?.id || siteProfile?.id || "local"}`;
   const $ = (id) => document.getElementById(id);
@@ -177,14 +204,29 @@
     $('rental-purpose-field').hidden = !rentalPurposeEnabled;
   }
   $('rental-purpose').addEventListener('input', persistCurrentCart);
-  function showLoading(host, message = "Загружаем…", rows = 3) {
+  function showLoading(host, message = "Загружаем…") {
     host.replaceChildren();
-    if (message) { const status = document.createElement("p"); status.className = "loading-label"; status.setAttribute("role", "status"); status.textContent = message; host.append(status); }
-    if (!host.matches('#items-grid, .admin-catalog-items')) { const spinner = document.createElement('span'); spinner.className = 'loading-spinner'; spinner.setAttribute('role','status'); spinner.setAttribute('aria-label','Загрузка'); host.append(spinner); return; }
-    const skeleton = document.createElement("div"); skeleton.className = "loading-skeleton"; skeleton.setAttribute("aria-hidden", "true");
-    skeleton.classList.add('catalog-skeleton'); if (host.classList.contains('tiles') || host.classList.contains('items-grid-tiles')) skeleton.classList.add('catalog-skeleton-grid');
-    for (let index = 0; index < rows; index++) { const row = document.createElement("div"); row.className='catalog-skeleton-card'; row.innerHTML='<span class="catalog-skeleton-photo"></span><span class="catalog-skeleton-lines"><i></i><i></i><i></i></span>'; skeleton.append(row); }
-    host.append(skeleton);
+    const catalog = host.matches('#items-grid, .admin-catalog-items');
+    if (message) {
+      const status = document.createElement("p");
+      status.className = catalog ? "sr-only" : "loading-status";
+      status.setAttribute("role", "status");
+      status.textContent = message;
+      host.append(status);
+    }
+    if (!catalog) return;
+    const admin = host.matches('.admin-catalog-items');
+    const lines = '<div class="catalog-skeleton-lines"><i class="skeleton-block"></i><i class="skeleton-block"></i><i class="skeleton-block"></i></div>';
+    const action = '<i class="catalog-skeleton-action skeleton-block"></i>';
+    for (let index = 0; index < 4; index++) {
+      const card = document.createElement("article");
+      card.className = `loading-skeleton catalog-skeleton-card ${admin ? "admin-card article-card" : "item-card"}`;
+      card.setAttribute("aria-hidden", "true");
+      card.innerHTML = admin
+        ? `<div class="article-card-head"><div class="article-media skeleton-block"></div><div class="article-main">${lines}</div><div class="article-head-actions">${action}</div></div>`
+        : `<div class="item-media skeleton-block"></div><div class="item-main">${lines}${action}</div>`;
+      host.append(card);
+    }
   }
   const sections = ["step-items", "step-contact", "step-dates", "step-review"];
   const state = { step: 0, view: "flow", items: [], quantities: new Map(), requestId: null, busy: false, booking: null, role: null, identityBookingId: null, identityNeedsChanges: false, identityRequiredPhotos: [], identityReusableDocuments: [], identityLegacyInstitution: null, universities: [], consent: null, adminMode: "orders", profile: null, onboardingLoading: false, onboardingPending: false, profileFilter: "all", profileSort: "date", profilePage: 0, profileNumber: "", adminRequestFilter: "all", adminStatus: "all", adminSort: "date", adminPage: 0, adminTargetId: null, adminQueue: "all", supportPage: 0, supportFilterId: null, cartVersion: null };
@@ -253,9 +295,21 @@
   function categoryVisual(category) {
     return category.image_data ? `<img class="category-card-photo" src="${escapeHtml(category.image_data)}" alt="" loading="lazy">` : `<svg class="icon" aria-hidden="true"><use href="#icon-category-${categoryIcon(category)}"></use></svg>`;
   }
+  function bindCategoryPhoto(button, category) {
+    const image = button.querySelector(".category-card-photo");
+    if (!image) return;
+    bindCatalogPhotoClick(image, category.name, button);
+    button.setAttribute("aria-keyshortcuts", "Shift+Enter");
+    button.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || !event.shiftKey || event.repeat) return;
+      event.preventDefault();
+      openCatalogPhoto(image, category.name, button);
+    });
+  }
   async function editCategoryDialog(category) {
     const path = `/api/miniapp/admin/catalog/categories/${encodeURIComponent(category.code)}`;
-    const data = await workflowDialog("Изменить категорию", `<label class="field"><span>Название категории</span><input name="name" maxlength="100" value="${escapeHtml(category.name)}" required></label><label class="field"><span>Новое фото категории</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>${category.image_data ? '<label class="check-row"><input name="remove_photo" type="checkbox"><span>Удалить текущее фото</span></label>' : ''}<p class="supporting">JPEG, PNG или WebP, не более 8 МБ.</p>`, "Сохранить", null, async values => {
+    const photo = category.image_data ? catalogMedia(category, "request-item") : "";
+    const data = await workflowDialog("Изменить категорию", `<label class="field"><span>Название категории</span><input name="name" maxlength="100" value="${escapeHtml(category.name)}" required></label>${photo}<label class="field"><span>Новое фото категории</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>${category.image_data ? '<label class="check-row"><input name="remove_photo" type="checkbox"><span>Удалить текущее фото</span></label>' : ''}<p class="supporting">JPEG, PNG или WebP, не более 8 МБ.</p>`, "Сохранить", null, async values => {
       const file = values.get("photo");
       if (file instanceof File && file.size && values.get("remove_photo")) throw new Error("Выберите новое фото или удалите текущее.");
       if (file instanceof File && file.size > 8 * 1024 * 1024) throw new Error("Фото больше 8 МБ. Выберите файл меньшего размера.");
@@ -278,17 +332,76 @@
   function catalogTitle(item) {
     return item.name || item.title || catalogType(item);
   }
+  const assetCountForms = {one:"экземпляр", few:"экземпляра", many:"экземпляров", other:"экземпляров"};
+  const assetCountRules = new Intl.PluralRules("ru");
+  function assetCountLabel(count) {
+    return `${count} ${assetCountForms[assetCountRules.select(count)]}`;
+  }
   function catalogMedia(item, className) {
     const meta = categoryMeta[item.category] || categoryMeta.generic || ["Оборудование", "equipment"];
     const src = /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(item.image_data || "") ? item.image_data : /^https:\/\//i.test(item.image_url || "") ? item.image_url : "";
-    return `<div class="catalog-media ${className}-media" data-photo-state="${src ? "loading" : "empty"}" aria-busy="${Boolean(src)}"><div class="${className}-placeholder catalog-photo-placeholder" aria-label="${escapeHtml(meta[0])}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><svg class="frame-placeholder-icon icon" aria-hidden="true"><use href="#icon-category-${categoryIcon({code:item.category, icon:meta[1]})}"></use></svg><small>${escapeHtml(meta[0])}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy"><span class="catalog-photo-progress" role="status" aria-label="Загрузка фото"><span class="photo-spinner" aria-hidden="true"></span></span><button class="catalog-photo-retry" type="button" aria-label="Повторить загрузку фото: ${escapeHtml(item.name)}"><span aria-hidden="true">↻</span><small>Повторить</small></button>` : ""}</div>`;
+    const placeholder = !src && (className === "article" || className === "article-editor") ? "Нет фото" : meta[0];
+    return `<div class="catalog-media ${className}-media" data-photo-state="${src ? "loading" : "empty"}" aria-busy="${Boolean(src)}"><div class="${className}-placeholder catalog-photo-placeholder" aria-label="${escapeHtml(placeholder)}"><svg class="placeholder-icon icon" aria-hidden="true"><use href="#icon-${meta[1]}"></use></svg><svg class="frame-placeholder-icon icon" aria-hidden="true"><use href="#icon-category-${categoryIcon({code:item.category, icon:meta[1]})}"></use></svg><small>${escapeHtml(placeholder)}</small></div>${src ? `<img class="${className}-photo catalog-loading" src="${escapeHtml(src)}" alt="Фото: ${escapeHtml(item.name)}" loading="lazy"><span class="catalog-photo-progress" role="status" aria-label="Загрузка фото"><span class="loading-spinner photo-spinner" aria-hidden="true"></span></span><button class="catalog-photo-retry" type="button" aria-label="Повторить загрузку фото: ${escapeHtml(item.name)}"><span aria-hidden="true">↻</span><small>Повторить</small></button>` : ""}</div>`;
+  }
+  async function prepareCatalogPhoto(file) {
+    if (!(file instanceof File) || !file.size) throw new Error("Выберите изображение.");
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); }
+    catch (_) { throw new Error("Не удалось открыть изображение. Выберите JPEG, PNG или WebP."); }
+    try {
+      const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", .88));
+      if (!blob) throw new Error("Не удалось подготовить изображение.");
+      const upload = new FormData();
+      upload.set("photo", blob, `photo.${({"image/webp":"webp","image/png":"png","image/jpeg":"jpg"})[blob.type] || "png"}`);
+      return upload;
+    } finally { bitmap.close(); }
   }
   function photoState(image, state) {
     const media = image.closest(".catalog-media"); if (!media) return;
     media.dataset.photoState = state; media.setAttribute("aria-busy", String(state === "loading"));
     image.hidden = state === "error"; image.classList.toggle("catalog-loading", state === "loading");
+    image.tabIndex = state === "loaded" ? 0 : -1;
+  }
+  function bindCatalogPhoto(image, name) {
+    if (image.classList.contains("catalog-photo-target")) return;
+    bindCatalogPhotoClick(image, name, image);
+    image.setAttribute("role", "button");
+    image.setAttribute("aria-haspopup", "dialog");
+    image.setAttribute("aria-label", `Открыть фото: ${name}`);
+    image.tabIndex = 0;
+    image.addEventListener("keydown", event => {
+      if (!["Enter", " "].includes(event.key) || event.repeat) return;
+      event.preventDefault(); event.stopPropagation();
+      openCatalogPhoto(image, name);
+    });
+  }
+  function bindCatalogPhotoClick(image, name, opener) {
+    image.classList.add("catalog-photo-target");
+    image.draggable = false;
+    let press = null, dragged = false;
+    image.addEventListener("pointerdown", event => {
+      press = [event.clientX, event.clientY]; dragged = false;
+    });
+    image.addEventListener("pointermove", event => {
+      if (press && Math.hypot(event.clientX - press[0], event.clientY - press[1]) > 10) dragged = true;
+    });
+    image.addEventListener("pointerleave", () => { if (press) dragged = true; });
+    image.addEventListener("pointerup", () => { press = null; });
+    image.addEventListener("pointercancel", () => { press = null; dragged = true; });
+    image.addEventListener("click", event => {
+      if (!image.complete || !image.naturalWidth) return;
+      if (opener.matches("a")) event.preventDefault();
+      event.stopPropagation();
+      if (!event.detail || !dragged) openCatalogPhoto(image, name, opener);
+    });
   }
   function inspectPhoto(image) {
+    bindCatalogPhoto(image, image.alt.replace(/^Фото:\s*/, "") || "Оборудование");
     if (image.complete) photoState(image, image.naturalWidth ? "loaded" : "error");
     else photoState(image, "loading");
   }
@@ -305,6 +418,54 @@
     const image = button.closest(".catalog-media").querySelector("img");
     photoState(image, "loading"); const src = image.getAttribute("src"); image.removeAttribute("src"); image.src = src;
   });
+  function canDownloadCatalogPhoto() {
+    return ["operator", "manager", "admin"].includes(state.role?.staff_role) && !state.role?.pii_only;
+  }
+  async function downloadCatalogPhoto(source, name) {
+    if (!canDownloadCatalogPhoto()) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    let content;
+    try {
+      const response = await fetch(source, {referrerPolicy:"no-referrer", signal:controller.signal});
+      if (response.ok) content = await response.blob();
+    } finally { clearTimeout(timeout); }
+    if (!content || !content.type.startsWith("image/") || !content.size) throw new Error("Не удалось получить фото");
+    const extensions = {"image/jpeg":"jpg", "image/png":"png", "image/webp":"webp", "image/gif":"gif", "image/avif":"avif", "image/svg+xml":"svg", "image/bmp":"bmp"};
+    const title = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").slice(0, 90).trim() || "Фото оборудования";
+    downloadBlob(content, `${title}.${extensions[content.type] || "img"}`);
+  }
+  function openCatalogPhoto(image, name, opener = image) {
+    if (!image.isConnected || !image.complete || !image.naturalWidth || image.closest("[inert]")) return;
+    const source = image.currentSrc || image.src;
+    if (!/^(https:\/\/|blob:|data:image\/(?:webp|png|jpeg);base64,)/i.test(source)) return;
+    const actions = canDownloadCatalogPhoto() ? '<p class="catalog-photo-download-status" role="status" hidden></p>' : "";
+    void workflowDialog(name, `<img class="catalog-photo-full" src="${escapeHtml(source)}" alt="${escapeHtml(name)}">${actions}`, "Закрыть", dialog => {
+      dialog.classList.add("catalog-photo-dialog-view");
+      dialog.querySelector(".workflow-cancel").hidden = true;
+      const close = dialog.querySelector('[type="submit"]');
+      close.dataset.initialFocus = "";
+      const status = dialog.querySelector(".catalog-photo-download-status");
+      if (!status) return;
+      const download = plainButton("Скачать фото", async () => {
+        download.disabled = true;
+        status.hidden = false;
+        status.textContent = "Скачиваем фото…";
+        try { await downloadCatalogPhoto(source, name); status.hidden = true; }
+        catch (_) {
+          status.hidden = false;
+          status.textContent = "Не удалось скачать фото.";
+          if (source.startsWith("https://")) {
+            const original = document.createElement("a");
+            original.href = source; original.target = "_blank"; original.rel = "noopener noreferrer";
+            original.textContent = "Открыть оригинал";
+            status.append(" ", original);
+          }
+        } finally { download.disabled = false; }
+      }, "secondary");
+      close.before(download);
+    }, null, {opener});
+  }
   function conditionLabel(condition) { return ({ available: "Доступен", maintenance: "На ремонте", retired: "Выведен из эксплуатации" })[condition] || condition; }
   function toIso(value) {
     const text = String(value || "").trim();
@@ -316,6 +477,43 @@
   function datePickerText(value) {
     return value ? new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "short"}).format(new Date(`${value}T12:00:00Z`)) : "дата";
   }
+  const dateFormatSetting = $("profile-date-format");
+  const dateFormatKey = "polyrental-date-format";
+  try { dateFormatSetting.value = localStorage.getItem(dateFormatKey) === "mdy" ? "mdy" : "dmy"; } catch (_) {}
+  const formDateNames = new Set(["birth_date", "passport_issued_at"]);
+  function formDatePlaceholder() { return dateFormatSetting.value === "mdy" ? "ММ/ДД/ГГГГ" : "ДД.ММ.ГГГГ"; }
+  function displayFormDate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+    if (!match) return value || "";
+    const [, year, month, day] = match;
+    return dateFormatSetting.value === "mdy" ? `${month}/${day}/${year}` : `${day}.${month}.${year}`;
+  }
+  function parseFormDate(value) {
+    const raw = String(value || "").trim();
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.test(raw);
+    const pattern = dateFormatSetting.value === "mdy" ? /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/ : /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+    const digits = /^\d{8}$/.test(raw) ? [raw.slice(0, 2), raw.slice(2, 4), raw.slice(4)] : null;
+    const parts = pattern.exec(raw)?.slice(1) || digits;
+    if (!iso && !parts) return "";
+    const [first, second, year] = parts || [];
+    const [month, day] = dateFormatSetting.value === "mdy" ? [first, second] : [second, first];
+    const result = iso ? raw : `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const date = new Date(`${result}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === result ? result : "";
+  }
+  dateFormatSetting.addEventListener("change", () => {
+    try { localStorage.setItem(dateFormatKey, dateFormatSetting.value); } catch (_) {}
+    document.querySelectorAll("[data-form-date]").forEach(input => { input.placeholder = formDatePlaceholder(); });
+    document.querySelectorAll("#profile-identity-fields [data-iso-date]").forEach(value => {
+      value.textContent = displayFormDate(value.dataset.isoDate);
+    });
+  });
+  document.querySelectorAll("[data-form-date]").forEach(input => { input.placeholder = formDatePlaceholder(); });
+  document.addEventListener("focusout", event => {
+    if (!event.target.matches?.("[data-form-date]")) return;
+    const parsed = parseFormDate(event.target.value);
+    if (parsed) event.target.value = displayFormDate(parsed);
+  });
   function bookingTimeValue(id) {
     const value = $(`${id}-time`).value.trim();
     let match = value.match(/^(\d{1,2})(?:[:.,]|\s+)(\d{2})$/);
@@ -332,7 +530,7 @@
       input.maxLength = 8; input.autocomplete = "off"; input.spellcheck = false;
       input.setAttribute("aria-describedby", `${id}-time-hint ${id}-error`);
       const hint = document.createElement("small"); hint.id = `${id}-time-hint`; hint.className = "booking-time-hint";
-      hint.textContent = "Например, 09:30 или 0930 · МСК"; input.after(hint);
+      hint.textContent = "Например, 09:30 или 0930 (МСК)"; input.after(hint);
       const commit = () => {
         const value = bookingTimeValue(id);
         if (value) input.value = value;
@@ -370,6 +568,17 @@
   }
   const addIsoDays = window.PolyRentalCalendar.addDays;
   function minimumBookingDate() { return moscowDateIso(); }
+  function normalizePastBookingStart() {
+    const date = $("start-date").value;
+    const time = bookingTimeValue("start");
+    const current = moscowInput(new Date());
+    if (!date || !time || `${date}T${time}` >= current) return false;
+    $("start-date").value = current.slice(0, 10);
+    $("start-time").value = current.slice(11);
+    syncDateTime("start");
+    if (date !== $("start-date").value) rangeCalendar?.setRange($("start-date").value, $("end-date").value);
+    return true;
+  }
   function bookingDateLabel(value) {
     return new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long"}).format(new Date(`${value}T12:00:00Z`));
   }
@@ -400,11 +609,11 @@
         const month=Number($(`${id}-date`).value.slice(5,7)),hours=month>=6&&month<=8?schedulePolicy.summer:schedulePolicy.normal;
         $(`${id}-time`).min=hours.start; $(`${id}-time`).max=hours.end;
       }
-      $(`${id}-time-label`).textContent = `${id === "start" ? "Получение" : "Возврат"} · ${$(`${id}-date`).value ? datePickerText($(`${id}-date`).value) : "выберите дату"}`;
+      $(`${id}-time-label`).textContent = `${id === "start" ? "Получение" : "Возврат"}: ${$(`${id}-date`).value ? datePickerText($(`${id}-date`).value) : "выберите дату"}`;
       $(`${id}-time`).disabled = !$("end-date").value;
     }
     const start = $("start").value, end = $("end").value;
-    $("period-summary").textContent = start && end ? `${datePickerText($("start-date").value)}, ${bookingTimeValue("start")} — ${datePickerText($("end-date").value)}, ${bookingTimeValue("end")} · МСК` : $("start-date").value ? `${datePickerText($("start-date").value)} — выберите конец` : "Выберите начало и конец";
+    $("period-summary").textContent = start && end ? `${datePickerText($("start-date").value)}, ${bookingTimeValue("start")} — ${datePickerText($("end-date").value)}, ${bookingTimeValue("end")} (МСК)` : $("start-date").value ? `${datePickerText($("start-date").value)} — выберите конец` : "Выберите начало и конец";
     $("period-error").textContent = dateValidationMessage();
   }
   function periodChanged() {
@@ -414,9 +623,10 @@
     fieldError("start", ""); fieldError("end", ""); saveDraft(); render(); queueCalendarAvailability();
   }
   function ensureBookingPeriod() {
-    if ($("start-date").value && $("start-date").value < minimumBookingDate()) {
+    if ($("start-date").value && $("start-date").value < minimumBookingDate() && $("end-date").value <= minimumBookingDate()) {
       $("start").value = ""; $("end").value = ""; syncDateFields("start"); syncDateFields("end"); return false;
     }
+    normalizePastBookingStart();
     return Boolean($("start-date").value && $("end-date").value);
   }
   function dateText(value) { return new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
@@ -429,7 +639,13 @@
   function reviewDateTime(value) { return `${new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", weekday: "short", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value))} МСК`; }
 
   function clearError() { $("global-error").hidden = true; $("global-error").textContent = ""; }
-  function showError(message) { $("global-error").textContent = message; $("global-error").hidden = false; scrollElementIntoView($("global-error"), {block:"nearest"}); }
+  function showError(message) {
+    const notice = $("global-error");
+    const changed = notice.hidden || notice.textContent !== message;
+    notice.textContent = message; notice.hidden = false;
+    if (changed) enterWorkspace(notice);
+    scrollElementIntoView(notice, {block:"nearest"});
+  }
   function showIdentityFieldError(name, message) {
     const input = document.querySelector(`#identity-form [name="${name}"]`);
     const field = input?.closest(".field");
@@ -613,8 +829,8 @@
       else { identityPhotoDrafts.delete(key); entry = null; try { await photoDraftTransaction("readwrite", (store) => store.delete(key)); } catch (_) {} }
       if (!identitySessionCurrent(session)) return;
       const status = input.closest(".field")?.querySelector(".file-draft-status");
-      if (status) status.textContent = entry ? `Загружено ✓ · ${entry.name}`
-        : savedDocuments.includes(input.name) ? "Загружено ✓ · сохранено в заявке"
+      if (status) status.textContent = entry ? `Загружено: ${entry.name}`
+        : savedDocuments.includes(input.name) ? "Документ сохранён в заявке"
         : "";
     }
   }
@@ -683,7 +899,60 @@
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
-  async function api(path, options = {}) {
+  const readCache = new Map();
+  const cachedReads = [
+    [/^\/api\/miniapp\/(?:catalog(?:\/categories)?|admin\/catalog(?:\/options)?)$/, "catalog", 30000],
+    [/^\/api\/miniapp\/(?:booking-settings|schedule|admin\/(?:booking-settings|handover-settings|notification-preferences|assignees))$/, "settings", 60000],
+    [/^\/api\/miniapp\/(?:profile\/history|admin\/(?:bookings|repairs)|customer\/next-actions)$/, "orders", 5000],
+    [/^\/api\/miniapp\/(?:support\/(?:faq|threads)|admin\/support)$/, "support", 15000],
+    [/^\/api\/miniapp\/release$/, "release", 60000],
+  ];
+
+  function invalidateReads(path) {
+    const name = path.split("?")[0].slice("/api/miniapp/".length);
+    if (/^(?:notifications\/|operator\/(?:last-section|client-mode)$|onboarding\/)/.test(name)) return;
+    let groups;
+    if (/^(?:admin\/)?catalog(?:\/|$)/.test(name)) groups = ["catalog", "orders"];
+    else if (/^(?:admin\/)?(?:bookings|repairs)(?:\/|$)/.test(name)) groups = ["orders", "catalog"];
+    else if (/^(?:admin\/)?support(?:\/|$)/.test(name)) groups = ["support", "orders"];
+    else if (/^admin\/(?:handover-settings|booking-settings|notification-preferences)$/.test(name)) groups = ["settings"];
+    else if (name === "release/seen") groups = ["release"];
+    else if (name === "cart") return;
+    else groups = ["catalog", "settings", "orders", "support"];
+    for (const [key, entry] of readCache) {
+      if (groups.includes(entry.group)) readCache.delete(key);
+    }
+  }
+
+  function api(path, {fresh = false, ...options} = {}) {
+    if ((options.method || "GET").toUpperCase() !== "GET") {
+      return requestApi(path, options).then(result => {
+        invalidateReads(path);
+        return result;
+      });
+    }
+    const rule = !options.signal && cachedReads.find(([pattern]) => pattern.test(path.split("?")[0]));
+    if (!rule) return requestApi(path, options);
+    const [, group, ttl] = rule;
+    const cached = readCache.get(path);
+    if (cached && (!cached.expires || (!fresh && cached.expires > Date.now()))) {
+      return cached.value.then(JSON.parse);
+    }
+    const entry = {group, expires:0};
+    entry.value = requestApi(path, options).then(result => {
+      entry.expires = Date.now() + ttl;
+      return JSON.stringify(result);
+    }, error => {
+      if (readCache.get(path) === entry) readCache.delete(path);
+      throw error;
+    });
+    readCache.delete(path);
+    readCache.set(path, entry);
+    if (readCache.size > 60) readCache.delete(readCache.keys().next().value);
+    return entry.value.then(JSON.parse);
+  }
+
+  async function requestApi(path, options) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),options.body instanceof FormData?120000:20000);
     let response;
     try { response = await fetch(path, {
@@ -715,15 +984,44 @@
     return body;
   }
 
+  // Coalesce rapid repeat activations of the same control without slowing counters.
+  let lastActivation = null, lastTouch = null;
+  document.addEventListener("touchend", event => {
+    const touch = event.changedTouches[0];
+    if (touch) lastTouch = {time:event.timeStamp, x:touch.clientX, y:touch.clientY};
+  }, {capture:true, passive:true});
+  document.addEventListener("click", event => {
+    if (!event.isTrusted || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const control = event.target.closest?.("button, a[href], [role=button]");
+    if (!control || control.closest(".quantity-control, .request-catalog-controls, .calendar-nav")) {
+      lastActivation = null;
+      return;
+    }
+    const key = control.id || control;
+    const touchClick = event.pointerType === "touch" || event.sourceCapabilities?.firesTouchEvents ||
+      (event.detail > 0 && lastTouch && event.timeStamp - lastTouch.time < 400 &&
+        Math.hypot(event.clientX - lastTouch.x, event.clientY - lastTouch.y) < 8);
+    const repeatedPointer = event.detail > 1 || touchClick;
+    const sameSpot = event.detail > 0 && lastActivation?.pointer &&
+      Math.hypot(event.clientX - lastActivation.x, event.clientY - lastActivation.y) < 8;
+    if (repeatedPointer && lastActivation && (lastActivation.key === key || sameSpot) && event.timeStamp - lastActivation.time < 325) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    lastActivation = {key, time:event.timeStamp, pointer:event.detail > 0, x:event.clientX, y:event.clientY};
+  }, true);
+
   function updateMainAction(total) {
-    const labels = [`В корзину · ${total}`, "Выбрать даты", "Проверить заявку", "Отправить заявку"];
+    const labels = [`В корзину (${total})`, "Выбрать даты", "Проверить заявку", "Отправить заявку"];
     $("main-button").textContent = state.busy ? (bookingSubmitting ? "Отправляем заявку…" : "Проверяем доступность…") : labels[state.step] || "Продолжить";
     $("main-button").setAttribute("aria-busy", String(state.busy));
     $("main-button").disabled = state.busy || cartLocked || (state.step === 3 && (exceedsStock() || !availabilityFresh || unavailableSelection().length > 0)) || (state.step === 2 &&
       (!$("start-date").value || !$("end-date").value || ($("start-time").value && $("end-time").value && Boolean(dateValidationMessage())))) || (!authorized && !keyboardMode && !preview);
-    $("clear-cart").hidden = !(state.view === "flow" && state.step === 0);
+    const canClear = state.view === "flow" && state.step === 0 && total > 0;
+    $("clear-cart").hidden = !canClear;
     $("clear-cart").disabled = state.busy || cartLocked || !total;
-    $("action-bar").classList.toggle("with-clear-cart", state.view === "flow" && state.step === 0);
+    $("action-bar").classList.toggle("with-clear-cart", canClear);
   }
 
   function updateCartCounters() {
@@ -762,6 +1060,7 @@
     const oldMainView = renderedMainView;
     if (state.view !== 'admin' && !$('admin-settings').hidden) {
       $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open'); $('admin-heading').textContent = 'Управление';
+      $("management-settings").hidden = true;
     }
     const mainViews = ["admin", "flow", "orders"];
     const animateMainView = mainViews.includes(state.view) && mainViews.includes(oldMainView) && state.view !== oldMainView;
@@ -795,12 +1094,20 @@
     backButton.hidden = (state.view === 'flow' && state.step === 0) || state.view === 'admin';
     backButton.disabled = bookingSubmitting || (state.view === "flow" && state.step === 0 && !clientCatalog.category);
     $("client-catalog-back").disabled = backButton.disabled;
+    $("client-catalog-back").hidden = !clientCatalog.category;
+    $("done-chat").hidden = !(location.pathname === "/miniapp" && typeof tg?.close === "function" && (authorized || keyboardMode));
+    $("done-orders").classList.toggle("primary", $("done-chat").hidden);
+    $("done-orders").classList.toggle("secondary", !$("done-chat").hidden);
     backButton.title = backButton.disabled ? "Вы на первом экране" : "Назад";
     $("booking-flow").hidden = state.view !== "flow";
     $("customer-next").hidden = state.view !== "flow" || state.step !== 0 || !$("customer-next").children.length;
     $("booking-flow").inert = cartLocked || bookingSubmitting; $("cart-sync-notice").hidden = !cartLocked;
     $("booking-flow").setAttribute("aria-busy", String(bookingSubmitting));
-    for (const id of ["tab-new", "tab-orders", "tab-admin", "floating-cart-button"]) if ($(id)) $(id).disabled = bookingSubmitting;
+    for (const id of ["tab-new", "tab-orders", "tab-admin", "floating-cart-button"]) {
+      const control = $(id);
+      if (control?.matches("a")) control.setAttribute("aria-disabled", String(bookingSubmitting));
+      else if (control) control.disabled = bookingSubmitting;
+    }
     $("booking-blocked").hidden = state.view !== "blocked";
     $("orders-panel").hidden = state.view !== "orders";
     $("identity-panel").hidden = state.view !== "identity";
@@ -808,7 +1115,7 @@
     if (animateMainView && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       const panel = $(({admin:"admin-panel", flow:"booking-flow", orders:"orders-panel"})[state.view]);
       mainViewAnimation?.cancel();
-      mainViewAnimation = panel.animate([{opacity:.72}, {opacity:1}], {duration:300, easing:"cubic-bezier(.22, 1, .36, 1)"});
+      mainViewAnimation = panel.animate([{opacity:desktopMotion.matches ? .84 : .72}, {opacity:1}], {duration:desktopMotion.matches ? 160 : 300, easing:"cubic-bezier(.22, 1, .36, 1)"});
     }
     $("tab-new").classList.toggle("active", state.view === "flow");
     $("tab-orders").classList.toggle("active", state.view === "orders");
@@ -820,7 +1127,7 @@
     if (preview) {
       try { localStorage.setItem("polyrental-preview-view", state.view); } catch (_) {}
     }
-    changeHeading($("page-title"), state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Найдём всё для вашей съёмки");
+    changeHeading($("page-title"), state.view === "admin" ? "Управление арендой" : state.view === "identity" ? "Документы для договора" : state.view === "orders" ? "Профиль" : done ? "Заявка оформлена" : "Бронирование техники");
     $("page-intro").textContent = state.view === "admin" ? "Комплектация, проверки, возврат, каталог и ремонт." : state.view === "identity" ? "Защищённая передача данных напрямую в ПолиРентал." : state.view === "orders" ? "Здесь можно следить за статусом и отменить активную заявку." : done ? "Менеджер получил запрос и скоро ответит." : "Выберите оборудование, затем укажите сроки аренды.";
     sections.forEach((id, index) => { $(id).hidden = state.view !== "flow" || state.step !== index; });
     $("step-done").hidden = state.view !== "flow" || !done;
@@ -847,7 +1154,9 @@
   }
 
   function validateDates() {
-    clearError(); applyBookingDateLimits();
+    clearError();
+    if (normalizePastBookingStart()) periodChanged();
+    applyBookingDateLimits();
     if (dateValidationMessage()) {
       for (const id of ["start", "end"]) fieldError(id, !$(`${id}-time`).value ? `Выберите время ${id === "start" ? "получения" : "возврата"}.` : "");
       if ($("start-time").value && $("end-time").value) showError(dateValidationMessage());
@@ -901,13 +1210,18 @@
     const requestKey = JSON.stringify([requestedPage, requestedQuery, requestedCategory, periodStart, periodEnd, [...state.quantities]]);
     const retainCatalog = !checkAvailability && cachedCatalogKey === requestKey;
     if (retainCatalog && renderedCatalogQuantities !== JSON.stringify([...state.quantities])) renderItems();
-    if (!retainCatalog) { $("items-grid").hidden = false; showLoading($("items-grid"), "", 3); }
+    if (!retainCatalog) {
+      const grid = $("items-grid");
+      grid.hidden = false;
+      grid.classList.toggle("items-grid-tiles", categoryIsLeaf(requestedCategory) && catalogLayout("client") === "grid");
+      showLoading(grid, checkAvailability ? "" : "Загружаем оборудование…");
+    }
     if (!retainCatalog) { $("items-status").hidden = !checkAvailability; $("items-status").textContent = checkAvailability ? "Проверяем доступность оборудования…" : ""; }
     $("retry-items").hidden = true;
     const startIso = toIso($("start").value), endIso = toIso($("end").value);
     $("period-label").innerHTML = startIso && endIso
-      ? `<span class="period-label-caption">Период аренды · МСК</span><strong class="period-label-value">${escapeHtml(`${shortRequestDateTime(startIso)} — ${shortRequestDateTime(endIso)}`)}</strong>`
-      : `<span class="period-label-caption">Период аренды · МСК</span><strong class="period-label-value">Выберите даты</strong>`;
+      ? `<span class="period-label-caption">Период аренды (МСК)</span><strong class="period-label-value">${escapeHtml(`${shortRequestDateTime(startIso)} — ${shortRequestDateTime(endIso)}`)}</strong>`
+      : `<span class="period-label-caption">Период аренды (МСК)</span><strong class="period-label-value">Выберите даты</strong>`;
     try {
       const catalogParams = new URLSearchParams({page:String(clientCatalog.page), page_size:String(clientCatalog.pageSize), q:requestedQuery, category:requestedCategory});
       for (const [id] of state.quantities) catalogParams.append("selected", String(id));
@@ -934,6 +1248,7 @@
         $("items-status").textContent = requestedQuery ? "По вашему запросу ничего не найдено." : "В каталоге пока нет оборудования.";
         const scroll = preservePosition ? {x:window.scrollX, y:window.scrollY} : null;
         renderItems();
+        if (!preservePosition) enterWorkspace($('items-status').hidden ? $('items-grid') : $('items-status'));
         if (scroll) window.scrollTo(scroll.x, scroll.y);
         return true;
       }
@@ -947,7 +1262,7 @@
       $("unavailable-list").replaceChildren();
       for (const item of data.unavailable || []) {
         const line = document.createElement("p");
-        line.textContent = `${item.name} · ${item.sku}: нет свободных единиц на выбранный период`;
+        line.textContent = `${item.name} (${item.sku}): нет свободных единиц на выбранный период`;
         $("unavailable-list").append(line);
       }
       renderItems(); return true;
@@ -964,14 +1279,19 @@
       return false;
     }
   }
+  function catalogEditorBackButton() {
+    return state.view === "admin" && state.adminMode === "catalog"
+      ? document.querySelector("#admin-panel.catalog-editing .catalog-editor-back") : null;
+  }
   function syncCatalogBackButton() {
-    const inCategory = (state.view === "flow" && state.step === 0 && clientCatalog.category) ||
-      (state.view === "admin" && state.adminMode === "catalog" && catalogView.category && !$('admin-panel').classList.contains('catalog-editing'));
+    const adminCategory = state.view === "admin" && state.adminMode === "catalog" && catalogView.category &&
+      !$('admin-panel').classList.contains('catalog-editing');
+    const inCategory = adminCategory || (state.view === "flow" && state.step === 0 && clientCatalog.category);
+    const editorBack = catalogEditorBackButton();
     const settingsOpen = state.view === 'admin' && !$('admin-settings').hidden;
-    const canGoBackInAdmin = Boolean(settingsOpen || (state.view === 'admin' && state.adminMode === 'catalog' && catalogView.category && !$('admin-panel').classList.contains('catalog-editing')));
-    $('admin-back-button').disabled = !canGoBackInAdmin;
-    $('admin-back-button').title = canGoBackInAdmin ? 'Назад' : 'Вы на главном уровне управления';
-    if ((inCategory || settingsOpen) && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden) tg?.BackButton?.show();
+    $('admin-back-button').hidden = !settingsOpen;
+    $('admin-back-button').disabled = !settingsOpen;
+    if ((inCategory || settingsOpen || editorBack) && $("support-dialog").hidden && $("onboarding-dialog").hidden && $("release-dialog").hidden) tg?.BackButton?.show();
     else tg?.BackButton?.hide();
   }
   function categoryParent(code) { return clientCatalog.categories.find(category => category.code === code)?.parent_code || ""; }
@@ -986,7 +1306,15 @@
     const wrap = document.createElement('div'); wrap.className='catalog-layout product-layout'; wrap.setAttribute('role','group'); wrap.setAttribute('aria-label','Вид товаров');
     for (const [layout,label,icon] of [['list','Список','list'],['grid','Плитка','grid']]) {
       const button=document.createElement('button'); button.type='button'; button.className='button ghost catalog-layout-icon'; button.setAttribute('aria-label',label); button.innerHTML=`<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`; button.setAttribute('aria-pressed',String(catalogLayout(kind)===layout));
-      button.addEventListener('click',()=>{ try { localStorage.setItem(`polyrental-${kind}-product-layout`,layout); } catch (_) {} host.classList.toggle(kind==='client'?'items-grid-tiles':'tiles',layout==='grid'); wrap.querySelectorAll('button').forEach(node=>node.setAttribute('aria-pressed',String(node===button))); }); wrap.append(button);
+      button.addEventListener('click', () => {
+        try { localStorage.setItem(`polyrental-${kind}-product-layout`, layout); } catch (_) {}
+        const tileClass = kind === 'client' ? 'items-grid-tiles' : 'tiles';
+        const changed = host.classList.contains(tileClass) !== (layout === 'grid');
+        host.classList.toggle(tileClass, layout === 'grid');
+        wrap.querySelectorAll('button').forEach(node => node.setAttribute('aria-pressed', String(node === button)));
+        if (changed) enterWorkspace(host);
+      });
+      wrap.append(button);
     } return wrap;
   }
   function categoryContains(code, parent) {
@@ -1036,7 +1364,6 @@
     });
   }, {passive:true});
   async function navigateClientCategory(code, origin = null) {
-    if (code) { try { localStorage.setItem(`${draftKey}:recent-category`, code); } catch (_) {} }
     viewportFocus?.cancel();
     const since = viewportFocus?.checkpoint();
     const initialScroll = {x:window.scrollX, y:window.scrollY};
@@ -1044,6 +1371,9 @@
     window.PolyRentalMotion?.cancelReflow([$("client-categories"), $("items-grid")]);
     const releaseHeight = holdCategoryHeight($("step-items"));
     const direction = code === categoryParent(clientCatalog.category) ? -1 : 1;
+    if (code && direction > 0) {
+      try { localStorage.setItem(`${draftKey}:recent-category`, code); } catch (_) {}
+    }
     if (direction > 0) categoryScrollPositions.client.set(clientCatalog.category, initialScroll.y);
     const targetScroll = direction < 0 ? (categoryScrollPositions.client.get(code) ?? initialScroll.y) : initialScroll.y;
     const token = ++categoryTransitions.client;
@@ -1064,10 +1394,24 @@
     } finally { releaseHeight(); }
   }
   function catalogBack() {
-    if (state.view === 'admin' && !$('admin-settings').hidden) { closeAdminSettings(); return true; }
-    if (state.view === "flow" && state.step === 0 && clientCatalog.category) { void navigateClientCategory(categoryParent(clientCatalog.category)); return true; }
+    if (state.view === 'admin' && !$('admin-settings').hidden) {
+      if (siteNavigation) siteNavigation.backTo(adminSiteRoute());
+      else closeAdminSettings();
+      return true;
+    }
+    const editorBack = catalogEditorBackButton();
+    if (editorBack) { editorBack.click(); return true; }
+    if (state.view === "flow" && state.step === 0 && clientCatalog.category) {
+      const parent = categoryParent(clientCatalog.category);
+      if (siteNavigation) siteNavigation.backTo(catalogSiteRoute("catalog", parent));
+      else void navigateClientCategory(parent);
+      return true;
+    }
     if (state.view === "admin" && state.adminMode === "catalog" && catalogView.category && !$('admin-panel').classList.contains('catalog-editing')) {
-      void navigateAdminCategory(categoryParent(catalogView.category)); return true;
+      const parent = categoryParent(catalogView.category);
+      if (siteNavigation) siteNavigation.backTo(catalogSiteRoute("management-catalog", parent));
+      else void navigateAdminCategory(parent);
+      return true;
     }
     return false;
   }
@@ -1097,11 +1441,18 @@
     const queryText = $("client-catalog-search").value.trim();
     let recentCode = ""; try { recentCode = localStorage.getItem(`${draftKey}:recent-category`) || ""; } catch (_) {}
     const recent = clientCatalog.categories.find(category => category.code === recentCode);
-    $("recent-category").hidden = Boolean(clientCatalog.category || queryText || !recent);
+    $("recent-category").hidden = Boolean(clientCatalog.category || queryText || !recent?.parent_code);
     $("recent-category").textContent = recent ? `Снова открыть: ${recent.name}` : "";
-    $("recent-category").onclick = () => { if (recent) void navigateClientCategory(recent.code, $("recent-category")); };
+    if (recent && siteNavigation) siteNavigation.bind($("recent-category"), catalogSiteRoute("catalog", recent.code));
+    else $("recent-category").onclick = () => { if (recent) void navigateClientCategory(recent.code, $("recent-category")); };
     const parent = clientCatalog.categories.find(c => c.code === clientCatalog.category);
     $("catalog-page-title").textContent = parent?.name || (queryText ? "Результаты поиска" : "Каталог оборудования");
+    if (siteNavigation) {
+      const titleGroup = $("catalog-page-title").parentElement;
+      if (clientCatalog.category) titleGroup.id = catalogSiteRoute("catalog", clientCatalog.category);
+      else titleGroup.removeAttribute("id");
+      titleGroup.classList.toggle("site-anchor-target", Boolean(clientCatalog.category));
+    }
     $("client-catalog-path").textContent = categoryPath(clientCatalog.category);
     $("client-catalog-search-label").textContent = parent ? `Поиск: ${parent.name}` : "Поиск по всему каталогу";
     syncCatalogBackButton();
@@ -1111,7 +1462,9 @@
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
       button.dataset.categoryCode = category.code;
-      button.addEventListener("click", () => { void navigateClientCategory(category.code, button); }); categoryHost.append(button);
+      categoryHost.append(button);
+      const link = bindSiteLink(button, catalogSiteRoute("catalog", category.code), () => { void navigateClientCategory(category.code, button); });
+      bindCategoryPhoto(link, category);
     }
     const showCategoryIndex = !clientCatalog.category && !queryText && clientCatalog.categories.length;
     $("items-grid").hidden = Boolean(showCategoryIndex);
@@ -1175,6 +1528,14 @@
     if (!calendarAvailability || day < minimumBookingDate()) return "";
     return (calendarAvailability.daily || calendarAvailability.days)?.[day] || "";
   }
+  function placeCalendarStatus(status) {
+    const anchor = $(desktopWorkspace.matches ? 'period-error' : 'range-calendar');
+    if (anchor.nextElementSibling !== status) anchor.after(status);
+  }
+  desktopWorkspace.addEventListener('change', () => {
+    const status = $('calendar-availability-status');
+    if (status) placeCalendarStatus(status);
+  });
   function queueCalendarAvailability() {
     const sequence = ++calendarSequence;
     clearTimeout(calendarTimer);
@@ -1182,7 +1543,10 @@
     if (dailyKey !== calendarAvailabilityKey) calendarAvailability = null;
     rangeCalendar?.render();
     let status = $("calendar-availability-status");
-    if (!status) { status = document.createElement("p"); status.id = "calendar-availability-status"; status.className = "supporting"; status.setAttribute("role", "status"); $("range-calendar").after(status); }
+    if (!status) {
+      status = document.createElement('p'); status.id = 'calendar-availability-status'; status.className = 'supporting';
+      status.setAttribute('role', 'status'); placeCalendarStatus(status);
+    }
     status.textContent = "";
     const startDate = $("start-date").value, endDate = $("end-date").value;
     if (!rangeCalendar || !state.quantities.size) return;
@@ -1201,6 +1565,7 @@
         calendarAvailability = data; calendarAvailabilityKey = dailyKey; rangeCalendar.render();
         const selected = startDate && endDate && bookingTimeValue("start") && bookingTimeValue("end") ? `${availabilityLabels[data.selected] || ""} на выбранный срок. ` : "";
         status.textContent = selected.trim();
+        if (selected) enterWorkspace(status);
       } catch (_) { if (sequence === calendarSequence) status.textContent = "Не удалось подсветить даты. Нажмите «Проверить заявку», чтобы повторить проверку."; }
     }, 250);
   }
@@ -1267,7 +1632,7 @@
   function renderReview() {
     const chosen = state.items.filter((item) => (state.quantities.get(item.id) || 0) > 0);
     const itemCount = chosen.reduce((sum, item) => sum + state.quantities.get(item.id), 0);
-    $("review-content").innerHTML = `<section class="review-group"><div class="review-group-head"><h3 class="review-heading">Срок аренды</h3><button type="button" class="button ghost review-edit" data-step="2" aria-label="Изменить срок аренды">Изменить</button></div>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><div class="review-group-head"><h3 class="review-heading">Оборудование · ${itemCount} шт.</h3><button type="button" class="button ghost review-edit" data-step="1" aria-label="Изменить оборудование">Изменить</button></div><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><p class="supporting">${escapeHtml(stockWarning(item.id, state.quantities.get(item.id)))}</p><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><p class="supporting">Заявка привязана к вашему Telegram. ФИО и телефон вы укажете в анкете после подтверждения.</p>`;
+    $("review-content").innerHTML = `<section class="review-group"><div class="review-group-head"><h3 class="review-heading">Срок аренды</h3><button type="button" class="button ghost review-edit" data-step="2" aria-label="Изменить срок аренды">Изменить</button></div>${reviewRow("Получение", reviewDateTime(toIso($("start").value)))}${reviewRow("Возврат", reviewDateTime(toIso($("end").value)))}</section><section class="review-group"><div class="review-group-head"><h3 class="review-heading">Оборудование (${itemCount} шт.)</h3><button type="button" class="button ghost review-edit" data-step="1" aria-label="Изменить оборудование">Изменить</button></div><ul class="review-items">${chosen.map((item) => `<li>${catalogMedia(item, "review")}<div class="review-item-main"><strong>${escapeHtml(catalogTitle(item))}</strong><span>${state.quantities.get(item.id)} шт. в заявке</span><p class="supporting">${escapeHtml(stockWarning(item.id, state.quantities.get(item.id)))}</p><div class="quantity-control"><button type="button" class="button ghost review-minus" data-id="${item.id}" aria-label="Уменьшить количество: ${escapeHtml(catalogTitle(item))}" ${itemCount === 1 ? "disabled" : ""}>−</button><strong>${state.quantities.get(item.id)}</strong><button type="button" class="button ghost review-plus" data-id="${item.id}" aria-label="Увеличить количество: ${escapeHtml(catalogTitle(item))}" ${state.quantities.get(item.id) >= quantityLimit(item.id) ? "disabled" : ""}>+</button></div></div></li>`).join("")}</ul></section><p class="supporting">Заявка привязана к вашему Telegram. ФИО и телефон вы укажете в анкете после подтверждения.</p>`;
     $("review-content").querySelectorAll(".review-edit").forEach(button => button.addEventListener("click", () => {
       if (bookingSubmitting) return;
       clearError(); state.step = Number(button.dataset.step);
@@ -1325,6 +1690,7 @@
   function back() {
     if (bookingSubmitting) return;
     clearError();
+    if (catalogEditorBackButton()) { catalogBack(); return; }
     if (state.view === "admin" && !guardStaffNavigation()) return;
     if (catalogBack()) return;
     if (state.view === "admin") return;
@@ -1343,6 +1709,11 @@
   }
 
   async function submitBooking() {
+    if ($("start").value && new Date(toIso($("start").value)).getTime() < Date.now() - 60_000 && normalizePastBookingStart()) {
+      state.step = 2;
+      periodChanged();
+      return showError("Начало обновлено до текущего времени. Проверьте срок аренды.");
+    }
     if (exceedsStock() || !availabilityFresh || unavailableSelection().length) { state.step = 2; render(); return showError("Проверьте доступность оборудования на выбранный срок."); }
     if (authorized && (cartDirty || cartSaving)) { try { await flushCart(); } catch (error) { return showError(`Не удалось сохранить подборку: ${error.message}`); } }
     if (cartLocked || state.step !== 3) return;
@@ -1415,7 +1786,7 @@
     } catch (_) { if (sequence === profileLoadSequence && state.view === "orders") { host.replaceChildren(); host.append(plainButton("Повторить загрузку обращений", () => loadProfileSupportThreads(0, sequence), "ghost")); } }
   }
 
-  async function showOrders() {
+  async function showOrders(prefetched = null) {
     if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const sequence = ++profileLoadSequence;
@@ -1438,7 +1809,7 @@
     if (preview) { $("orders-content").textContent = "В демонстрации заявок нет. Откройте Mini App через Telegram, чтобы увидеть свои заявки."; return; }
     if (!authorized) { $("orders-content").textContent = "Откройте приложение через Telegram."; return; }
     try {
-      const result = await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&sort=${encodeURIComponent(state.profileSort)}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}`);
+      const result = prefetched?.items ? prefetched : await api(`/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&sort=${encodeURIComponent(state.profileSort)}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}`);
       if (sequence !== profileLoadSequence || state.view !== "orders") return;
       const profileData = JSON.stringify(result);
       if (cachedProfileKey === profileKey && cachedProfileData === profileData) return;
@@ -1451,7 +1822,7 @@
       $("profile-pagination").hidden = pages <= 1;
       $("profile-prev").disabled = state.profilePage === 0; $("profile-next").disabled = state.profilePage >= pages - 1;
       $("profile-page").textContent = `${state.profilePage + 1} / ${pages}`;
-      if (!filtered.length) { $("orders-content").textContent = "В этой категории заявок пока нет."; return; }
+      if (!filtered.length) { $("orders-content").textContent = "В этой категории заявок пока нет."; enterWorkspace($("orders-content")); return; }
       for (const order of filtered) {
         const outer = document.createElement("article"); outer.className = "order-card customer-order-card"; outer.dataset.bookingId = String(order.id);
         const accordion = document.createElement("details"); accordion.className = "customer-order-accordion"; accordion.open = selectedCustomerOrderId === order.id;
@@ -1462,15 +1833,6 @@
         if (order.estimated_until) { const estimate = document.createElement("p"); estimate.textContent = `В обработке, ориентировочно до ${dateText(order.estimated_until)} МСК`; card.append(estimate); }
         const help = document.createElement("button"); help.type = "button"; help.className = "button secondary"; help.textContent = "Поддержка";
         help.addEventListener("click", () => openSupport("request", order.id)); card.append(help);
-        if (order.receipt_available) {
-          const receipt = document.createElement("button"); receipt.type = "button"; receipt.className = "button secondary"; receipt.textContent = "Скачать расписку";
-          receipt.addEventListener("click", async () => {
-            receipt.disabled = true;
-            try { await downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`, `receipt-${(order.human_number || "request").replace("ТС", "TS")}.docx`); }
-            catch (error) { showError(error.message); } finally { receipt.disabled = false; }
-          });
-          card.append(receipt);
-        }
         const repeat = document.createElement("button"); repeat.type = "button"; repeat.className = "button secondary"; repeat.textContent = "Повторить заявку";
         repeat.addEventListener("click", () => {
           clearError();
@@ -1491,37 +1853,36 @@
           const identity = document.createElement("button"); identity.className = "button primary"; identity.type = "button";
           identity.textContent = order.identity_status === "needs_changes" ? "Исправить данные" : "Заполнить документы";
           identity.addEventListener("click", () => openIdentity(order.id)); card.append(identity);
-        } else if (order.status === "pending" && ["required", "needs_changes"].includes(order.identity_status)) {
-          const note = document.createElement("p"); note.textContent = "Анкету можно заполнить после подтверждения заявки менеджером."; card.append(note);
-        } else if (["submitted", "verified"].includes(order.identity_status)) {
-          const note = document.createElement("p"); note.textContent = order.identity_status === "verified" ? "Документы проверены" : "Документы на проверке"; card.append(note);
         }
         if (["pending", "needs_changes", "confirmed"].includes(order.status)) {
-          const cancel = document.createElement("button"); cancel.className = "button ghost"; cancel.type = "button"; cancel.textContent = "Отменить заявку";
-          cancel.addEventListener("click", async () => {
+          card.append(plainButton("Отменить заявку", async () => {
             if (!await confirmCancel(order.human_number || "")) return;
-            cancel.disabled = true;
-            try { await api(`/api/miniapp/bookings/${order.id}/cancel`, { method: "POST" }); await showOrders(); }
-            catch (error) { showError(error.message); cancel.disabled = false; }
-          });
-          card.append(cancel);
+            await api(`/api/miniapp/bookings/${order.id}/cancel`, {method:"POST"});
+            await showOrders();
+          }, "ghost"));
         }
         const statusPanel = document.createElement('section'); statusPanel.className = 'customer-status-panel request-next-overview';
-        const statusLabel = document.createElement('h4'); statusLabel.textContent = 'Статус заявки';
-        const statusTitle = document.createElement('strong'); statusTitle.textContent = ({pending:'Заявка на проверке',needs_changes:'Нужно исправить заявку',confirmed:'Заявка подтверждена',preparing:'Заказ комплектуется',ready:'Готова к выдаче',issued:'Оборудование у вас',return_inspection:'Возврат на проверке',returned:'Аренда завершена',cancelled:'Заявка отменена',expired:'Срок удержания истёк'})[order.status] || statusNames[order.status] || 'Статус заявки';
         const statusDetail = document.createElement('p'); statusDetail.className = 'customer-status-detail';
-        statusDetail.textContent = order.status === 'pending' ? 'Ожидайте подтверждения оператора.' : order.status === 'confirmed' && order.identity_status === 'required' ? 'Заполните документы.' : order.identity_status === 'verified' && order.status === 'confirmed' ? 'Документы проверены.' : '';
-        if (order.next_action) { statusTitle.textContent=order.next_action.title; statusDetail.textContent=order.next_action.description; }
-        statusPanel.append(statusLabel,statusTitle); if (statusDetail.textContent) statusPanel.append(statusDetail);
+        statusDetail.textContent = order.change_status === 'disputed' && order.status === 'pending'
+          ? 'Вы отклонили предложенные изменения. Сотрудник рассмотрит заявку с исходными условиями.'
+          : order.next_action?.description || (order.status === 'pending' ? 'Ожидайте подтверждения оператора.' : '');
+        if (order.next_action?.return_overdue) {
+          const warning = document.createElement('strong'); warning.textContent = order.next_action.title; statusPanel.append(warning);
+        }
+        const showPickupStep = order.identity_status === 'verified' && (
+          order.status === 'preparing' || (order.status === 'ready' && order.next_action?.action !== 'support')
+        );
+        if (showPickupStep) statusPanel.append(customerPickupStep(order));
+        else if (statusDetail.textContent) statusPanel.append(statusDetail);
         const customerActions = document.createElement('details'); customerActions.className = 'request-more-actions customer-actions';
         const customerActionsTitle = document.createElement('summary'); customerActionsTitle.textContent = 'Действия с заявкой'; customerActions.append(customerActionsTitle);
-        const customerPrimaryLabels = new Set(['Внести изменения', 'Посмотреть изменения', 'Заполнить документы', 'Исправить данные', 'Сдать оборудование']);
+        const customerPrimaryLabels = new Set(['Внести изменения', 'Посмотреть изменения', 'Ваше возражение', 'Заполнить документы', 'Исправить данные', 'Сдать оборудование']);
         for (const node of [...card.childNodes]) { if (node.nodeType === 1 && (node.matches('button.primary, .stage-notice, .handover-progress, .equipment-features') || (node.tagName === 'BUTTON' && customerPrimaryLabels.has(node.textContent)))) statusPanel.append(node); else customerActions.append(node); }
         statusPanel.append(customerActions); card.append(statusPanel);
         const customerPeriod = reviewSection('Период аренды', 'request-summary'); customerPeriod.dataset.rentalStart = order.starts_at; customerPeriod.dataset.rentalEnd = order.ends_at; customerPeriod.dataset.rentalClosed = String(['returned','cancelled','expired'].includes(order.status));
         const customerDates = document.createElement('div'); customerDates.className = 'rental-period'; for (const date of [order.starts_at,order.ends_at]) { const value = document.createElement('span'); value.textContent = dateText(date); customerDates.append(value); } customerPeriod.append(customerDates); updateRentalProgress(customerPeriod); card.append(customerPeriod);
         const customerEquipment = document.createElement('details'); customerEquipment.className = 'request-section request-equipment-section'; customerEquipment.open = true;
-        const customerEquipmentTitle = document.createElement('summary'); customerEquipmentTitle.textContent = `Техника · ${order.items.length} поз.`; customerEquipment.append(customerEquipmentTitle);
+        const customerEquipmentTitle = document.createElement('summary'); customerEquipmentTitle.textContent = `Техника (${order.items.length} поз.)`; customerEquipment.append(customerEquipmentTitle);
         const customerEquipmentList = document.createElement('div'); customerEquipmentList.className = 'request-equipment';
         const itemRows = order.items.map(item => {
           const row = document.createElement("div"); row.className = "request-equipment-row";
@@ -1537,8 +1898,8 @@
           customerEquipmentList.append(row);
           return row;
         });
-        customerEquipment.append(customerEquipmentList); if (itemRows.length > 5) { const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; const update = expanded => { itemRows.forEach((row,index) => row.hidden = index >= 5 && !expanded); more.setAttribute('aria-expanded',String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${itemRows.length - 5} ▾`; }; more.addEventListener('click',() => { const expanded = more.getAttribute('aria-expanded') !== 'true'; update(expanded); if (expanded) scrollElementIntoView(customerEquipment); }); update(false); customerEquipment.append(more); } card.append(customerEquipment);
-        if (!(order.status === 'cancelled' && order.identity_status === 'not_required')) { const customerIdentity = document.createElement('section'); customerIdentity.className = 'request-section customer-identity-status'; const identityTitle = document.createElement('h4'); identityTitle.textContent = 'Анкета'; const identitySummary = document.createElement('p'); identitySummary.className = order.identity_status === 'verified' ? 'identity-verified' : 'identity-unverified'; identitySummary.textContent = identityStatusNames[order.identity_status] || 'Не заполнена'; customerIdentity.append(identityTitle,identitySummary); card.append(customerIdentity); }
+        customerEquipment.append(customerEquipmentList); if (itemRows.length > 5) { const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; const update = expanded => { itemRows.forEach((row,index) => row.hidden = index >= 5 && !expanded); more.setAttribute('aria-expanded',String(expanded)); more.textContent = expanded ? 'Свернуть список ▴' : `Показать ещё ${itemRows.length - 5} ▾`; }; more.addEventListener('click',() => { const expanded = more.getAttribute('aria-expanded') !== 'true'; update(expanded); if (expanded) scrollElementIntoView(customerEquipment); }); update(false); customerEquipment.append(more); } if (!showPickupStep) card.append(customerEquipment);
+        if (!(order.status === 'cancelled' && order.identity_status === 'not_required')) { const customerIdentity = document.createElement('section'); customerIdentity.className = 'request-section customer-identity-status'; const identityTitle = document.createElement('h4'); identityTitle.textContent = 'Анкета'; const identitySummary = document.createElement('p'); identitySummary.className = order.identity_status === 'verified' ? 'identity-verified' : 'identity-unverified'; identitySummary.textContent = order.status === 'pending' && ['required','needs_changes'].includes(order.identity_status) ? 'Доступна после подтверждения заявки' : identityStatusNames[order.identity_status] || 'Не заполнена'; customerIdentity.append(identityTitle,identitySummary); card.append(customerIdentity); }
         accordion.append(toggle, card); outer.append(accordion); $("orders-content").append(outer);
         toggle.addEventListener("click", event => {
           event.preventDefault(); const opening = !disclosureIsOpen(accordion);
@@ -1547,6 +1908,7 @@
           if (opening) showStageNotice(order);
         });
       }
+      enterWorkspace($("orders-content"));
     } catch (error) { if (sequence === profileLoadSequence && state.view === "orders") { cachedProfileKey = null; cachedProfileData = null; $("orders-content").textContent = "Не удалось загрузить заявки. "; $("orders-content").append(plainButton("Повторить", () => showOrders(), "secondary")); showError(error.message); } }
   }
 
@@ -1665,7 +2027,7 @@
           Object.assign(fields, saved.fields || {});
           state.identityReusableDocuments = saved.documents || [];
           const feedback = $("identity-feedback");
-          feedback.textContent = "Данные и фотографии из предыдущей анкеты будут подставлены после согласия. Проверьте реквизиты; новое фото заменит сохранённое. Анкета и фотографии хранятся до 90 дней после возврата оборудования.";
+          feedback.textContent = "После согласия подставим данные и фотографии из предыдущей анкеты. Проверьте их перед отправкой.";
           feedback.hidden = false;
         }
       }
@@ -1673,7 +2035,10 @@
         ? (fields.student_institution || null) : null;
       const combined = `${fields.passport_series || ""}${fields.passport_number || ""}`;
       if (combined) fields.passport_combined = `${combined.slice(0, 4)} ${combined.slice(4)}`;
-      for (const [name, value] of Object.entries(fields)) { const input = $("identity-form").elements.namedItem(name); if (input) input.value = value || ""; }
+      for (const [name, value] of Object.entries(fields)) {
+        const input = $("identity-form").elements.namedItem(name);
+        if (input) input.value = formDateNames.has(name) ? displayFormDate(value) : value || "";
+      }
       const feedback = $("identity-feedback");
       if (current.status === "needs_changes") {
         state.identityRequiredPhotos = (current.review_fields || []).filter((field) => ["passport_main", "passport_registration", "student_front"].includes(field));
@@ -1721,6 +2086,10 @@
     }
     const labels = { full_name: "ФИО", phone: "телефон для связи", birth_date: "дату рождения", passport_issued_at: "дату выдачи паспорта", passport_issuer: "кем выдан паспорт", passport_division_code: "код подразделения", registration_address: "адрес регистрации", residential_address: "адрес проживания", student_id_number: "номер студенческого", student_institution: "вуз" };
     for (const name of textFields) if (!["student_id_number", "student_institution"].includes(name) && !fields[name]) { showIdentityFieldError(name, `Укажите ${labels[name]}.`); return; }
+    for (const name of formDateNames) {
+      fields[name] = parseFormDate(fields[name]);
+      if (!fields[name]) { showIdentityFieldError(name, `Введите дату в формате ${formDatePlaceholder()}.`); return; }
+    }
     if (!/^\+?[0-9](?:[0-9 ()-]*[0-9])?$/.test(fields.phone) || fields.phone.replace(/\D/g, '').length < 10 || fields.phone.replace(/\D/g, '').length > 15) { showIdentityFieldError("phone", "Укажите телефон: от 10 до 15 цифр."); return; }
     const passportCombined = String(data.get("passport_combined") || "").replace(/\D/g, "");
     if (!/^\d{10}$/.test(passportCombined)) { showIdentityFieldError("passport_combined", "Введите 4 цифры серии паспорта и 6 цифр номера."); return; }
@@ -1737,7 +2106,7 @@
     const upload = new FormData(); upload.set("payload", JSON.stringify(fields));
     if (state.consent) { upload.set("policy_version", state.consent.version); upload.set("text_hash", state.consent.text_hash); }
     session.submitting = true;
-    button.disabled = true; button.textContent = "Шифруем и отправляем…";
+    button.disabled = true; button.textContent = "Отправляем анкету…";
     try {
       for (const name of ["passport_main", "passport_registration", "student_front"]) {
         const selected = data.get(name); const key = identityPhotoKey(name, bookingId);
@@ -1750,7 +2119,7 @@
         if (file?.size) upload.set(name, await jpegFile(file));
         if (!identitySessionCurrent(session)) return;
       }
-      const missingPhoto = !state.identityNeedsChanges && ["passport_main", "passport_registration", "student_front"].find((name) => !upload.get(name));
+      const missingPhoto = !state.identityNeedsChanges && ["passport_main", "passport_registration"].find((name) => !upload.get(name));
       if (missingPhoto) { const photoError = new Error(`Добавьте фото: ${missingPhoto === "passport_main" ? "паспорт — страница с фото" : missingPhoto === "passport_registration" ? "паспорт — страница регистрации" : "студенческий — лицевая сторона"}.`); photoError.field = missingPhoto; throw photoError; }
       await api(`/api/miniapp/bookings/${bookingId}/identity`, { method: "POST", body: upload });
       await clearIdentityPhotoDrafts(bookingId);
@@ -1784,6 +2153,7 @@
     const button = document.createElement("button"); button.type = "button"; button.className = `button compact ${className}`; button.textContent = label;
     button.setAttribute("aria-label",label);
     button.addEventListener("click", async () => {
+      if (button.disabled) return;
       const mode = state.adminMode; const scrollTop = window.scrollY; button.disabled = true; button.dataset.actionPending = "true";
       try {
         await action();
@@ -1863,7 +2233,7 @@
         row.title = `${label}. Нажмите, чтобы посмотреть изменения`;
         const marker = document.createElement("span"); marker.className = "equipment-change-marker"; marker.textContent = line.kind === "added" ? "+" : line.kind === "removed" ? "−" : "↔"; marker.setAttribute("aria-hidden", "true"); row.append(marker);
         const open = event => {
-          if (event.target.closest("button")) return;
+          if (event.target.closest("button, .catalog-photo-target")) return;
           if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
           event.preventDefault(); event.stopImmediatePropagation();
           void workflowDialog(change.status === "pending" ? "Предложенное изменение" : "Изменение товара", changeDetailsHtml({lines:[line], dates:[]}), "Закрыть");
@@ -1883,7 +2253,7 @@
     const history = card.querySelector(".request-history"); const body = history.querySelector(".request-history-body");
     const sequence = String(Number(history.dataset.sequence || 0) + 1); history.dataset.sequence = sequence;
     body.setAttribute("aria-busy", "true");
-    showLoading(body, "Загружаем историю…", 2);
+    showLoading(body, "Загружаем историю…");
     try {
       const result = await api(`/api/miniapp/admin/bookings/${order.id}/history?page=${page}&page_size=20`);
       if (!card.isConnected || !card.querySelector(".request-accordion").open || history.dataset.sequence !== sequence) return;
@@ -1894,7 +2264,7 @@
       for (const event of result.items) {
         const item = document.createElement("li"); const label = document.createElement("strong"); const meta = document.createElement("span");
         label.textContent = names[event.action] || (event.action.startsWith("support_owner:") ? `Обращение передано: ${event.target_name || "Сотрудник"}` : event.action.startsWith("assignee:") ? `Назначен ответственный: ${event.target_name || "Сотрудник"}` : event.action.startsWith("asset_deleted:") ? `Экземпляр ${event.action.split(":")[1]} удалён` : event.action.startsWith("asset_restored:") ? `Экземпляр ${event.action.split(":")[1]} восстановлен` : event.action.startsWith("line_deleted:") ? `Позиция ${event.action.split(":")[1]} удалена` : event.action.startsWith("line_restored:") ? `Позиция ${event.action.split(":")[1]} восстановлена` : event.action.startsWith("sla_") ? "Уведомление о сроке обработки" : event.action.includes("_delete_intent") ? "Запрошено удаление" : event.action.includes("_delete_undo") ? "Удаление отменено" : event.action === "request_deleted" ? "Заявка удалена" : event.action === "request_restored" ? "Заявка восстановлена" : "Служебное действие");
-        meta.textContent = `${dateText(event.created_at)} МСК · ${event.actor_name || (event.actor_id ? "Пользователь" : "Система")}`;
+        meta.textContent = `${dateText(event.created_at)} МСК, ${event.actor_name || (event.actor_id ? "Пользователь" : "Система")}`;
         item.append(label, meta);
         if (event.changes || event.changes_unavailable) {
           const details = plainButton("Что изменилось", () => workflowDialog("Изменения заявки", event.changes ? changeDetailsHtml(event.changes) : "<p>Для этого старого изменения подробности не сохранились.</p>", "Закрыть"), "ghost compact");
@@ -1925,20 +2295,22 @@
     const lease = order.operation_lease_state || order.operation_lease;
     const activeStage = ["pending", "confirmed", "preparing", "ready", "issued", "return_inspection"].includes(order.status);
     const ownership = card.querySelector(".stage-lock");
+    ownership.hidden = order.status === "needs_changes";
     ownership.classList.toggle("stage-lock-complete", !activeStage && order.status !== "needs_changes");
     if (!activeStage) ownership.classList.remove("stage-lock-expired");
-    if(order.status==="needs_changes"){ownership.textContent="Ждём ответа клиента";return;}
+    if (order.status === "needs_changes") return;
     if (!activeStage) { ownership.textContent = "Этап завершён. Закрепление не требуется."; return; }
     const expired = lease && (lease.expired || new Date(lease.expires_at).getTime() <= Date.now());
     const mine = lease?.actor_id === state.role?.id;
     const hardStage=["preparing","ready","issued","return_inspection"].includes(order.status)&&order.assignee_id;
     const otherOwner=hardStage&&order.assignee_id!==state.role?.id;
+    ownership.hidden = !lease && !otherOwner;
     ownership.classList.toggle("stage-lock-expired", Boolean(expired));
     ownership.textContent = !lease ? (order.assignee_id === state.role?.id ? "Закреплено за вами" : order.assignee_id ? "Закреплено за сотрудником" : "Ожидает сотрудника")
       : expired ? `Закрепление истекло: ${lease.actor_name || "Сотрудник"}, до ${dateText(lease.expires_at)} МСК. Этап доступен для обработки.`
       : `${mine ? "Вы обрабатываете" : "Обрабатывает"}: ${lease.actor_name || "Сотрудник"}. Закрепление до ${dateText(lease.expires_at)} МСК.`;
     if (hardStage) ownership.textContent=`${otherOwner?"Закреплено за сотрудником":"Закреплено за вами"}. ${lease ? (expired?"Мягкая блокировка истекла.":ownership.textContent) : ""}`;
-    for (const button of card.querySelectorAll(".request-actions button:not(.document-button):not(.lock-exempt)")) {
+    for (const button of card.querySelectorAll(".request-actions :is(button:not(.document-button):not(.lock-exempt), .next-step-component input)")) {
       if ((otherOwner && !button.classList.contains("handover-action")) || (lease && !expired && !mine)) {
         if (!button.dataset.lockBlocked) button.dataset.lockWasDisabled = String(button.disabled);
         button.dataset.lockBlocked = "true"; button.disabled = true;
@@ -1955,7 +2327,21 @@
   }
 
   let adminTabAnimations = [];
-  async function showAdmin(mode = "orders") {
+  let desiredAdminSection = null, savedAdminSection = null, savingAdminSection = false;
+  async function rememberAdminSection(mode) {
+    desiredAdminSection = mode;
+    if (savingAdminSection || savedAdminSection === mode) return;
+    savingAdminSection = true;
+    try {
+      while (desiredAdminSection !== savedAdminSection) {
+        const section = desiredAdminSection;
+        await api("/api/miniapp/operator/last-section", {method:"PUT", body:JSON.stringify({section})});
+        savedAdminSection = section;
+      }
+    } catch (_) { /* A later visit can retry saving the preference. */ }
+    finally { savingAdminSection = false; }
+  }
+  async function showAdmin(mode = "orders", prefetched = null) {
     if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     const changingAdminTab = state.view === "admin" && state.adminMode !== mode;
@@ -1996,22 +2382,32 @@
     if (leaseRefreshTimer) clearInterval(leaseRefreshTimer);
     closeDocumentViewer();
     clearError(); state.view = "admin"; state.adminMode = mode;
+    if (siteNavigation) $("admin-panel").querySelector(".admin-section-anchor").id = `management-${mode}`;
     if (mode !== "catalog") $("admin-content").classList.remove("catalog-category-screen");
     $("catalog-import-open").hidden = mode !== "catalog" || !["manager", "admin"].includes(state.role?.staff_role);
     $("admin-order-controls").hidden = mode !== "orders"; $("admin-queues").hidden = mode !== "orders"; $("admin-request-filter-field").hidden = mode !== "orders";
     $("admin-status-field").hidden = mode !== "orders"; $("admin-sort-field").hidden = mode !== "orders"; $("admin-pagination").hidden = true; $("admin-clear-target").hidden = mode !== "orders" || !state.adminTargetId;
     if (state.role?.id) { try { localStorage.setItem(`polyrental-admin-tab:${state.role.id}`, mode); } catch (_) {} }
-    if (state.role?.staff_role) void api("/api/miniapp/operator/last-section",{method:"PUT",body:JSON.stringify({section:mode})}).catch(()=>{});
+    if (state.role?.staff_role) void rememberAdminSection(mode);
     render();
-    document.querySelectorAll(".admin-mode").forEach((button) => { const active = button.dataset.mode === mode; button.className = `button ${active ? "secondary" : "ghost"} admin-mode`; button.setAttribute("aria-pressed", String(active)); });
+    document.querySelectorAll(".admin-mode").forEach(control => {
+      const active = control.dataset.mode === mode;
+      control.className = `button ${active ? "secondary" : "ghost"} admin-mode`;
+      if (control.matches("a")) control.setAttribute("aria-current", active ? "page" : "false");
+      else control.setAttribute("aria-pressed", String(active));
+    });
     const content = $("admin-content");
     const previousScrollY = window.scrollY;
     const since = viewportFocus?.checkpoint();
     content.style.minHeight = mode === "orders" && previousCard ? `${content.offsetHeight}px` : "";
     content.querySelectorAll(".request-card").forEach(clearRequestReview);
-    if (!content.querySelector(".request-card") || mode !== "orders") showLoading(content, "Загружаем…");
+    if (!content.querySelector(".request-card") || mode !== "orders") {
+      showLoading(content, ({orders:"Загружаем заказы…", catalog:"Загружаем каталог…", repairs:"Загружаем ремонт…", support:"Загружаем обращения…"})[mode]);
+    }
     if (changingAdminTab && !reducedMotion?.matches) for (const element of [content]) {
-      adminTabAnimations.push(element.animate([{transform:`translateX(${-adminDirection * 36}px)`,opacity:.75},{transform:'translateX(0)',opacity:1}],{duration:300,easing:'cubic-bezier(.22,1,.36,1)'}));
+      const frames = desktopMotion.matches ? [{opacity:.84}, {opacity:1}]
+        : [{transform:`translateX(${-adminDirection * 36}px)`,opacity:.75},{transform:'translateX(0)',opacity:1}];
+      adminTabAnimations.push(element.animate(frames,{duration:desktopMotion.matches ? 160 : 300,easing:'cubic-bezier(.22,1,.36,1)'}));
     }
     try {
       if (mode === "support") {
@@ -2026,7 +2422,7 @@
         return mode === "catalog" ? renderAdminCatalog(result) : renderRepairs(result);
       }
       const ordersPath = adminBookingsPath();
-      const result = await api(ordersPath);
+      const result = prefetched ?? await api(ordersPath);
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
       const ordersData = JSON.stringify(result);
       if (returningToOrders && !pendingDeletion && content.querySelector(".request-card") && ordersPath === renderedAdminOrdersPath && ordersData === renderedAdminOrdersData) {
@@ -2043,7 +2439,7 @@
       if (result.queues) {
         const select = $("admin-queue");
         select.replaceChildren(...[["all", "Все заявки"], ["review", "Нужна проверка"], ["handover", "К выдаче"], ["return", "К возврату"]].map(([key, label]) => {
-          const option = document.createElement("option"); option.value = key; option.textContent = key === "all" ? label : `${label} · ${result.queues[key]}`; return option;
+          const option = document.createElement("option"); option.value = key; option.textContent = key === "all" ? label : `${label} (${result.queues[key]})`; return option;
         }));
         select.value = state.adminQueue;
       }
@@ -2053,13 +2449,13 @@
       $("admin-prev").disabled = state.adminPage === 0; $("admin-next").disabled = state.adminPage >= pages - 1;
       $("admin-page").textContent = `${state.adminPage + 1} / ${pages}`;
       content.replaceChildren();
-      if (!result.items.length) { content.textContent = "Заказов пока нет."; return; }
+      if (!result.items.length) { content.textContent = "Заказов пока нет."; enterWorkspace(content); return; }
       deleteUndoSeconds = Number.isInteger(result.undo_seconds) ? Math.max(1, Math.min(30, result.undo_seconds)) : 5;
       const visibleOrders = result.items.filter((order) => {
         const filter = state.adminRequestFilter;
         return filter === "all" || (filter === "mine" && order.assignee_id === state.role?.id) || (filter === "unassigned" && !order.assignee_id && order.sla?.stage !== "closed") || (filter === "overdue" && order.sla?.breached) || (filter === "soon" && order.sla?.soon && !order.sla?.breached);
       });
-      if (!visibleOrders.length) { content.textContent = "Нет заявок для выбранного фильтра."; return; }
+      if (!visibleOrders.length) { content.textContent = "Нет заявок для выбранного фильтра."; enterWorkspace(content); return; }
       for (const order of visibleOrders) {
         if (pendingDeletion?.bookingId === order.id && !pendingDeletion.lineId && !pendingDeletion.assetId) continue;
         const card = document.createElement("article"); card.className = "admin-card request-card"; card.dataset.bookingId = String(order.id);
@@ -2101,7 +2497,7 @@
           const info = document.createElement("div"); info.className = "request-equipment-info";
           const label = document.createElement("span"); label.className = "request-equipment-title"; label.textContent = `${line.title || line.name}`; const qty = document.createElement("span"); qty.className = "request-equipment-quantity"; qty.textContent = String(line.quantity); qty.setAttribute("aria-label", `Количество: ${line.quantity}`); info.append(label, qty);
           const lineAssets = (order.assets || []).filter((asset) => !(pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id) && (asset.line_id === line.id || (!asset.line_id && asset.article_id === line.article_id)));
-          const assetSummary = lineAssets.map((asset) => `${asset.location ? `${asset.location} · ` : ""}№ ${asset.asset_code || asset.serial}`).join(", ");
+          const assetSummary = lineAssets.map((asset) => `№ ${asset.asset_code || asset.serial}${asset.location ? ` (${asset.location})` : ""}`).join(", ");
           const fullName = line.title && line.title !== line.name ? line.name : "";
           const extraDescription = line.description || article?.description || "";
           const mainBar = document.createElement("div"); mainBar.className = "equipment-card-main";
@@ -2133,7 +2529,7 @@
         emptyEquipment.hidden = Boolean(equipment.querySelector(".request-equipment-row")); equipment.append(emptyEquipment);
         equipment.hidden = hasInspectionCards;
         const equipmentSection = document.createElement("details"); equipmentSection.className = "request-section request-equipment-section"; equipmentSection.open = true;
-        const equipmentHeading = document.createElement("summary"); equipmentHeading.textContent = `Техника · ${equipment.querySelectorAll('.request-equipment-row').length} поз.`; equipmentSection.append(equipmentHeading, equipment);
+        const equipmentHeading = document.createElement("summary"); equipmentHeading.textContent = `Техника (${equipment.querySelectorAll('.request-equipment-row').length} поз.)`; equipmentSection.append(equipmentHeading, equipment);
         const equipmentRows = [...equipment.querySelectorAll('.request-equipment-row')];
         if (equipmentRows.length > 5) {
           const more = document.createElement('button'); more.type = 'button'; more.className = 'request-equipment-more'; more.setAttribute('aria-expanded', 'false');
@@ -2155,7 +2551,12 @@
         formSection.hidden = order.status === 'cancelled' && order.identity_status === 'not_required';
         formHeading.append(formStatus);
         formDetails.append(labelledValues([["Имя в заявке", order.customer_name], ["Контакт", order.customer_contact]]));
-        const formHint = document.createElement("p"); formHint.textContent = `Анкета: ${identityStatusNames[order.identity_status] || order.identity_status}. ${state.role?.pii_admin ? "Раскройте проверку, чтобы сверить документы и реквизиты." : "Документы и решение по анкете доступны администратору ПД."}`; formDetails.append(formHint); formHost.append(formDetails);
+        if (!state.role?.pii_admin) {
+          const formHint = document.createElement("p");
+          formHint.textContent = "Документы и решение по анкете доступны администратору ПД.";
+          formDetails.append(formHint);
+        }
+        formHost.append(formDetails);
         const actions = document.createElement("div"); actions.className = "action-row";
         const ownership = document.createElement("p"); ownership.className = "stage-lock"; ownership.setAttribute("role", "status");
         const nextStep = document.createElement("p"); nextStep.className = "request-next-step";
@@ -2168,15 +2569,20 @@
 
         const nextOverview = document.createElement("section"); nextOverview.className = "request-next-overview request-actions";
         const nextHead = document.createElement("div"); nextHead.className = "request-next-head";
-        const nextHeading = document.createElement("h4"); nextHeading.textContent = "Следующий шаг";
+        const terminal = ["returned", "cancelled", "expired"].includes(order.status);
+        const nextHeading = document.createElement("h4");
+        nextHeading.textContent = terminal ? "Обработка заявки" : "Следующий шаг";
         nextStep.textContent = nextStep.textContent.replace(/^Следующий шаг:\s*/i, '');
         if (order.status === 'pending') nextStep.textContent = 'Проверьте заявку';
         if (order.status === 'confirmed' && order.identity_status === 'verified') nextStep.textContent = 'Начните подготовку';
         if (order.status === 'preparing') nextStep.textContent = 'Проверьте экземпляры';
         if (order.status === 'confirmed' && !['submitted', 'verified', 'needs_changes'].includes(order.identity_status)) nextStep.textContent = 'Ожидаем анкету';
         nextStep.textContent = nextStep.textContent.replace(/\.+\s*$/, '').replace(/^\p{Ll}/u, letter => letter.toLocaleUpperCase('ru-RU'));
-        nextHead.append(nextHeading, ownership);
-        nextOverview.append(nextHead, nextStep);
+        const pickupStep = ['preparing', 'ready'].includes(order.status) && !state.role?.pii_only;
+        nextHead.append(...(pickupStep ? [ownership] : [nextHeading, ownership]));
+        nextOverview.append(nextHead);
+        if (pickupStep) nextOverview.append(staffPickupStep(order, transition => transitionAction(transition)(), card));
+        else if (!terminal) nextOverview.append(nextStep);
         appendHandoverProgress(nextOverview, order, true);
         body.append(nextOverview, summary, equipmentSection, formSection); formSection.append(formHost); accordion.append(toggle, body); card.append(accordion);
         const transitionAction = (next) => () => api(`/api/miniapp/admin/bookings/${order.id}/transition`, { method: "POST", body: JSON.stringify({ action: next }) });
@@ -2201,28 +2607,6 @@
           if (order.customer_change_request?.status === "pending") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент запросил изменения. Рассмотрите запрос до начала подготовки."; actions.append(note); }
           else if (order.identity_status === "verified") actions.append(actionButton("Начать подготовку", transitionAction("preparing"), order.id, "primary workflow-next"));
           else { const note = document.createElement("p"); note.className = "workflow-hint"; note.textContent = state.role?.pii_admin ? "После заполнения проверьте документы." : "После заполнения документы проверит ответственный сотрудник."; actions.append(note); }
-        }
-        if (order.status === "preparing") {
-          actions.append(actionButton("Заменить экземпляры", () => manualAssign(order), order.id, "ghost", false));
-          const ready = actionButton("Подтвердить готовность к выдаче", transitionAction("ready"), order.id, "primary workflow-next");
-          const canConfirm = () => order.assets.length > 0 && order.assets.every((asset) => inspectionFor(order, asset, "pre_issue")?.result === "pass");
-          const readinessHint = document.createElement("p"); readinessHint.className = "workflow-hint";
-          const updateReadinessHint = () => {
-            const failedCount = order.assets.filter((asset) => inspectionFor(order, asset, "pre_issue")?.result === "fail").length;
-            readinessHint.textContent = failedCount
-              ? `Неисправность отмечена у ${failedCount} экземпляр(а). Замените неисправную технику, затем повторите проверку.`
-              : "Проверьте все экземпляры, затем нажмите «Подтвердить готовность к выдаче».";
-            readinessHint.hidden = canConfirm();
-          };
-          ready.disabled = !canConfirm();
-          ready.title = ready.disabled ? "Сначала проверьте все назначенные экземпляры" : "Подтвердить готовность заказа к выдаче";
-          appendInspectionGroup(actions, order, "pre_issue", () => {
-            ready.disabled = !canConfirm();
-            ready.title = ready.disabled ? "Сначала проверьте все назначенные экземпляры" : "Подтвердить готовность заказа к выдаче";
-            updateReadinessHint();
-          });
-          updateReadinessHint(); actions.append(readinessHint);
-          actions.append(ready);
         }
         if (state.role?.pii_admin && ["submitted", "needs_changes", "verified"].includes(order.identity_status)) {
           const label = order.identity_status === 'verified' ? "Посмотреть анкету" : "Проверить анкету";
@@ -2329,6 +2713,7 @@
         window.scrollTo(0, targetScrollY);
       } else { content.style.minHeight = ""; }
       if (anchoredRequestId === selectedRequestId && focused && selectedCard) ([...selectedCard.querySelectorAll("button, summary")].find((node) => node.textContent === focused) || selectedToggle)?.focus({ preventScroll: true });
+      if (!changingAdminTab && !selectedCard) enterWorkspace(content);
     } catch (error) {
       if (sequence !== adminRenderSequence || state.view !== "admin" || state.adminMode !== mode) return;
       content.textContent = "Не удалось загрузить раздел. "; content.append(plainButton("Повторить", () => showAdmin(mode), "secondary")); showError(error.message);
@@ -2337,6 +2722,267 @@
 
   function inspectionFor(order, asset, stage) {
     return (order.inspections || []).find((item) => item.equipment_id === asset.id && item.stage === stage);
+  }
+
+  const pickupIcons = {
+    wait: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    clipboard: '<path d="M9 5H6a1 1 0 0 0-1 1v14h14V6a1 1 0 0 0-1-1h-3M9 14l2 2 4-5"/><rect x="9" y="3" width="6" height="4" rx="1"/>',
+    done: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+    arrow: '<path d="m6 9 6 6 6-6"/>',
+    partial: '<path d="M6 12h12"/>',
+    remove: '<path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/>',
+  };
+  const pickupOpenRows = new Set();
+
+  function pickupIcon(name) {
+    return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${Object.hasOwn(pickupIcons, name) ? pickupIcons[name] : `<use href="#icon-${escapeHtml(name)}"></use>`}</svg>`;
+  }
+
+  function pickupEquipmentIcon(item) {
+    const category = item.category || (/объектив|lens/i.test(item.name) ? 'optics' : /камер|camera|fx/i.test(item.name) ? 'camera' : 'generic');
+    const fallback = {camera: 'camera', optics: 'lens', light: 'light', battery: 'battery'};
+    return pickupIcon(categoryMeta[category]?.[1] || (Object.hasOwn(fallback, category) ? fallback[category] : 'equipment'));
+  }
+
+  function pickupPanel(tone, title, description) {
+    const panel = document.createElement('div');
+    panel.className = 'next-step';
+    panel.dataset.tone = tone;
+    panel.innerHTML = `<h4>Следующий шаг</h4><div class="next-step-banner"><span class="next-step-slot">${pickupIcon(tone)}</span>
+      <div><h5>${escapeHtml(title)}</h5><p>${escapeHtml(description)}</p></div></div>`;
+    return panel;
+  }
+
+  function pickupDisclosure(row, button, drawer, id, key = null) {
+    drawer.id = id;
+    button.setAttribute('aria-controls', id);
+    function setOpen(open, animate) {
+      row.classList.toggle('is-expanded', open);
+      button.setAttribute('aria-expanded', String(open));
+      settleGridDisclosure(drawer, open, animate);
+      if (key) {
+        if (open) pickupOpenRows.add(key);
+        else pickupOpenRows.delete(key);
+      }
+    }
+    setOpen(Boolean(key && pickupOpenRows.has(key)), false);
+    button.addEventListener('click', () => setOpen(button.getAttribute('aria-expanded') !== 'true', !reducedMotion?.matches));
+  }
+
+  function customerPickupStep(order) {
+    const ready = order.status === 'ready';
+    const panel = pickupPanel(ready ? 'done' : 'wait', ready ? 'Оборудование готово к выдаче' : 'Оборудование готовится к выдаче',
+      ready ? (order.next_action?.description || 'Оборудование можно забрать.') : 'Сообщим, когда можно будет забрать оборудование.');
+    if (ready) {
+      for (const text of [order.next_action?.pickup_location, order.next_action?.pickup_instructions].filter(Boolean)) {
+        const detail = document.createElement('p');
+        detail.textContent = text;
+        panel.querySelector('.next-step-banner > div').append(detail);
+      }
+    }
+    const title = document.createElement('h5');
+    title.textContent = 'Комплектация';
+    const list = document.createElement('ul');
+    list.className = 'next-step-list';
+    (order.pickup_items?.length ? order.pickup_items : order.items).forEach((item, index) => {
+      const article = {...order.article_media?.[item.id], ...item};
+      const row = document.createElement('li');
+      row.className = 'next-step-row';
+      const composition = item.composition || [];
+      const hasPreview = Boolean(article.image_data || article.image_url || article.description);
+      const expandable = composition.length || hasPreview;
+      const tag = expandable ? 'button' : 'div';
+      row.innerHTML = `<${tag} ${expandable ? 'type="button"' : ''} class="next-step-line next-step-client-row">
+        <span class="next-step-slot">${pickupEquipmentIcon(article)}</span>
+        <strong>${escapeHtml(item.title || item.name)}</strong>
+        <span class="next-step-slot" aria-label="Количество ${item.quantity}">× ${item.quantity}</span>
+        <span class="next-step-slot next-step-arrow">${expandable ? pickupIcon('arrow') : ''}</span></${tag}>`;
+      if (expandable) {
+        const drawer = document.createElement('div');
+        drawer.className = 'next-step-drawer';
+        drawer.innerHTML = `<div class="next-step-drawer-inner">${composition.length
+          ? `<ul>${composition.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul>` : ''}</div>`;
+        if (hasPreview) {
+          const preview = plainButton('Подробнее о технике', () => showEquipmentPreview(article, preview), 'ghost next-step-details-button');
+          preview.setAttribute('aria-label', `Подробнее: ${item.title || item.name}`);
+          drawer.firstElementChild.append(preview);
+        }
+        row.append(drawer);
+        pickupDisclosure(row, row.firstElementChild, drawer, `client-pickup-${order.id}-${index}`, `client-${order.id}-${index}`);
+      }
+      list.append(row);
+    });
+    panel.append(title, list);
+    return panel;
+  }
+
+  function staffPickupStep(order, transition, card) {
+    const complete = order.status === 'ready';
+    const panel = pickupPanel(complete ? 'done' : 'clipboard', complete ? 'Готовность подтверждена' : 'Проверка перед выдачей', '');
+    const banner = panel.querySelector('.next-step-banner');
+    const progressText = banner.querySelector('p');
+    progressText.className = 'inspection-progress';
+    progressText.setAttribute('role', 'status');
+    const progress = document.createElement('div');
+    progress.className = 'next-step-progress';
+    progress.setAttribute('aria-hidden', 'true');
+    progress.append(document.createElement('div'));
+    const list = document.createElement('ul');
+    list.className = 'next-step-list';
+    const warning = document.createElement('div');
+    warning.className = 'next-step-fault';
+    warning.id = `pickup-warning-${order.id}`;
+    const confirm = actionButton('Подтвердить готовность к выдаче', async () => {
+      await transition('ready');
+      await showAdmin('orders');
+      const next = document.querySelector(`.request-card[data-booking-id="${order.id}"] .next-step-banner`);
+      if (next) {
+        window.PolyRentalMotion?.enter(next);
+        const heading = next.querySelector('h5');
+        heading.tabIndex = -1;
+        focusDisclosure(heading);
+      }
+    }, order.id, 'primary next-step-confirm', false);
+    let saving = 0;
+    const assetRows = [];
+    const assets = (order.assets || []).filter(asset => !(pendingDeletion?.bookingId === order.id && pendingDeletion.assetId === asset.id));
+    const omitted = (order.handover?.exceptions || []).filter(item => !item.component && item.reason !== 'replacement').length;
+    const expected = order.lines?.length ? order.lines.reduce((count, line) => count + line.quantity, 0) - omitted : assets.length;
+    const buttonState = (button, disabled) => {
+      if (button.dataset.lockBlocked) button.dataset.lockWasDisabled = String(disabled);
+      else button.disabled = disabled;
+    };
+    const savedFor = asset => inspectionFor(order, asset, 'pre_issue');
+    const validCheck = (asset, saved) => !asset.composition_signature || !(asset.components || []).length ||
+      saved?.checklist?.__composition_signature === asset.composition_signature;
+    const failed = asset => savedFor(asset)?.result === 'fail' || (asset.condition && asset.condition !== 'available');
+    const checked = asset => !failed(asset) && savedFor(asset)?.result === 'pass' && validCheck(asset, savedFor(asset));
+    const readyToConfirm = () => assets.length > 0 && assets.length === expected && assets.every(checked);
+    const drawProgress = () => {
+      const count = complete ? assets.length : assets.filter(checked).length;
+      const total = Math.max(expected, assets.length);
+      progressText.textContent = `Проверено ${count} из ${total} ${total === 1 ? 'комплекта' : 'комплектов'}`;
+      progress.firstElementChild.style.width = total ? `${count / total * 100}%` : '0%';
+      buttonState(confirm, !readyToConfirm() || saving > 0);
+      const defects = assets.filter(failed);
+      warning.hidden = !defects.length;
+      if (defects.length) {
+        warning.innerHTML = `<strong>Подтверждение заблокировано</strong>
+          ${defects.map(asset => `<p>${escapeHtml(asset.name)}. ${escapeHtml(savedFor(asset)?.defect || 'Экземпляр недоступен для выдачи.')}</p>`).join('')}
+          <p>Замените неисправный комплект в редакторе состава и проверьте замену.</p>`;
+        confirm.setAttribute('aria-describedby', warning.id);
+      } else confirm.removeAttribute('aria-describedby');
+    };
+    if (!complete) {
+      const pencil = actionButton('Редактировать состав', () => manualAssign(order, pencil), order.id, 'secondary next-step-icon', false);
+      pencil.title = 'Редактировать состав';
+      pencil.innerHTML = pickupIcon('pencil');
+      banner.append(pencil);
+      panel.append(progress);
+    }
+    for (const asset of assets) {
+      const article = order.article_media?.[asset.article_id];
+      const identifier = asset.asset_code || asset.inventory_code || asset.serial;
+      const name = asset.title || article?.title || asset.name;
+      const nameWithNumber = identifier ? `${name}, № ${identifier}` : name;
+      const row = document.createElement('li');
+      row.className = 'next-step-row inspection-row';
+      row.dataset.equipmentId = String(asset.id);
+      row.innerHTML = `<div class="next-step-line next-step-staff-row">
+          <span class="next-step-slot">${pickupEquipmentIcon({...article, name, category: asset.category || article?.category})}</span>
+          <div><strong class="inspection-unit-name">${escapeHtml(nameWithNumber)}</strong><span class="next-step-row-fault" hidden>Неисправность</span></div>
+          <button type="button" class="button secondary next-step-icon next-step-mark" role="checkbox"></button>
+          <button type="button" class="button ghost next-step-icon next-step-arrow lock-exempt" aria-label="Комплектующие: ${escapeHtml(nameWithNumber)}">${pickupIcon('arrow')}</button></div>
+        <div class="next-step-drawer"><div class="next-step-drawer-inner"></div></div>`;
+      const mark = row.querySelector('.next-step-mark');
+      mark.setAttribute('aria-label', `Проверка комплекта: ${nameWithNumber}`);
+      const drawer = row.querySelector('.next-step-drawer');
+      const content = drawer.firstElementChild;
+      const current = asset.components || [];
+      const checkable = [];
+      current.forEach((component, index) => {
+        const label = document.createElement('label');
+        label.className = 'next-step-component';
+        const name = component.replacement_name || component.name;
+        if (['missing', 'faulty'].includes(component.state)) {
+          label.textContent = `${name} (не выдаётся)`;
+        } else {
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.addEventListener('change', () => save(false, input));
+          label.append(input, document.createTextNode(name));
+          checkable.push({index, input});
+        }
+        content.append(label);
+      });
+      if (!current.length) {
+        const text = document.createElement('p');
+        text.textContent = 'Отдельные комплектующие не указаны.';
+        content.append(text);
+      }
+      if (!complete && !state.role?.pii_only) {
+        const defect = plainButton(failed(asset) ? 'Изменить неисправность' : 'Отметить неисправность',
+          () => openInspection(order, asset, 'pre_issue', savedFor(asset), row), 'ghost next-step-defect');
+        content.append(defect);
+      }
+      pickupDisclosure(row, row.querySelector('.next-step-arrow'), drawer, `staff-pickup-${order.id}-${asset.id}`, `staff-${order.id}-${asset.id}`);
+      let rowSaving = false;
+      function refresh(animate = false) {
+        const saved = savedFor(asset);
+        const availableCheck = validCheck(asset, saved);
+        for (const {index, input} of checkable) {
+          input.checked = complete || (availableCheck && Boolean(saved?.checklist?.[`component:${index}`] ?? (saved?.result === 'pass')));
+          buttonState(input, complete || failed(asset) || rowSaving);
+        }
+        const status = complete || checked(asset) ? 'true' : checkable.some(({input}) => input.checked) && !failed(asset) ? 'mixed' : 'false';
+        if (mark.getAttribute('aria-checked') !== status) {
+          mark.setAttribute('aria-checked', status);
+          mark.innerHTML = status === 'true' ? pickupIcon('check') : status === 'mixed' ? pickupIcon('partial') : '';
+          if (animate) window.PolyRentalMotion?.enter(mark.firstElementChild);
+        }
+        row.querySelector('.next-step-row-fault').hidden = complete || !failed(asset);
+        buttonState(mark, complete || failed(asset) || rowSaving);
+      }
+      async function save(whole, source) {
+        if (rowSaving || complete || failed(asset) || source.dataset.lockBlocked) return;
+        const all = mark.getAttribute('aria-checked') !== 'true';
+        const checklist = Object.fromEntries(checkable.map(({index, input}) => [`component:${index}`, whole ? all : input.checked]));
+        const result = (whole ? all : Object.values(checklist).every(Boolean)) ? 'pass' : 'partial';
+        rowSaving = true;
+        saving++;
+        refresh();
+        drawProgress();
+        const update = { equipment_id: asset.id, stage: 'pre_issue', result, checklist, composition_signature: asset.composition_signature };
+        try {
+          const response = await api(`/api/miniapp/admin/bookings/${order.id}/inspection`, { method:'POST', body:JSON.stringify(update) });
+          const inspections = (order.inspections || []).filter(item => item.equipment_id !== asset.id || item.stage !== 'pre_issue');
+          order.inspections = [...inspections, {...update, checklist: {...checklist, __composition_signature: asset.composition_signature}}];
+          if (response.operation_lease_state && card.isConnected) {
+            order.operation_lease_state = response.operation_lease_state;
+            updateRequestLease(order, card);
+          }
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          rowSaving = false;
+          saving--;
+          refresh(true);
+          drawProgress();
+          if (card.isConnected && (document.activeElement === document.body || document.activeElement === source) && !source.disabled) focusDisclosure(source);
+        }
+      }
+      mark.addEventListener('click', () => save(true, mark));
+      refresh();
+      assetRows.push(row);
+    }
+    list.append(...assetRows);
+    panel.append(list);
+    if (!complete) {
+      panel.append(warning, confirm);
+      if (!assets.length) panel.append(Object.assign(document.createElement('p'), {textContent: 'Добавьте экземпляры в редакторе состава.'}));
+    }
+    drawProgress();
+    return panel;
   }
 
   function appendInspectionGroup(actions, order, stage, onInspectionChange = () => {}) {
@@ -2373,7 +3019,7 @@
       const name = document.createElement("strong"); name.className = "inspection-unit-name";
       const assetIdentifier = asset.asset_code || asset.inventory_code || asset.serial;
       const shortTitle = asset.title || article?.title || asset.name;
-      name.textContent = assetIdentifier ? `${shortTitle} · № ${assetIdentifier}` : `${shortTitle} · без номера`;
+      name.textContent = assetIdentifier ? `${shortTitle} № ${assetIdentifier}` : `${shortTitle} (без номера)`;
       const status = document.createElement("span"); status.className = `inspection-state${saved ? " checked" : ""}`;
       status.textContent = saved ? (saved.result === "pass" ? "Исправно" : "Зафиксирована неисправность") : "Ожидает проверки";
       topLine.append(name, status);
@@ -2405,12 +3051,12 @@
       }
       if (asset.location || asset.serial) {
         const meta = document.createElement("small"); meta.className = "inspection-unit-meta";
-        meta.textContent = [asset.location || "Без ячейки", asset.serial ? `S/N ${asset.serial}` : ""].filter(Boolean).join(" · ");
+        meta.textContent = [asset.location || "Без ячейки", asset.serial ? `S/N ${asset.serial}` : ""].filter(Boolean).join(", ");
         drawerInner.append(meta);
       }
       if (asset.components?.length) {
         const list=document.createElement("ul"); list.className = "inspection-components";
-        for (const component of asset.components) { const item=document.createElement("li"); item.textContent=(component.replacement_name || component.name)+(component.state==="missing"||component.state==="faulty"?" · не выдано":component.state==="replacement"?" · замена":""); list.append(item); }
+        for (const component of asset.components) { const item=document.createElement("li"); item.textContent=(component.replacement_name || component.name)+(component.state==="missing"||component.state==="faulty"?" (не выдано)":component.state==="replacement"?" (замена)":""); list.append(item); }
         drawerInner.append(list);
       }
       drawer.append(drawerInner);
@@ -2471,7 +3117,7 @@
     const personal = reviewSection("Личные данные", "review-personal-data");
     personal.append(labelledValues([["ФИО", masked.full_name || order.customer_name], ["Контакт", order.customer_contact]]));
     const documentSection = reviewSection("Документ", "review-document-data");
-    documentSection.append(labelledValues([["Тип документа", "Паспорт РФ и студенческий билет"], ["Номер паспорта · скрыт", masked.passport || "Скрыт до раскрытия реквизитов"], ["Номер студенческого · скрыт", masked.student_id || "Скрыт до раскрытия реквизитов"]]));
+    documentSection.append(labelledValues([["Тип документа", "Паспорт РФ и студенческий билет"], ["Номер паспорта (скрыт)", masked.passport || "Скрыт до раскрытия реквизитов"], ["Номер студенческого (скрыт)", masked.student_id || "Скрыт до раскрытия реквизитов"]]));
     const reveal = actionButton("Раскрыть реквизиты", async () => {
       const full = await api(`/api/miniapp/admin/bookings/${bookingId}/identity/reveal`, { method: "POST" });
       if (!isCurrent() || !card.isConnected) return;
@@ -2500,7 +3146,7 @@
         scrollElementIntoView(refreshed);
       }
     }, bookingId, "primary lock-exempt", false);
-    const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId), bookingId, "ghost lock-exempt");
+    const changes = actionButton("Отклонить / исправить", () => requestIdentityChanges(bookingId, documentKinds), bookingId, "ghost lock-exempt");
     const canReview = ["confirmed", "preparing", "ready"].includes(order.status) && ["submitted", "needs_changes", "verified"].includes(order.identity_status);
     approve.disabled = changes.disabled = !canReview;
     actions.append(approve);
@@ -2529,7 +3175,7 @@
     card.focus({preventScroll:true}); scrollElementIntoView(card);
   }
 
-  function requestIdentityChanges(bookingId) {
+  function requestIdentityChanges(bookingId, documentKinds) {
     const dialog = $("identity-review-dialog");
     const form = $("identity-review-form");
     const fields = [
@@ -2542,6 +3188,7 @@
     ];
     const choices = $("identity-review-fields"); choices.replaceChildren();
     for (const [value, label] of fields) {
+      if (value === "student_front" && !documentKinds.includes(value)) continue;
       const row = document.createElement("label"); row.className = "check-row review-field-option";
       const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.name = "fields"; checkbox.value = value;
       const text = document.createElement("span"); text.textContent = label;
@@ -2577,18 +3224,29 @@
   async function downloadSecure(path, filename) {
     const version = String(tg?.version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
     const supportsNativeDownload = typeof tg?.downloadFile === "function" && (version[0] > 8 || (version[0] === 8 && version[1] >= 0));
-    if (supportsNativeDownload) {
+    if (!siteProfile && authorized && (supportsNativeDownload || typeof tg?.openLink === "function")) {
       try {
         const ticket = await api(`${path}/download-link`, { method: "POST" });
-        tg.downloadFile({ url: ticket.url, file_name: ticket.file_name || filename });
-        return;
-      } catch (_) { /* Older or customized clients may expose but not implement downloadFile. */ }
+        if (supportsNativeDownload) {
+          try {
+            tg.downloadFile({ url: ticket.url, file_name: ticket.file_name || filename });
+            return;
+          } catch (_) { /* Some Telegram builds expose this method without a native handler. */ }
+        }
+        if (typeof tg.openLink === "function") {
+          tg.openLink(ticket.url);
+          return;
+        }
+      } catch (_) { /* Authenticated browser download is available as a fallback. */ }
     }
     const response = await fetch(path, { headers: { "X-Telegram-Init-Data": tg?.initData || "" }, cache: "no-store" });
     if (!response.ok) { let detail = "Не удалось скачать документ"; try { detail = (await response.json()).detail || detail; } catch (_) {} throw new Error(detail); }
     const disposition = response.headers.get("Content-Disposition") || "";
     filename = /filename="([^"]+)"/.exec(disposition)?.[1] || filename;
-    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a");
+    downloadBlob(await response.blob(), filename);
+  }
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob); const link = document.createElement("a");
     link.href = url; link.download = filename; link.style.display = "none"; document.body.append(link); link.click(); link.remove();
     // iOS Telegram may start reading the file after the click handler returns.
     // Revoking immediately can leave its document preview on a black screen.
@@ -2608,9 +3266,7 @@
     }
     const response = await fetch(path, { cache: "no-store" });
     if (!response.ok) throw new Error("Не удалось скачать шаблон CSV");
-    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a");
-    link.href = url; link.download = filename; link.style.display = "none"; document.body.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    downloadBlob(await response.blob(), filename);
   }
 
   let documentViewerUrl = "";
@@ -2695,7 +3351,11 @@
     else {
       const content = $("admin-content");
       content.querySelector(".admin-categories")?.replaceChildren();
-      const items = content.querySelector(".admin-catalog-items"); if (items) showLoading(items, "Загружаем…");
+      const items = content.querySelector(".admin-catalog-items");
+      if (items) {
+        items.classList.toggle("tiles", categoryIsLeaf(code) && catalogLayout("admin") === "grid");
+        showLoading(items, "Загружаем оборудование…");
+      }
       window.scrollTo(initialScroll.x, initialScroll.y);
       window.PolyRentalMotion?.transitionCategoryView(snapshot, $("admin-catalog-level"), backwards ? -1 : 1);
       await reloadCatalogPage(false, true);
@@ -2724,9 +3384,25 @@
       if (page > 0 && page * (result.page_size || 20) >= result.total) { catalogView.page = Math.max(0, Math.ceil(result.total / (result.page_size || 20)) - 1); return reloadCatalogPage(preserveSearch); }
       const scroll = preservePosition ? {x:window.scrollX, y:window.scrollY} : null;
       renderAdminCatalog(result);
+      if (!preservePosition) enterWorkspace($("admin-content").querySelector('.admin-catalog-items'));
       if (scroll) window.scrollTo(scroll.x, scroll.y);
       if (selection) { const search = $("admin-content").querySelector(".catalog-controls input"); search?.focus({preventScroll:true}); if (selection[0] != null && selection[1] != null) search?.setSelectionRange(selection[0], selection[1], selection[2] || "none"); }
-    } catch (error) { if (sequence === catalogView.sequence) showError(`Не удалось загрузить каталог: ${error.message}`); }
+    } catch (error) {
+      if (sequence !== catalogView.sequence || state.view !== "admin" || state.adminMode !== "catalog") return;
+      const items = $("admin-content").querySelector(".admin-catalog-items:has(.catalog-skeleton-card)");
+      const message = `Не удалось загрузить каталог: ${error.message}`;
+      if (!items) { showError(message); return; }
+      const recovery = document.createElement("div");
+      recovery.className = "catalog-loading-retry";
+      const notice = document.createElement("p");
+      notice.setAttribute("role", "alert");
+      notice.textContent = message;
+      recovery.append(notice, plainButton("Повторить загрузку", async () => {
+        showLoading(items, "Загружаем оборудование…");
+        await reloadCatalogPage(false, preservePosition);
+      }));
+      items.replaceChildren(recovery);
+    }
   }
 
   $("catalog-import-open").addEventListener("click", async () => {
@@ -2760,10 +3436,12 @@
     if (editor) {
       const form = catalogEditor(result, editor);
       content.append(form);
+      syncCatalogBackButton();
       const heading = form.querySelector("h3"); heading.tabIndex = -1;
       heading.focus({preventScroll:true}); scrollElementIntoView(form);
       return;
     }
+    syncCatalogBackButton();
     const canManageItems = ["manager", "admin"].includes(state.role?.staff_role);
     const operations = document.createElement("section"); operations.className = "catalog-operations"; operations.hidden = !canManageItems;
     const operationsTitle = document.createElement("h3"); operationsTitle.textContent = "Состав комплектов";
@@ -2807,9 +3485,12 @@
         const parent = result.articles.find((article) => article.id === item.parent_article_id);
         const child = result.articles.find((article) => article.id === item.child_article_id);
         const row = document.createElement("div"); row.className = "dependency-row";
-        row.innerHTML = `<span><strong>${escapeHtml(parent?.name || item.parent_name || item.parent_article_id)}</strong> → ${escapeHtml(child?.name || item.child_name || item.child_article_id)} × ${item.quantity} · справочная связь</span>`;
+        row.innerHTML = `<span><strong>${escapeHtml(parent?.name || item.parent_name || item.parent_article_id)}</strong> → ${escapeHtml(child?.name || item.child_name || item.child_article_id)} × ${item.quantity} (справочная связь)</span>`;
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "button ghost compact danger"; remove.textContent = "Удалить";
-        remove.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/catalog/dependencies/${item.parent_article_id}/${item.child_article_id}`, { method: "DELETE" }); await showAdmin("catalog"); } catch (error) { showError(error.message); } });
+        remove.addEventListener("click", () => runButton(remove, async () => {
+          await api(`/api/miniapp/admin/catalog/dependencies/${item.parent_article_id}/${item.child_article_id}`, {method:"DELETE"});
+          await showAdmin("catalog");
+        }));
         row.append(remove); list.append(row);
       }
       operations.append(dependencies);
@@ -2823,23 +3504,24 @@
       const button = document.createElement("button"); button.type = "button"; button.className = "category-card";
       button.innerHTML = `<span class="category-card-icon">${categoryVisual(category)}</span><span class="category-card-name">${escapeHtml(category.name)}</span><span class="category-card-arrow" aria-hidden="true">›</span>`;
       button.dataset.categoryCode = category.code;
-      button.addEventListener("click", () => selectCategory(category.code, button));
-      if (!catalogView.editingCategories) { categoryHost.append(button); continue; }
-      const tile = document.createElement("div"); tile.className = "category-edit-tile"; tile.append(button);
+      categoryHost.append(button);
+      const link = bindSiteLink(button, catalogSiteRoute("management-catalog", category.code), () => selectCategory(category.code, button));
+      bindCategoryPhoto(link, category);
+      if (!catalogView.editingCategories) continue;
+      const tile = document.createElement("div"); tile.className = "category-edit-tile"; tile.append(link);
       const edit = document.createElement("button"); edit.type = "button"; edit.className = "category-edit";
       edit.setAttribute("aria-label", `Изменить категорию: ${category.name}`); edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-pencil"></use></svg>';
-      edit.addEventListener("click", async () => { clearError(); try { await editCategoryDialog(category); } catch (error) { showError(error.message); } });
+      edit.addEventListener("click", () => runButton(edit, async () => { clearError(); await editCategoryDialog(category); }));
       tile.append(edit);
       if (category.code !== "generic") {
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "category-delete";
         remove.setAttribute("aria-label", `Удалить категорию: ${category.name}`); remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>';
-        remove.addEventListener("click", async () => {
+        remove.addEventListener("click", () => runButton(remove, async () => {
           clearError();
           if (!window.confirm(`Удалить категорию «${category.name}»?`)) return;
-          remove.disabled = true;
-          try { await api(`/api/miniapp/admin/catalog/categories/${encodeURIComponent(category.code)}`, {method:"DELETE"}); await showAdmin("catalog"); }
-          catch (error) { remove.disabled = false; showError(error.message); }
-        });
+          await api(`/api/miniapp/admin/catalog/categories/${encodeURIComponent(category.code)}`, {method:"DELETE"});
+          await showAdmin("catalog");
+        }));
         tile.append(remove);
       }
       categoryHost.append(tile);
@@ -2847,13 +3529,20 @@
     if (catalogView.editingCategories && !catalogView.query.trim()) {
       const addCategory = document.createElement("button"); addCategory.type = "button"; addCategory.className = "category-card category-add";
       addCategory.setAttribute("aria-label", "Создать категорию"); addCategory.innerHTML = '<span aria-hidden="true">+</span>';
-      addCategory.addEventListener("click", async () => { clearError(); try { if (await createCategoryDialog(catalogView.category)) await showAdmin("catalog"); } catch (error) { showError(error.message); } });
+      addCategory.addEventListener("click", () => runButton(addCategory, async () => {
+        clearError();
+        if (await createCategoryDialog(catalogView.category)) await showAdmin("catalog");
+      }));
       categoryHost.append(addCategory);
     }
     const categoryHeading = document.createElement("h3"); categoryHeading.id = "admin-catalog-heading"; categoryHeading.tabIndex = -1; categoryHeading.className = "catalog-screen-heading";
     categoryHeading.textContent = currentCategory?.name || (catalogView.query.trim() ? "Результаты поиска" : "Каталог оборудования");
     const categoryHeadingRow = document.createElement("div"); categoryHeadingRow.className = "catalog-heading-row";
-    const backButton = document.createElement('button'); backButton.type='button'; backButton.className='catalog-search-back'; backButton.setAttribute('aria-label','Назад'); backButton.innerHTML='<svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>'; backButton.disabled = !catalogView.category; backButton.addEventListener('click',back);
+    if (siteNavigation && catalogView.category) {
+      categoryHeadingRow.id = catalogSiteRoute("management-catalog", catalogView.category);
+      categoryHeadingRow.classList.add("site-anchor-target");
+    }
+    const backButton = document.createElement('button'); backButton.type='button'; backButton.className='catalog-search-back'; backButton.setAttribute('aria-label','Назад'); backButton.innerHTML='<svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>'; backButton.hidden = !catalogView.category; backButton.addEventListener('click',back);
     const manageCategories = plainButton("", () => {
       catalogView.editingCategories = !catalogView.editingCategories;
       if (catalogView.query.trim()) { catalogView.query = ""; catalogView.page = 0; if (result.page != null) { void reloadCatalogPage(); return; } }
@@ -2882,14 +3571,43 @@
     if (emptyCategory && !catalogView.editingCategories) categoryEmptyOverlay(articleGrid);
     for (const article of (categoryIndex ? [] : visibleArticles)) {
       const card = document.createElement("article"); card.className = `admin-card article-card${article.active ? "" : " inactive"}`;
-      const availableCount = article.equipment.filter((asset) => asset.condition === "available").length;
-      card.innerHTML = `<div class="article-card-head">${catalogMedia(article, "article")}<div class="article-main"><h3>${escapeHtml(catalogTitle(article))}</h3><p class="article-type">${escapeHtml(categoryLabel(article.category))}</p><button type="button" class="button ghost compact article-toggle" aria-expanded="${catalogView.expanded.has(article.id)}">${catalogView.expanded.has(article.id) ? "Скрыть" : "Подробнее"}</button></div><div class="article-head-actions"><span class="article-count" aria-label="Всего экземпляров: ${article.equipment.length}">${article.equipment.length} шт.</span></div></div><div class="article-collapse"><div class="article-collapse-inner"><details class="article-details"><summary>Параметры модели и комплектация</summary><p>${escapeHtml(article.name)}</p><p>Артикул: ${escapeHtml(article.sku)}</p><p class="composition-text">Комплектация: ${escapeHtml(article.composition || "не указана")}</p></details><div class="equipment-list"></div></div></div>`;
+      const matchingAssets = catalogView.status === "all" ? article.equipment : article.equipment.filter(asset => asset.condition === catalogView.status);
+      const count = assetCountLabel(matchingAssets.length);
+      const headingId = `catalog-article-${article.id}`;
+      card.setAttribute("aria-labelledby", headingId);
+      card.innerHTML = `
+        <div class="article-card-head">
+          ${catalogMedia(article, "article")}
+          <div class="article-main">
+            <h3 id="${headingId}">${escapeHtml(catalogTitle(article))}</h3>
+            <p class="article-type">${escapeHtml(article.key_spec || categoryLabel(article.category))}</p>
+            <p class="article-sku">Артикул ${escapeHtml(article.sku)}</p>
+            ${article.active === false ? '<p class="article-hidden-label">Скрыт от клиентов</p>' : ""}
+            <p class="article-count">${count}</p>
+          </div>
+          <div class="article-head-actions">
+            <button type="button" class="button ghost compact article-toggle" aria-controls="${headingId}-assets">
+              <span class="article-list-count">${count}</span><span class="article-tile-toggle">Экземпляры</span>
+            </button>
+          </div>
+        </div>
+        <div class="article-collapse" id="${headingId}-assets">
+          <div class="article-collapse-inner">
+            <div class="article-collapse-content">
+              <div class="equipment-list"></div>
+              <details class="article-details"><summary>Комплектация</summary>
+                ${article.description ? `<p>${escapeHtml(article.description)}</p>` : ""}
+                <p class="composition-text">${escapeHtml(article.composition || "Комплектация не указана.")}</p>
+              </details>
+            </div>
+          </div>
+        </div>`;
       const collapse = card.querySelector(".article-collapse");
       const header = card.querySelector(".article-card-head");
       const toggle = card.querySelector(".article-toggle");
       const setExpanded = (expanded, animate) => {
         collapse.classList.toggle("is-open", expanded);
-        toggle.setAttribute("aria-expanded", String(expanded)); toggle.textContent = expanded ? "Скрыть" : "Подробнее";
+        toggle.setAttribute("aria-expanded", String(expanded));
         if (expanded) catalogView.expanded.add(article.id); else catalogView.expanded.delete(article.id);
         return settleGridDisclosure(collapse, expanded, animate);
       };
@@ -2903,6 +3621,7 @@
       header.addEventListener("click", event => {
         if (!event.target.closest("button, a, input, select, textarea, summary")) toggleDetails();
       });
+      const cardActions = document.createElement("div"); cardActions.className = "action-row";
       if (canManageItems && article.equipment.length) {
         const occupancy = plainButton("Занятость вне сервиса", async () => {
           if (!guardStaffNavigation()) return;
@@ -2912,37 +3631,26 @@
           const data = await workflowDialog("Выберите экземпляр", `<label class="field"><span>Экземпляр оборудования</span><select name="equipment" required>${options}</select></label>`, "Открыть занятость");
           if (data) await externalOccupancyDialog(assets.find(asset => String(asset.id) === data.get("equipment")));
         }, "secondary compact article-occupancy");
-        const actions = document.createElement("div");
-        actions.className = "article-summary-actions";
-        toggle.before(actions);
-        actions.append(toggle, occupancy);
+        cardActions.append(occupancy);
       }
-      const cardActions = document.createElement("div"); cardActions.className = "action-row";
-      const editArticle = document.createElement("button"); editArticle.type = "button"; editArticle.className = "button ghost compact icon-action"; editArticle.textContent = "✎"; editArticle.setAttribute("aria-label", `Изменить артикул: ${article.name}`); editArticle.title = "Изменить артикул";
-      editArticle.addEventListener("click", () => renderAdminCatalog(result, { type: "article", value: article }));
-      editArticle.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-pencil"></use></svg>';
+      const editArticle = plainButton("Изменить", () => renderAdminCatalog(result, {
+        type:"article", value:article, returnScroll:{x:window.scrollX, y:window.scrollY},
+      }), "ghost compact article-edit");
+      editArticle.dataset.editArticleId = article.id;
+      editArticle.setAttribute("aria-label", `Изменить артикул: ${article.name}`);
+      editArticle.innerHTML = 'Изменить<span class="article-tile-edit"> артикул</span>';
       const addAsset = document.createElement("button"); addAsset.type = "button"; addAsset.className = "button secondary compact"; addAsset.textContent = "Добавить экземпляр";
       addAsset.addEventListener("click", () => renderAdminCatalog(result, { type: "equipment", value: { article_id: article.id, condition: "available" } }));
       const photo=plainButton(article.image_data ? "Заменить фото модели" : "Загрузить фото модели",async()=>{
         let savedPhoto;
-        const data=await workflowDialog("Фото модели оборудования",'<label class="field"><span>Выберите изображение с устройства</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label><img class="catalog-upload-preview" alt="Предпросмотр выбранного фото" hidden><p class="supporting">JPEG, PNG или WebP. Изображение будет уменьшено и сохранено в WebP.</p><p class="photo-save-status" role="status"><span class="photo-spinner" aria-hidden="true"></span>Подготовка и загрузка фото…</p>',"Сохранить", dialog => {
+        const data=await workflowDialog("Фото модели оборудования",'<label class="field"><span>Выберите изображение с устройства</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label><img class="catalog-upload-preview" alt="Предпросмотр выбранного фото" hidden><p class="supporting">JPEG, PNG или WebP. Изображение будет уменьшено и сохранено в WebP.</p><p class="photo-save-status" role="status"><span class="loading-spinner photo-spinner" aria-hidden="true"></span>Подготовка и загрузка фото…</p>',"Сохранить", dialog => {
           dialog.classList.add("catalog-photo-dialog");
           const input = dialog.querySelector('input[name="photo"]'), preview = dialog.querySelector('.catalog-upload-preview');
+          bindCatalogPhoto(preview, article.name);
           input.addEventListener('change', () => { if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url); const file = input.files?.[0]; preview.hidden = !file; if (file) { preview.dataset.url = URL.createObjectURL(file); preview.src = preview.dataset.url; } });
         }, async data => {
-          const file = data.get('photo');
-          if (!(file instanceof File) || !file.size) throw new Error('Выберите изображение.');
-          let bitmap;
-          try { bitmap = await createImageBitmap(file); } catch (_) { throw new Error('Не удалось открыть изображение. Выберите JPEG, PNG или WebP.'); }
-          try {
-            const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
-            const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .88));
-            if (!blob) throw new Error('Не удалось подготовить изображение.');
-            const upload = new FormData(); upload.set('photo', new File([blob], `photo.${({'image/webp':'webp','image/png':'png','image/jpeg':'jpg'})[blob.type] || 'png'}`, {type:blob.type}));
-            savedPhoto = await api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`, {method:'PUT', body:upload});
-          } finally { bitmap.close(); }
+          const upload = await prepareCatalogPhoto(data.get("photo"));
+          savedPhoto = await api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`, {method:"PUT", body:upload});
         });
         if(data) {
           if (savedPhoto?.image_data) { article.image_data = savedPhoto.image_data; renderAdminCatalog(result); }
@@ -2972,18 +3680,22 @@
       if(canManageItems && article.image_data)cardActions.append(plainButton("Удалить фото модели",async()=>{
         if(await workflowDialog("Удалить фото модели",'<p>Удалить загруженное фото этой модели?</p>',"Удалить",null,async()=>api(`/api/miniapp/admin/catalog/articles/${article.id}/photo`,{method:"DELETE"})))await showAdmin("catalog");
       }));
-      card.querySelector(".article-collapse-inner").append(cardActions);
+      card.querySelector(".article-collapse-content").append(cardActions);
       const equipmentList = card.querySelector(".equipment-list");
-      const matchingAssets = catalogView.status === "all" ? article.equipment : article.equipment.filter((asset) => asset.condition === catalogView.status);
       if (!matchingAssets.length) equipmentList.textContent = "Нет экземпляров с выбранным состоянием.";
       for (const asset of matchingAssets) {
         const row = document.createElement("div"); row.className = `equipment-row condition-${asset.condition}`;
         const blocks = asset.external_blocks || [];
         const currentBlocks = blocks.filter(block => Date.parse(block.start) <= Date.now() && Date.parse(block.end) > Date.now());
-        row.innerHTML = `<div class="equipment-main"><strong>S/N ${escapeHtml(asset.serial || "не указан")}</strong><span class="condition-pill">${escapeHtml(conditionLabel(asset.condition))}</span>${blocks.length ? `<span class="external-occupancy-badge">${currentBlocks.length ? "Занят вне сервиса" : "Запланирована занятость вне сервиса"}</span>` : ""}<details class="equipment-details"><summary>Подробно</summary><dl><dt>Инвентарный номер</dt><dd>${escapeHtml(asset.inventory_code || "не указан")}</dd><dt>Код</dt><dd>${escapeHtml(asset.asset_code)}</dd><dt>Особенности</dt><dd>${(asset.features || []).map(feature => escapeHtml(feature.description)).join("<br>") || "не указаны"}</dd><dt>Владелец</dt><dd>${escapeHtml(asset.owner || "не указан")}</dd><dt>Ячейка</dt><dd>${escapeHtml(asset.location || "не указана")}</dd></dl>${blocks.map(block => `<p>${escapeHtml(block.reason)}: ${escapeHtml(dateText(block.start))} — ${escapeHtml(dateText(block.end))} МСК</p>`).join("")}</details></div>`;
+        const identifiers = [asset.serial && `S/N ${asset.serial}`, asset.location && `ячейка ${asset.location}`].filter(Boolean);
+        row.innerHTML = `<div class="equipment-main"><div class="article-asset-summary"><div><strong>${escapeHtml(asset.asset_code || asset.serial || "Экземпляр")}</strong>${identifiers.length ? `<p>${escapeHtml(identifiers.join(", "))}</p>` : ""}</div><span class="article-asset-condition">${escapeHtml(asset.condition === "available" ? "На складе" : conditionLabel(asset.condition))}</span></div>${blocks.length ? `<span class="external-occupancy-badge">${currentBlocks.length ? "Занят вне сервиса" : "Запланирована занятость вне сервиса"}</span>` : ""}<details class="equipment-details"><summary>Подробно</summary><dl><dt>Инвентарный номер</dt><dd>${escapeHtml(asset.inventory_code || "не указан")}</dd><dt>Особенности</dt><dd>${(asset.features || []).map(feature => escapeHtml(feature.description)).join("<br>") || "не указаны"}</dd><dt>Владелец</dt><dd>${escapeHtml(asset.owner || "не указан")}</dd></dl>${blocks.map(block => `<p>${escapeHtml(block.reason)}: ${escapeHtml(dateText(block.start))} — ${escapeHtml(dateText(block.end))} МСК</p>`).join("")}</details></div>`;
         if (canManageItems) {
           const actions = document.createElement("div"); actions.className = "equipment-icon-actions";
-          const edit = plainButton("✎", () => renderAdminCatalog(result, {type:"equipment", value:{...asset, article_id:article.id}}), "ghost compact icon-action");
+          const edit = plainButton("✎", () => renderAdminCatalog(result, {
+            type:"equipment", value:{...asset, article_id:article.id},
+            returnScroll:{x:window.scrollX, y:window.scrollY},
+          }), "ghost compact icon-action");
+          edit.dataset.editAssetId = asset.id;
           edit.setAttribute("aria-label", `Изменить экземпляр: ${asset.serial || asset.asset_code}`); edit.title = "Изменить экземпляр";
           edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-pencil"></use></svg>';
           const remove = plainButton("×", async () => {
@@ -3034,7 +3746,9 @@
   }
   function catalogDraftKey(editor) { return `polyrental-staff-catalog-draft-v1:${editor.type}:${editor.value?.id || "new"}:${editor.value?.article_id || ""}`; }
   function guardStaffNavigation() {
-    const forms = [...document.querySelectorAll("#admin-content form, #handover-settings-form, #booking-settings-form")].filter(form=>form.getClientRects().length&&staffFormDirty(form));
+    if (document.querySelector("#admin-content .instance-editor[aria-busy='true']")) return false;
+    const forms = [...document.querySelectorAll("#admin-content form, #handover-settings-form, #booking-settings-form")]
+      .filter(form => staffFormDirty(form) && (form.getClientRects().length || form.closest(".instance-editor")));
     if (!forms.length) return true;
     if (!window.confirm("Есть несохранённые изменения. Текстовые поля и файлы не восстанавливаются. Перейти в другой раздел?")) return false;
     forms.forEach(registerStaffForm);
@@ -3044,9 +3758,9 @@
     if ([...document.querySelectorAll("#admin-content form, .workflow-dialog form, #handover-settings-form, #booking-settings-form")].some(staffFormDirty)) { event.preventDefault(); event.returnValue = ""; }
   });
   function installCatalogDraft(form, editor) {
-    const key = catalogDraftKey(editor), baseline = safeCatalogFields(form);
+    let key = catalogDraftKey(editor), baseline = safeCatalogFields(form);
     const notice = document.createElement("p"); notice.className = "supporting wide catalog-draft-status";
-    notice.textContent = "Выборы и числовые поля можно восстановить на этом устройстве. Текст и файлы не сохраняются.";
+    if (!form.closest(".instance-editor")) notice.textContent = "Выборы и числовые поля можно восстановить на этом устройстве. Текст и файлы не сохраняются.";
     form.prepend(notice); registerStaffForm(form);
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
@@ -3076,15 +3790,25 @@
       } catch (_) { notice.textContent = "Не удалось сохранить черновик на устройстве. Сохраняйте изменения перед выходом."; }
     };
     form.addEventListener("input", save); form.addEventListener("change", save);
-    return () => { try { localStorage.removeItem(key); } catch (_) {} };
+    const clear = () => { try { localStorage.removeItem(key); } catch (_) {} };
+    return {
+      clear,
+      rebase: nextEditor => {
+        clear();
+        key = catalogDraftKey(nextEditor); baseline = safeCatalogFields(form);
+        notice.textContent = "";
+        clear();
+      },
+    };
   }
 
-  function installArticlePickers(form) {
+  function installArticlePickers(form, searchPanel = null) {
     for (const select of form.querySelectorAll('select[name="article_id"], select[name="parent_article_id"], select[name="child_article_id"]')) {
       const search = document.createElement("input"); search.type = "search"; search.placeholder = "Найти артикул по названию или SKU"; search.setAttribute("aria-label", `Поиск: ${select.closest("label")?.querySelector("span")?.textContent || "артикул"}`);
       const more = document.createElement("button"); more.type = "button"; more.className = "button ghost compact"; more.textContent = "Показать ещё артикулы"; more.hidden = true;
       const status = document.createElement("small"); status.setAttribute("role", "status");
-      select.before(search); select.after(status, more);
+      if (searchPanel) searchPanel.append(search, status, more);
+      else { select.before(search); select.after(status, more); }
       let page = 0, sequence = 0, timer = null;
       const load = async (append = false) => {
         const current = ++sequence, query = search.value.trim();
@@ -3096,7 +3820,11 @@
           const selected = select.selectedOptions[0];
           if (!append) { const placeholder = new Option("Выберите артикул", ""); select.replaceChildren(placeholder); if (selected?.value) select.add(selected); }
           const existing = new Set([...select.options].map(option => option.value));
-          for (const article of result.items) if (!existing.has(String(article.id))) select.add(new Option(`${article.name} · SKU: ${article.sku}`, String(article.id)));
+          for (const article of result.items) if (!existing.has(String(article.id))) {
+            const option = new Option(`${article.name} (${searchPanel ? "" : "SKU: "}${article.sku})`, String(article.id));
+            if (searchPanel) option.dataset.modelName = article.name;
+            select.add(option);
+          }
           if (selected?.value) select.value = selected.value;
           status.textContent = result.total ? `Найдено артикулов: ${result.total}` : "Артикулы не найдены.";
           more.hidden = (page + 1) * result.page_size >= result.total;
@@ -3109,11 +3837,467 @@
     }
   }
 
+  function equipmentSavePayload(data, value, expected) {
+    return {
+      id: value.id || null, article_id: Number(data.get("article_id")), serial: data.get("serial"),
+      inventory_code: data.get("inventory_code"), location: data.get("location"), condition: data.get("condition"),
+      health: value.health ?? null, charge: value.charge ?? null, expected_before: expected,
+    };
+  }
+
+  function installCatalogEditorTabs(wrapper) {
+    const tablist = wrapper.querySelector('[role="tablist"]');
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+    function select(tab) {
+      for (const candidate of tabs) {
+        const selected = candidate === tab;
+        candidate.setAttribute("aria-selected", String(selected));
+        candidate.tabIndex = selected ? 0 : -1;
+        wrapper.querySelector(`#${candidate.getAttribute("aria-controls")}`).hidden = !selected;
+      }
+    }
+    for (const tab of tabs) tab.addEventListener("click", () => select(tab));
+    tablist.addEventListener("keydown", event => {
+      const index = tabs.indexOf(event.target);
+      const next = {ArrowLeft:(index + tabs.length - 1) % tabs.length, ArrowRight:(index + 1) % tabs.length, Home:0, End:tabs.length - 1}[event.key];
+      if (index < 0 || next === undefined) return;
+      event.preventDefault(); select(tabs[next]); tabs[next].focus();
+    });
+    return panel => {
+      const tab = tabs.find(candidate => candidate.getAttribute("aria-controls") === panel?.id);
+      if (tab) select(tab);
+    };
+  }
+
+  function restoreCatalogEditorOrigin(result, editor, targetSelector, refreshError = null) {
+    renderAdminCatalog(result);
+    const target = $("admin-content").querySelector(targetSelector);
+    if (editor.returnScroll) window.scrollTo(editor.returnScroll.x, editor.returnScroll.y);
+    (target || $("admin-catalog-heading"))?.focus({preventScroll:true});
+    if (target) scrollElementIntoView(target, {block:"nearest"});
+    if (refreshError) showError(`Не удалось обновить каталог после сохранения: ${refreshError.message}`);
+  }
+
+  function existingEquipmentEditor(wrapper, result, editor) {
+    const value = editor.value;
+    const path = `/api/miniapp/admin/catalog/equipment/${value.id}`;
+    const canEditFeatures = state.role?.staff_role === "admin";
+    const articleName = id => {
+      const article = result.articles.find(candidate => candidate.id === id);
+      return article ? catalogTitle(article) : "";
+    };
+    const options = result.articles.map(article => `<option value="${article.id}" data-model-name="${escapeHtml(article.name)}" ${value.article_id === article.id ? "selected" : ""}>${escapeHtml(article.name)} (${escapeHtml(article.sku)})</option>`).join("");
+    wrapper.classList.add("instance-editor");
+    wrapper.innerHTML = `
+      <header class="instance-editor-header">
+        <button class="button ghost instance-editor-back catalog-editor-back" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>Назад</button>
+        <h3>Изменить экземпляр</h3>
+        <p class="instance-editor-context"><strong>${escapeHtml(articleName(value.article_id))}</strong>${value.asset_code ? `<span>Код экземпляра ${escapeHtml(value.asset_code)}</span>` : ""}</p>
+      </header>
+      <div class="instance-editor-tabs" role="tablist" aria-label="Разделы экземпляра">
+        <button type="button" role="tab" id="instance-data-tab" aria-controls="instance-data" aria-selected="true">Данные</button>
+        <button type="button" role="tab" id="instance-owner-tab" aria-controls="instance-owner" aria-selected="false" tabindex="-1">Владелец</button>
+        <button type="button" role="tab" id="instance-notes-tab" aria-controls="instance-notes" aria-selected="false" tabindex="-1">Особенности</button>
+      </div>
+      <section class="instance-editor-pane" id="instance-data" role="tabpanel" aria-labelledby="instance-data-tab">
+        <form class="catalog-form">
+          <div>
+            <label class="field"><span>Модель</span><select name="article_id" required><option value="">Выберите модель</option>${options}</select></label>
+            <details class="instance-model-search" hidden><summary>Найти модель по названию или SKU</summary></details>
+          </div>
+          <div class="instance-field-pair">
+            <label class="field"><span>Серийный номер</span><input name="serial" value="${escapeHtml(value.serial || "")}" maxlength="80" aria-describedby="instance-serial-help"><small id="instance-serial-help">Может отсутствовать или повторяться.</small></label>
+            <label class="field"><span>Инвентарный код</span><input name="inventory_code" value="${escapeHtml(value.inventory_code || "")}" maxlength="80" aria-describedby="instance-inventory-help"><small id="instance-inventory-help">Если указан, должен быть уникальным.</small></label>
+          </div>
+          <div class="instance-field-pair">
+            <label class="field"><span>Складская ячейка</span><input name="location" value="${escapeHtml(value.location || "")}" maxlength="120" placeholder="A-01"></label>
+            <label class="field"><span>Состояние</span><select name="condition">${selectOptions(["available", "maintenance", "retired"], value.condition || "available")}</select></label>
+          </div>
+          <div class="instance-editor-actions"><p class="supporting" role="status"></p><button class="button primary" type="submit">Сохранить экземпляр</button></div>
+        </form>
+      </section>
+      <section class="instance-editor-pane" id="instance-owner" role="tabpanel" aria-labelledby="instance-owner-tab" hidden>
+        <form class="equipment-owner-form">
+          <label class="field"><span>Имя или организация</span><input name="name" maxlength="200" value="${escapeHtml(value.owner || "")}"></label>
+          <label class="field"><span>Контакт владельца</span><input name="contact" maxlength="300" value="${escapeHtml(value.owner_contact || "")}" placeholder="Телефон или Telegram"></label>
+          <div class="instance-editor-actions"><p class="supporting" role="status"></p><button class="button primary" type="submit">Сохранить владельца</button></div>
+        </form>
+      </section>
+      <section class="instance-editor-pane" id="instance-notes" role="tabpanel" aria-labelledby="instance-notes-tab" hidden>
+        <ul class="equipment-feature-list" aria-label="Особенности экземпляра"></ul>
+        <p class="supporting instance-no-features" hidden>Особенности пока не добавлены.</p>
+        <form class="feature-add">
+          <label class="field"><span>Новая особенность</span><textarea name="description" rows="3" maxlength="2000" required></textarea></label>
+          <div class="instance-editor-actions">
+            <p class="supporting" role="status"></p>
+            <button class="button ghost feature-cancel" type="button" hidden>Отмена</button>
+            <button class="button ghost danger feature-remove" type="button" hidden>Удалить</button>
+            <button class="button primary" type="submit">Добавить особенность</button>
+          </div>
+        </form>
+      </section>`;
+
+    const backButton = wrapper.querySelector(".instance-editor-back");
+    const dataForm = wrapper.querySelector(".catalog-form");
+    const ownerForm = wrapper.querySelector(".equipment-owner-form");
+    const noteForm = wrapper.querySelector(".feature-add");
+    const forms = [dataForm, ownerForm, noteForm];
+    const features = (value.features || []).map(feature => ({...feature}));
+    const featureList = wrapper.querySelector(".equipment-feature-list");
+    const description = noteForm.elements.namedItem("description");
+    const noteLabel = noteForm.querySelector(".field > span");
+    const noteSubmit = noteForm.querySelector('[type="submit"]');
+    const cancelNote = noteForm.querySelector(".feature-cancel");
+    const removeNote = noteForm.querySelector(".feature-remove");
+    let activeNote = null;
+    let changed = false;
+    let expected = {
+      article_id: value.article_id, serial_number: value.serial || null, asset_inventory_code: value.inventory_code || null,
+      condition: value.condition, storage_location: value.location || "", health_percent: value.health ?? null, charge_percent: value.charge ?? null,
+    };
+
+    installCatalogEditorTabs(wrapper);
+
+    const searchPanel = wrapper.querySelector(".instance-model-search");
+    if (result.page != null) { searchPanel.hidden = false; installArticlePickers(dataForm, searchPanel); }
+    const draft = installCatalogDraft(dataForm, editor);
+    registerStaffForm(ownerForm); registerStaffForm(noteForm);
+    for (const form of forms) form.addEventListener("input", () => {
+      form.querySelector(".instance-editor-actions [role='status']").textContent = "";
+    });
+
+    async function perform(action, form) {
+      if (wrapper.getAttribute("aria-busy") === "true") return;
+      const focus = form?.contains(document.activeElement) ? document.activeElement : null;
+      clearError();
+      wrapper.setAttribute("aria-busy", "true");
+      backButton.disabled = true;
+      if (form) form.inert = true;
+      try { await action(); }
+      catch (error) { showError(error.message); }
+      finally {
+        if (form) form.inert = false;
+        backButton.disabled = false;
+        wrapper.removeAttribute("aria-busy");
+        if (focus?.getClientRects().length && document.activeElement === document.body) focus.focus({preventScroll:true});
+      }
+    }
+
+    backButton.addEventListener("click", () => {
+      if (forms.some(staffFormDirty) && !window.confirm("Выйти без сохранения? Несохранённые изменения и черновик будут удалены.")) return;
+      void perform(async () => {
+        let next = result, refreshError;
+        if (changed) {
+          try { next = await api(catalogPagePath()); }
+          catch (error) { refreshError = error; }
+        }
+        draft.clear();
+        restoreCatalogEditorOrigin(next, editor, `[data-edit-asset-id="${Number(value.id)}"]`, refreshError);
+      });
+    });
+
+    dataForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const payload = equipmentSavePayload(new FormData(dataForm), value, expected);
+      void perform(async () => {
+        await api("/api/miniapp/admin/catalog/equipment", {method:"POST", body:JSON.stringify(payload)});
+        const identifier = input => ["-", "—"].includes(input.trim()) ? "" : input.trim();
+        const serial = identifier(payload.serial), inventoryCode = identifier(payload.inventory_code);
+        dataForm.elements.serial.value = serial;
+        dataForm.elements.inventory_code.value = inventoryCode;
+        dataForm.elements.location.value = payload.location.trim();
+        expected = {
+          ...expected, article_id:payload.article_id, serial_number:serial || null, asset_inventory_code:inventoryCode || null,
+          condition:payload.condition, storage_location:dataForm.elements.location.value,
+        };
+        const model = dataForm.elements.article_id.selectedOptions[0];
+        wrapper.querySelector(".instance-editor-context strong").textContent = articleName(payload.article_id) ||
+          model.dataset.modelName || model.textContent;
+        draft.rebase({...editor, value:{...value, article_id:payload.article_id}});
+        registerStaffForm(dataForm);
+        dataForm.querySelector(".instance-editor-actions [role='status']").textContent = "Данные сохранены";
+        changed = true;
+      }, dataForm);
+    });
+
+    ownerForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const name = ownerForm.elements.namedItem("name"), contact = ownerForm.elements.namedItem("contact");
+      const body = {name:name.value.trim(), contact:contact.value.trim()};
+      void perform(async () => {
+        await api(path + "/owner", {method:"PUT", body:JSON.stringify(body)});
+        name.value = body.name; contact.value = body.contact;
+        registerStaffForm(ownerForm);
+        ownerForm.querySelector('[role="status"]').textContent = "Владелец сохранён";
+        changed = true;
+      }, ownerForm);
+    });
+
+    function selectNote(feature) {
+      activeNote = feature;
+      description.value = feature?.description || "";
+      noteLabel.textContent = feature ? "Особенность" : "Новая особенность";
+      noteSubmit.textContent = feature ? "Сохранить особенность" : "Добавить особенность";
+      cancelNote.hidden = removeNote.hidden = !feature;
+      noteForm.querySelector('[role="status"]').textContent = "";
+      registerStaffForm(noteForm);
+    }
+    function guardNoteChange() {
+      return !staffFormDirty(noteForm) || window.confirm("Отменить несохранённые изменения особенности?");
+    }
+    function renderFeatures() {
+      featureList.replaceChildren();
+      wrapper.querySelector(".instance-no-features").hidden = features.length > 0;
+      for (const feature of features) {
+        const row = document.createElement("li");
+        const text = document.createElement("span");
+        text.textContent = feature.description;
+        row.append(text);
+        if (canEditFeatures) row.append(plainButton("Изменить", () => {
+          if (wrapper.getAttribute("aria-busy") === "true" || activeNote === feature || !guardNoteChange()) return;
+          selectNote(feature); description.focus();
+        }, "ghost compact"));
+        featureList.append(row);
+      }
+    }
+    renderFeatures();
+    cancelNote.addEventListener("click", () => { if (guardNoteChange()) { selectNote(null); description.focus(); } });
+    removeNote.addEventListener("click", () => {
+      const feature = activeNote;
+      if (!feature || !window.confirm("Удалить особенность?")) return;
+      void perform(async () => {
+        await api(`${path}/features/${feature.id}`, {method:"DELETE"});
+        features.splice(features.indexOf(feature), 1);
+        selectNote(null); renderFeatures();
+        noteForm.querySelector('[role="status"]').textContent = "Особенность удалена";
+        changed = true;
+      }, noteForm);
+    });
+    noteForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const feature = activeNote, text = description.value.trim();
+      if (!text) { description.value = ""; description.reportValidity(); return; }
+      void perform(async () => {
+        const saved = await api(feature ? `${path}/features/${feature.id}` : path + "/features", {
+          method:feature ? "PUT" : "POST", body:JSON.stringify({description:text}),
+        });
+        if (feature) feature.description = text;
+        else features.push({id:saved.id, description:text});
+        selectNote(null); renderFeatures();
+        noteForm.querySelector('[role="status"]').textContent = "Особенность сохранена";
+        changed = true;
+      }, noteForm);
+    });
+    return wrapper;
+  }
+
+  function articleEditorState(article) {
+    return {
+      sku:article.sku, name:article.name, kind:article.kind || "", brand:article.brand || "",
+      key_spec:article.key_spec || "", description:article.description || "", composition:article.composition || "",
+      category:article.category, inspection_profile:article.inspection_profile || "generic",
+      buffer_hours:article.buffer_hours ?? 24, image_url:article.image_url || "", is_active:article.active !== false,
+    };
+  }
+
+  function articleFormState(data, article) {
+    return {
+      sku:data.get("sku").trim(), name:data.get("name").trim(), kind:data.get("kind").trim(),
+      brand:data.get("brand").trim(), key_spec:data.get("key_spec").trim(), description:data.get("description").trim(),
+      composition:data.get("composition").trim(), category:data.get("category"), inspection_profile:data.get("inspection_profile"),
+      buffer_hours:article.buffer_hours ?? 24, image_url:data.get("image_url").trim(), is_active:data.has("active"),
+    };
+  }
+
+  function saveArticleForm(article, state, expected) {
+    const {is_active, ...fields} = state;
+    return api("/api/miniapp/admin/catalog/articles", {method:"POST", body:JSON.stringify({
+      ...fields, id:article.id || null, rate:"0", active:is_active, expected_before:expected,
+    })});
+  }
+
+  function bindCatalogCategoryCreation(form) {
+    form.querySelector(".create-category")?.addEventListener("click", async () => {
+      try {
+        const category = await createCategoryDialog();
+        if (category && form.isConnected) {
+          const select = form.elements.category;
+          select.innerHTML = categoryOptions(category.code);
+          select.dispatchEvent(new Event("change", {bubbles:true}));
+        }
+      } catch (error) { showError(error.message); }
+    });
+  }
+
+  function existingArticleEditor(wrapper, result, editor) {
+    const article = editor.value;
+    const photoPath = `/api/miniapp/admin/catalog/articles/${article.id}/photo`;
+    const sections = [["data","Данные"], ["description","Описание"], ["kit","Комплект"], ["photo","Фото"]];
+    const field = (name, label, maxlength, required = false) => `<label class="field"><span>${label}</span><input name="${name}" maxlength="${maxlength}" value="${escapeHtml(article[name] || "")}" ${required ? "required" : ""}></label>`;
+    wrapper.classList.add("instance-editor", "article-editor");
+    wrapper.innerHTML = `
+      <header class="instance-editor-header">
+        <button class="button ghost instance-editor-back catalog-editor-back" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>Назад</button>
+        <h3>Изменить артикул</h3>
+        <p class="instance-editor-context"><strong>${escapeHtml(article.name)}</strong><span>${escapeHtml(article.sku)}</span></p>
+      </header>
+      <div class="instance-editor-tabs" role="tablist" aria-label="Разделы артикула">
+        ${sections.map(([id, label], index) => `<button type="button" role="tab" id="article-editor-${id}-tab" aria-controls="article-editor-${id}" aria-selected="${index === 0}" ${index ? 'tabindex="-1"' : ""}>${label}</button>`).join("")}
+      </div>
+      <form class="catalog-form">
+        <section class="article-editor-pane" id="article-editor-data" role="tabpanel" aria-labelledby="article-editor-data-tab">
+          ${field("name","Название модели",200,true)}
+          <div class="instance-field-pair">
+            ${field("sku","Артикул (SKU)",80,true)}
+            <div><label class="field"><span>Категория</span><select name="category">${categoryOptions(article.category || "generic")}</select></label>
+              <button class="button ghost compact create-category" type="button">Создать категорию</button></div>
+          </div>
+          <label class="check-row"><input name="active" type="checkbox" ${article.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label>
+        </section>
+        <section class="article-editor-pane" id="article-editor-description" role="tabpanel" aria-labelledby="article-editor-description-tab" hidden>
+          <div class="instance-field-pair">${field("brand","Бренд",100)}${field("kind","Вид оборудования",80)}</div>
+          ${field("key_spec","Основная характеристика",120)}
+          <label class="field"><span>Описание</span><textarea name="description" rows="3" maxlength="4000">${escapeHtml(article.description || "")}</textarea></label>
+        </section>
+        <section class="article-editor-pane" id="article-editor-kit" role="tabpanel" aria-labelledby="article-editor-kit-tab" hidden>
+          <label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic","camera","optics","light","battery"], article.inspection_profile || "generic")}</select></label>
+          <label class="field"><span>Комплектация для расписки</span><textarea name="composition" rows="4" maxlength="4000">${escapeHtml(article.composition || "")}</textarea><small>Один элемент на строку. Список используется при проверке экземпляра.</small></label>
+        </section>
+        <section class="article-editor-pane" id="article-editor-photo" role="tabpanel" aria-labelledby="article-editor-photo-tab" hidden>
+          <div class="article-editor-photo-preview"></div>
+          <div class="article-editor-photo-actions">
+            <label class="button secondary article-editor-file"><span>Загрузить фото</span><input type="file" accept="image/jpeg,image/png,image/webp"></label>
+            <button class="button ghost article-editor-remove-photo" type="button">Удалить фото</button>
+          </div>
+          <input type="hidden" name="photo_action">
+          <label class="field"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" maxlength="500" value="${escapeHtml(article.image_url || "")}" placeholder="https://…"></label>
+        </section>
+        <div class="instance-editor-actions"><p class="supporting" role="status"></p><button class="button primary" type="submit">Сохранить артикул</button></div>
+      </form>`;
+
+    const form = wrapper.querySelector("form");
+    const status = wrapper.querySelector(".instance-editor-actions [role='status']");
+    const back = wrapper.querySelector(".catalog-editor-back");
+    const fileInput = form.querySelector('input[type="file"]');
+    const photoAction = form.elements.photo_action;
+    const preview = form.querySelector(".article-editor-photo-preview");
+    const showPanel = installCatalogEditorTabs(wrapper);
+    const draft = installCatalogDraft(form, editor);
+    let expected = articleEditorState(article);
+    let stagedFile = null, previewUrl = "", changed = false;
+    bindCatalogCategoryCreation(form);
+
+    function renderPhoto() {
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = ""; }
+      if (stagedFile) {
+        const image = document.createElement("img");
+        previewUrl = URL.createObjectURL(stagedFile); image.src = previewUrl; image.alt = "Предпросмотр фото модели";
+        bindCatalogPhoto(image, article.name);
+        preview.replaceChildren(image);
+      } else {
+        const imageUrl = form.elements.image_url.value.trim() === article.image_url ? article.image_url : "";
+        const imageData = photoAction.value === "remove" ? "" : article.image_data;
+        preview.innerHTML = catalogMedia({...article, image_data:imageData, image_url:imageUrl}, "article-editor");
+      }
+      const hasPhoto = Boolean(stagedFile || (photoAction.value !== "remove" && (article.image_data || form.elements.image_url.value.trim())));
+      form.querySelector(".article-editor-file span").textContent = hasPhoto ? "Заменить фото" : "Загрузить фото";
+      form.querySelector(".article-editor-remove-photo").hidden = !hasPhoto;
+    }
+    renderPhoto();
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      fileInput.value = "";
+      if (!file) return;
+      stagedFile = file; photoAction.value = "upload"; status.textContent = ""; renderPhoto();
+    });
+    form.querySelector(".article-editor-remove-photo").addEventListener("click", () => {
+      stagedFile = null;
+      photoAction.value = article.image_data ? "remove" : "";
+      form.elements.image_url.value = "";
+      status.textContent = ""; renderPhoto();
+    });
+    form.addEventListener("input", event => {
+      status.textContent = "";
+      if (event.target === form.elements.image_url && (!article.image_data || photoAction.value === "remove")) {
+        form.querySelector(".article-editor-remove-photo").hidden = !form.elements.image_url.value.trim();
+      }
+    });
+    form.addEventListener("invalid", event => showPanel(event.target.closest('[role="tabpanel"]')), true);
+
+    function setBusy(busy) {
+      if (busy) wrapper.setAttribute("aria-busy", "true");
+      else wrapper.removeAttribute("aria-busy");
+      form.inert = busy; back.disabled = busy;
+    }
+    back.addEventListener("click", async () => {
+      if (staffFormDirty(form) && !window.confirm("Выйти без сохранения? Несохранённые изменения и черновик будут удалены.")) return;
+      setBusy(true); clearError();
+      let next = result, refreshError;
+      if (changed) {
+        try { next = await api(catalogPagePath()); }
+        catch (error) { refreshError = error; }
+      }
+      draft.clear();
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      restoreCatalogEditorOrigin(next, editor, `[data-edit-article-id="${Number(article.id)}"]`, refreshError);
+    });
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (wrapper.getAttribute("aria-busy") === "true") return;
+      const fields = articleFormState(new FormData(form), article);
+      setBusy(true); clearError(); status.textContent = "Сохраняем…";
+      let savedFields = false;
+      try {
+        const upload = stagedFile ? await prepareCatalogPhoto(stagedFile) : null;
+        if (Object.keys(fields).some(key => fields[key] !== expected[key])) {
+          await saveArticleForm(article, fields, expected);
+          const {is_active, ...saved} = fields;
+          Object.assign(article, saved, {active:is_active});
+          expected = fields;
+          for (const [key, value] of Object.entries(saved)) {
+            const input = form.elements.namedItem(key);
+            if (input) input.value = value;
+          }
+          const context = wrapper.querySelector(".instance-editor-context");
+          context.querySelector("strong").textContent = fields.name;
+          context.querySelector("span").textContent = fields.sku;
+          const pending = photoAction.value;
+          photoAction.value = "";
+          draft.rebase(editor); registerStaffForm(form);
+          photoAction.value = pending;
+          savedFields = changed = true;
+        }
+        if (upload) {
+          const updated = await api(photoPath, {method:"PUT", body:upload});
+          article.image_data = updated.image_data;
+          changed = true;
+        } else if (photoAction.value === "remove") {
+          await api(photoPath, {method:"DELETE"});
+          article.image_data = "";
+          changed = true;
+        }
+        photoAction.value = ""; stagedFile = null;
+        draft.rebase(editor); registerStaffForm(form); renderPhoto();
+        status.textContent = "Артикул сохранён";
+      } catch (error) {
+        status.textContent = savedFields ? "Поля сохранены. Повторите сохранение фото." : "";
+        showError(error.message);
+      } finally {
+        setBusy(false);
+        if (document.activeElement === document.body) event.submitter?.focus({preventScroll:true});
+      }
+    });
+    return wrapper;
+  }
+
   function catalogEditor(result, editor) {
     const wrapper = document.createElement("article"); wrapper.className = "admin-card editor-card";
-    const value = editor.value || {}; const options = result.articles.map((article) => {
+    const value = editor.value || {};
+    if (editor.type === "equipment" && value.id) return existingEquipmentEditor(wrapper, result, editor);
+    if (editor.type === "article" && value.id) return existingArticleEditor(wrapper, result, editor);
+    const options = result.articles.map((article) => {
       const type = article.description || categoryLabel(article.category);
-      return `<option value="${article.id}" ${Number(value.article_id) === article.id ? "selected" : ""}>${escapeHtml(article.name)} · ${escapeHtml(type)} · SKU: ${escapeHtml(article.sku)}</option>`;
+      return `<option value="${article.id}" ${Number(value.article_id) === article.id ? "selected" : ""}>${escapeHtml(article.name)} (${escapeHtml(type)}, SKU: ${escapeHtml(article.sku)})</option>`;
     }).join("");
     if (editor.type === "article") {
       wrapper.innerHTML = `<h3>${value.id ? "Изменить артикул" : "Новый артикул"}</h3><form class="catalog-form form-grid"><label class="field"><span>SKU / артикул</span><input name="sku" value="${escapeHtml(value.sku || "")}" maxlength="80" required></label><label class="field"><span>Полное название</span><input name="name" value="${escapeHtml(value.name || "")}" maxlength="200" required></label><label class="field"><span>Вид (например, camera или Карта памяти)</span><input name="kind" value="${escapeHtml(value.kind || "")}" maxlength="80"></label><label class="field"><span>Бренд</span><input name="brand" value="${escapeHtml(value.brand || "")}" maxlength="100"></label><label class="field"><span>Основная характеристика</span><input name="key_spec" value="${escapeHtml(value.key_spec || "")}" maxlength="120"></label><label class="field wide"><span>Описание</span><textarea name="description" maxlength="4000">${escapeHtml(value.description || "")}</textarea></label><label class="field wide"><span>Комплектация для расписки</span><textarea name="composition" maxlength="4000" placeholder="Оставьте пустым, пока состав комплекта не определён">${escapeHtml(value.composition || "")}</textarea><small>Один элемент на строке. Состав сохраняется для модели и проверяется поэлементно.</small></label><label class="field"><span>Категория</span><select name="category">${categoryOptions(value.category || "generic")}</select><button type="button" class="button ghost create-category">Создать категорию</button></label><label class="field"><span>Профиль проверки</span><select name="inspection_profile">${selectOptions(["generic", "camera", "optics", "light", "battery"], value.inspection_profile || "generic")}</select></label><label class="field wide"><span>HTTPS-ссылка на фото</span><input name="image_url" type="url" value="${escapeHtml(value.image_url || "")}" maxlength="500" placeholder="https://…"></label><label class="check-row wide"><input name="active" type="checkbox" ${value.active !== false ? "checked" : ""}><span>Показывать клиентам в каталоге</span></label><div class="action-row wide"><button class="button primary" type="submit">Сохранить артикул</button><button class="button ghost editor-cancel" type="button">Отмена</button></div></form>`;
@@ -3128,69 +4312,24 @@
     }
     const editorForm = wrapper.querySelector("form");
     if (result.page != null && editor.type !== "article") installArticlePickers(editorForm);
-    const expectedArticle = value.id && editor.type === "article" ? {
-      sku:value.sku, name:value.name, kind:value.kind || "", brand:value.brand || "", key_spec:value.key_spec || "",
-      description:value.description || "", composition:value.composition || "", category:value.category,
-      inspection_profile:value.inspection_profile || "generic", buffer_hours:value.buffer_hours ?? 24,
-      image_url:value.image_url || "", is_active:value.active !== false,
-    } : null;
-    const expectedEquipment = value.id && editor.type === "equipment" ? {
-      article_id:value.article_id, serial_number:value.serial || null, asset_inventory_code:value.inventory_code || null,
-      condition:value.condition, storage_location:value.location || "", health_percent:value.health ?? null, charge_percent:value.charge ?? null,
-    } : null;
-    const clearDraft = installCatalogDraft(editorForm, editor);
+    const {clear:clearDraft} = installCatalogDraft(editorForm, editor);
     wrapper.querySelector(".editor-cancel").addEventListener("click", () => {
       const forms = [...wrapper.querySelectorAll("form")];
       if (forms.some(staffFormDirty) && !window.confirm("Отменить несохранённые изменения? Черновик будет удалён.")) return;
       clearDraft(); forms.forEach(registerStaffForm); renderAdminCatalog(result);
     });
-    wrapper.querySelector(".create-category")?.addEventListener("click", async () => {
-      try {
-        const category = await createCategoryDialog();
-        if (category) { const select = wrapper.querySelector('[name="category"]'); select.innerHTML = categoryOptions(category.code); select.dispatchEvent(new Event("change", {bubbles:true})); }
-      } catch (error) { showError(error.message); }
-    });
+    bindCatalogCategoryCreation(editorForm);
     wrapper.querySelector("form").addEventListener("submit", async (event) => {
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
       try {
         if (editor.type === "article") {
-          const saved = await api("/api/miniapp/admin/catalog/articles", { method: "POST", body: JSON.stringify({ id: value.id || null, sku: data.get("sku"), name: data.get("name"), kind: data.get("kind"), brand: data.get("brand"), key_spec: data.get("key_spec"), description: data.get("description"), composition: data.get("composition"), rate: "0", buffer_hours: value.buffer_hours ?? 24, category: data.get("category"), inspection_profile: data.get("inspection_profile"), image_url: data.get("image_url"), active: data.get("active") === "on", expected_before: expectedArticle }) });
+          await saveArticleForm(value, articleFormState(data, value), null);
         }
-        else if (editor.type === "equipment") await api("/api/miniapp/admin/catalog/equipment", { method: "POST", body: JSON.stringify({ id: value.id || null, article_id: Number(data.get("article_id")), serial: data.get("serial"), inventory_code: data.get("inventory_code"), location: data.get("location"), condition: data.get("condition"), health: value.health ?? null, charge: value.charge ?? null, expected_before: expectedEquipment }) });
+        else if (editor.type === "equipment") await api("/api/miniapp/admin/catalog/equipment", { method: "POST", body: JSON.stringify(equipmentSavePayload(data, value, null)) });
         else await api("/api/miniapp/admin/catalog/dependencies", { method: "PUT", body: JSON.stringify({ parent_article_id: Number(data.get("parent_article_id")), child_article_id: Number(data.get("child_article_id")), quantity: Number(data.get("quantity")), billable: data.get("billable") === "on" }) });
         clearDraft(); registerStaffForm(form); await showAdmin("catalog");
       } catch (error) { showError(error.message); submit.disabled = false; }
     });
-    if (editor.type === "equipment" && value.id) {
-      const extras = document.createElement("section"); extras.className = "equipment-editor-extras";
-      extras.innerHTML = `<h4>Особенности экземпляра</h4><div class="equipment-feature-list"></div><form class="feature-add"><label class="field"><span>Новая особенность</span><textarea name="description" maxlength="2000" required></textarea></label><button type="submit" class="button secondary">Добавить особенность</button></form>`;
-      const featureList = extras.querySelector(".equipment-feature-list");
-      const refreshFeatures = async () => {
-        const data = await api(`/api/miniapp/admin/catalog/equipment/${value.id}/features`);
-        featureList.replaceChildren();
-        for (const feature of data.features || []) {
-          const form = document.createElement("form"); form.className = "feature-edit";
-          if (state.role?.staff_role === "admin") {
-            form.innerHTML = `<label class="field"><span>Особенность</span><textarea name="description" maxlength="2000" required>${escapeHtml(feature.description)}</textarea></label><button type="submit" class="button secondary">Сохранить особенность</button><button type="button" class="button ghost danger feature-remove">Удалить особенность</button>`;
-            form.addEventListener("submit", async event => { event.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true; try { await api(`/api/miniapp/admin/catalog/equipment/${value.id}/features/${feature.id}`, {method:"PUT", body:JSON.stringify({description:new FormData(form).get("description")})}); await refreshFeatures(); } catch (error) { showError(error.message); } finally { button.disabled = false; } });
-            form.querySelector(".feature-remove").addEventListener("click", async () => { if (!window.confirm("Удалить особенность?")) return; try { await api(`/api/miniapp/admin/catalog/equipment/${value.id}/features/${feature.id}`, {method:"DELETE"}); await refreshFeatures(); } catch (error) { showError(error.message); } });
-          } else { const text = document.createElement("p"); text.textContent = feature.description; form.append(text); }
-          featureList.append(form); registerStaffForm(form);
-        }
-      };
-      extras.querySelector(".feature-add").addEventListener("submit", async event => {
-        event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
-        try { await api(`/api/miniapp/admin/catalog/equipment/${value.id}/features`, {method:"POST", body:JSON.stringify({description:new FormData(form).get("description")})}); form.reset(); registerStaffForm(form); await refreshFeatures(); } catch (error) { showError(error.message); } finally { button.disabled = false; }
-      });
-      const ownerForm = document.createElement("form"); ownerForm.className = "equipment-owner-form";
-      ownerForm.innerHTML = `<h4>Владелец</h4><label class="field"><span>Имя или организация</span><input name="name" maxlength="200" value="${escapeHtml(value.owner || "")}"></label><label class="field"><span>Контакт владельца</span><input name="contact" maxlength="300" value="${escapeHtml(value.owner_contact || "")}"></label><button type="submit" class="button secondary">Сохранить владельца</button><p role="status"></p>`;
-      ownerForm.addEventListener("submit", async event => {
-        event.preventDefault(); const data = new FormData(ownerForm), button = ownerForm.querySelector("button"); button.disabled = true;
-        try { await api(`/api/miniapp/admin/catalog/equipment/${value.id}/owner`, {method:"PUT", body:JSON.stringify({name:data.get("name"), contact:data.get("contact")})}); registerStaffForm(ownerForm); ownerForm.querySelector('[role="status"]').textContent = "Владелец сохранён"; } catch (error) { showError(error.message); } finally { button.disabled = false; }
-      });
-      extras.append(ownerForm);
-      wrapper.append(extras); registerStaffForm(ownerForm); registerStaffForm(extras.querySelector(".feature-add")); void refreshFeatures().catch(error => showError(error.message));
-    }
     return wrapper;
   }
 
@@ -3214,7 +4353,7 @@
     const existing = await api(`/api/miniapp/admin/catalog/equipment/${asset.id}/blocks`);
     const initialStart = moscowInput(new Date().toISOString());
     const initialEnd = moscowInput(new Date(Date.now() + 3600000).toISOString());
-    const content = `<label class="field"><span>Действие</span><select name="operation"><option value="new">Отметить занятость</option>${existing.items.map(item => `<option value="${item.id}">Освободить: ${escapeHtml(item.reason.slice(0,120))} · до ${escapeHtml(dateText(item.end))}</option>`).join("")}</select></label><div class="external-period"><div class="range-calendar external-calendar" aria-label="Календарь занятости вне сервиса"></div><div class="external-time-grid"><label class="field"><span class="external-start-label">Начало · МСК</span><input type="time" class="external-start-time" value="${initialStart.slice(11,16)}" required></label><label class="field"><span class="external-end-label">Конец · МСК</span><input type="time" class="external-end-time" value="${initialEnd.slice(11,16)}" required></label></div><input type="hidden" name="start" value="${initialStart}"><input type="hidden" name="end" value="${initialEnd}"><p class="external-warning workflow-hint" role="status" aria-live="polite">Загружаем занятость…</p><button type="button" class="button ghost external-retry" hidden>Повторить загрузку занятости</button><label class="field"><span>Причина (видна клиентам)</span><textarea name="reason" maxlength="2000" required></textarea></label></div>`;
+    const content = `<label class="field"><span>Действие</span><select name="operation"><option value="new">Отметить занятость</option>${existing.items.map(item => `<option value="${item.id}">Освободить: ${escapeHtml(item.reason.slice(0,120))}, до ${escapeHtml(dateText(item.end))}</option>`).join("")}</select></label><div class="external-period"><div class="range-calendar external-calendar" aria-label="Календарь занятости вне сервиса"></div><div class="external-time-grid"><label class="field"><span class="external-start-label">Начало (МСК)</span><input type="time" class="external-start-time" value="${initialStart.slice(11,16)}" required></label><label class="field"><span class="external-end-label">Конец (МСК)</span><input type="time" class="external-end-time" value="${initialEnd.slice(11,16)}" required></label></div><input type="hidden" name="start" value="${initialStart}"><input type="hidden" name="end" value="${initialEnd}"><p class="external-warning workflow-hint" role="status" aria-live="polite">Загружаем занятость…</p><button type="button" class="button ghost external-retry" hidden>Повторить загрузку занятости</button><label class="field"><span>Причина (видна клиентам)</span><textarea name="reason" maxlength="2000" required></textarea></label></div>`;
     let schedule = [], loaded = false, savingWarnings = [];
     const saved = await workflowDialog("Занятость вне сервиса", content, "Сохранить", dialog => {
       const start = dialog.querySelector('[name="start"]'), end = dialog.querySelector('[name="end"]');
@@ -3224,8 +4363,8 @@
       const update = range => {
         start.value = range.start && startTime.value ? `${range.start}T${startTime.value}` : '';
         end.value = range.end && endTime.value ? `${range.end}T${endTime.value}` : '';
-        dialog.querySelector('.external-start-label').textContent = `Начало${range.start ? ` · ${bookingDateLabel(range.start)}` : ''} · МСК`;
-        dialog.querySelector('.external-end-label').textContent = `Конец${range.end ? ` · ${bookingDateLabel(range.end)}` : ''} · МСК`;
+        dialog.querySelector('.external-start-label').textContent = `Начало${range.start ? `: ${bookingDateLabel(range.start)}` : ''} (МСК)`;
+        dialog.querySelector('.external-end-label').textContent = `Конец${range.end ? `: ${bookingDateLabel(range.end)}` : ''} (МСК)`;
         const left = Date.parse(`${start.value}:00+03:00`), right = Date.parse(`${end.value}:00+03:00`);
         const matches = schedule.filter(item => overlaps(left, right, item));
         warning.classList.toggle('has-overlap', matches.length > 0);
@@ -3271,10 +4410,20 @@
     }
   }
 
-  function bindEquipmentPreview(row, surface, article, {keyboard = false} = {}) {
-    const holdDuration = 440;
+  function showEquipmentPreview(article, opener, source = opener.getBoundingClientRect()) {
     const title = article.title?.trim() || catalogTitle(article);
     const description = article.description?.trim() || "Описание пока не добавлено.";
+    const photo = article.image_data || article.image_url ? catalogMedia({...article, name:title}, "equipment-preview") : "";
+    return workflowDialog(title, `${photo}<p class="equipment-preview-description">${escapeHtml(description)}</p>`, "Закрыть", dialog => {
+      dialog.querySelector(".workflow-cancel").hidden = true;
+      const close = dialog.querySelector('[type="submit"]');
+      close.dataset.initialFocus = "";
+      window.PolyRentalMotion?.morphEquipmentPreview(dialog, source, getComputedStyle(opener).borderRadius, close);
+    }, null, {opener, equipmentPreview: true});
+  }
+
+  function bindEquipmentPreview(row, surface, article, {keyboard = false} = {}) {
+    const holdDuration = 440;
     let gesture = null;
     let suppressClick = false;
     let previewOpen = false;
@@ -3284,7 +4433,7 @@
     row.setAttribute("aria-description", "Удерживайте карточку, чтобы посмотреть оборудование.");
     if (keyboard) {
       row.tabIndex = 0;
-      if (!row.querySelector("button")) row.setAttribute("role", "button");
+      if (!row.querySelector("button, .catalog-media > img")) row.setAttribute("role", "button");
       row.setAttribute("aria-haspopup", "dialog");
     }
     const stop = () => {
@@ -3297,14 +4446,8 @@
     const show = async (source = row.getBoundingClientRect()) => {
       if (previewOpen || !row.isConnected || row.closest("[inert]") || !row.getClientRects().length) return;
       previewOpen = true;
-      const photo = article.image_data || article.image_url ? catalogMedia({...article, name:title}, "equipment-preview") : "";
       try {
-        await workflowDialog(title, `${photo}<p class="equipment-preview-description">${escapeHtml(description)}</p>`, "Закрыть", dialog => {
-          dialog.querySelector(".workflow-cancel").hidden = true;
-          const close = dialog.querySelector('[type="submit"]');
-          close.dataset.initialFocus = "";
-          window.PolyRentalMotion?.morphEquipmentPreview(dialog, source, getComputedStyle(row).borderRadius, close);
-        }, null, {opener: row, equipmentPreview: true});
+        await showEquipmentPreview(article, row, source);
       } finally {
         previewOpen = false;
       }
@@ -3350,7 +4493,7 @@
     });
   }
 
-  function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null, {opener = null, equipmentPreview = false} = {}) {
+  function workflowDialog(title, content, submitLabel = "Подтвердить", setup = null, onSubmit = null, {opener = null, equipmentPreview = false, confirmDiscard = true} = {}) {
     return new Promise((resolve) => {
       const previous = opener || window.PolyRentalDialogs?.opener() || document.activeElement;
       const dialog = document.createElement("section"); dialog.className = "dialog-backdrop workflow-dialog";
@@ -3359,13 +4502,14 @@
         dialog.dataset.modalScroll = "overlay";
       }
       dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-label", title);
+      dialog.dataset.dialogClose = ".workflow-cancel";
       dialog.innerHTML = `<form class="dialog-card"><h2>${escapeHtml(title)}</h2>${content}<div class="action-row"><button type="button" class="button ghost workflow-cancel">Отмена</button><button type="submit" class="button primary">${escapeHtml(submitLabel)}</button></div></form>`;
       let pending=false;
       const finish = (value, backdrop = false) => {
         if (pending) return;
         const form = dialog.querySelector("form");
         const sensitive = form.querySelector('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea');
-        if (value === null && staffFormDirty(form) && (!backdrop || sensitive) && !window.confirm("Отменить? Изменения не сохранятся.")) return;
+        if (value === null && confirmDiscard && staffFormDirty(form) && (!backdrop || sensitive) && !window.confirm("Отменить? Изменения не сохранятся.")) return;
         pending = true;
         const previewUrl = dialog.querySelector(".catalog-upload-preview")?.dataset.url;
         if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -3424,10 +4568,17 @@
         }
       });
       document.body.append(dialog); window.PolyRentalDialogs?.refresh(); if (setup) setup(dialog);
+      if (submitLabel === "Закрыть" && !onSubmit) {
+        const close = dialog.querySelector('button[type="submit"]');
+        if (!close.hidden) {
+          dialog.querySelector(".workflow-cancel").hidden = true;
+          dialog.dataset.dialogClose = 'button[type="submit"]';
+        }
+      }
       registerStaffForm(dialog.querySelector("form"));
       const initial = dialog.querySelector("[data-initial-focus]");
       if (initial) { initial.focus({preventScroll:true}); dialog.querySelector(".dialog-card").scrollTop = 0; }
-      else (dialog.querySelector("input, textarea, select") || dialog.querySelector("button")).focus({preventScroll:true});
+      else (dialog.querySelector("input, textarea, select") || dialog.querySelector("button:not([hidden])")).focus({preventScroll:true});
     });
   }
 
@@ -3481,21 +4632,17 @@
     const path = view === "orders" ? `/api/miniapp/profile/history?category=${encodeURIComponent(state.profileFilter)}&page=${state.profilePage}&sort=${encodeURIComponent(state.profileSort)}&number=${encodeURIComponent(state.profileNumber)}${state.profileTargetId ? `&booking_id=${state.profileTargetId}` : ""}` : adminBookingsPath();
     workflowRefreshBusy = true;
     try {
-      const result = await api(path);
+      const result = await api(path, {fresh:true});
       if (state.view !== view || (view === "admin" && state.adminMode !== mode) || sequence !== (view === "orders" ? profileLoadSequence : adminRenderSequence) || !workflowRefreshSafe()) return;
       if (workflowSnapshot(result) !== baseline) {
         const scroll = window.scrollY;
-        if (view === "orders") { await showOrders(); window.scrollTo(window.scrollX, scroll); }
-        else await showAdmin("orders");
+        if (view === "orders") { await showOrders(result); window.scrollTo(window.scrollX, scroll); }
+        else await showAdmin("orders", result);
       }
     } catch (_) { /* Keep the current view; retry on the next interval. */ }
     finally { workflowRefreshBusy = false; }
   }
   setInterval(refreshWorkflow, 5000);
-
-  function workflowNotice(order) {
-    return ({pending:"Заявка отправлена, ждите проверки", confirmed:"Заявка подтверждена", ready:"Готово к выдаче", issued:`Выдано, вернуть до ${dateText(order.ends_at)} МСК`, return_inspection:"Оборудование на приёмке", returned:"Заявка завершена"})[order.status] || "";
-  }
 
   function receiptSummary(order) {
     const handover = order.handover || {};
@@ -3503,7 +4650,7 @@
     const items = snapshot.map(item => `<li>${escapeHtml(item.name)}${item.code ? ` #${escapeHtml(item.code)}` : ""}</li>`).join("");
     const features = snapshot.flatMap(item => (item.features || []).map(feature => `<li><strong>${escapeHtml(item.name)}</strong>: ${escapeHtml(feature.description)}</li>`)).join("");
     const exceptions = (handover.exceptions || []).map(item => `<li>${escapeHtml(item.name)}${item.component ? ` / ${escapeHtml(item.component)}` : ""}: ${escapeHtml(({missing:"Не выдано: отсутствует",faulty:"Не выдано: неисправность",replacement:"Заменено"})[item.reason] || item.reason || "")}${item.replacement_name ? ` → ${escapeHtml(item.replacement_name)}` : ""} ${escapeHtml(item.note || "")}</li>`).join("");
-    return `<div class="receipt-summary"><section class="receipt-section"><h3>Состав выдачи</h3>${items ? `<ul>${items}</ul>` : "<p>Состав указан в сохранённом документе.</p>"}</section><section class="receipt-section"><h3>Особенности</h3>${features ? `<ul>${features}</ul>` : "<p>Не отмечены</p>"}</section>${exceptions ? `<section class="receipt-section"><h3>Частичная выдача · исключения</h3><ul>${exceptions}</ul></section>` : ""}</div>`;
+    return `<div class="receipt-summary"><section class="receipt-section"><h3>Состав выдачи</h3>${items ? `<ul>${items}</ul>` : "<p>Состав указан в сохранённом документе.</p>"}</section><section class="receipt-section"><h3>Особенности</h3>${features ? `<ul>${features}</ul>` : "<p>Не отмечены</p>"}</section>${exceptions ? `<section class="receipt-section"><h3>Исключения при частичной выдаче</h3><ul>${exceptions}</ul></section>` : ""}</div>`;
   }
 
   let stageNoticesBusy = false;
@@ -3516,32 +4663,78 @@
   }
   async function refreshInbox() {
     if (!authorized || preview || document.hidden) return;
-    try { const result = await api('/api/miniapp/notifications/inbox?offset=0'); inboxUnread = result.unread; updateInboxDots(); } catch (_) { /* Retry on the next poll. */ }
+    try { const result = await api('/api/miniapp/notifications/inbox?offset=0'); inboxUnread = result.unread_count ?? result.unread; updateInboxDots(); } catch (_) { /* Retry on the next poll. */ }
   }
   function notificationTime(value) {
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return '';
-    const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
-    if (minutes < 1) return 'Только что';
-    const relative = new Intl.RelativeTimeFormat('ru', {numeric:'auto'});
-    if (minutes < 60) return relative.format(-minutes, 'minute');
-    if (minutes < 1440) return relative.format(-Math.floor(minutes / 60), 'hour');
-    if (minutes < 10080) return relative.format(-Math.floor(minutes / 1440), 'day');
+    const day = new Intl.DateTimeFormat('ru', {dateStyle:'short', timeZone:'Europe/Moscow'});
+    const today = new Date();
+    if (day.format(date) === day.format(today)) {
+      return new Intl.DateTimeFormat('ru', {hour:'2-digit', minute:'2-digit', timeZone:'Europe/Moscow'}).format(date);
+    }
+    if (day.format(date) === day.format(Date.now() - 86400000)) return 'Вчера';
     return new Intl.DateTimeFormat('ru', {day:'numeric', month:'short', timeZone:'Europe/Moscow'}).format(date);
   }
   function appendInboxItem(item) {
-    const row = document.createElement('article'); row.className = 'notification-item';
+    const support = item.kind === 'support';
+    const tone = item.tone === 'urgent' ? 'urgent' : support ? 'support' : item.kind === 'booking' ? 'booking' : 'notification';
+    const expandable = Boolean(item.support_message_id || item.booking_id);
+    const row = document.createElement(expandable ? 'details' : 'article');
+    row.className = 'notification-item'; row.dataset.tone = tone;
+    const head = document.createElement(expandable ? 'summary' : 'div'); head.className = 'notification-item-head';
     const icon = document.createElement('span'); icon.className = 'notification-item-icon'; icon.setAttribute('aria-hidden','true');
-    const symbol = ({booking:'box', support:'info'})[item.kind] || 'info';
+    const symbol = support ? 'support-message' : tone === 'booking' ? 'box' : 'info';
     icon.innerHTML = `<svg class="icon"><use href="#icon-${symbol}"></use></svg>`;
     const copy = document.createElement('div'); copy.className = 'notification-item-copy';
+    const meta = document.createElement('div'); meta.className = 'notification-item-meta';
+    const category = document.createElement('span');
+    category.textContent = support && item.preview ? `Поддержка · ${item.title}`
+      : ({support:'Поддержка', urgent:'Возврат', booking:'Бронирование', notification:'Уведомление'})[tone];
+    meta.append(category);
+    if (item.unread) {
+      const unread = document.createElement('span'); unread.className = 'notification-item-unread';
+      unread.textContent = 'Новое'; meta.append(unread);
+    }
     const title = document.createElement('strong');
     const lines = String(item.message || '').split('\n').map(line=>line.trim()).filter(line=>line && !line.startsWith('Автор:') && line !== 'Открыть заявку');
-    title.textContent = item.title ?? lines.shift() ?? 'Уведомление';
-    copy.append(title);
+    const fallbackTitle = lines.shift();
+    title.textContent = item.preview || item.title || fallbackTitle || 'Уведомление';
+    copy.append(meta, title);
     const summary = item.summary ?? lines.join(' ');
     if (summary) { const message = document.createElement('p'); message.textContent = summary; copy.append(message); }
-    if (item.booking_id) copy.append(plainButton("Открыть заявку", async () => {
+    const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = notificationTime(item.created_at); date.title = dateText(item.created_at);
+    head.append(icon, copy, date); row.append(head);
+    const detail = document.createElement('div'); detail.className = 'notification-item-detail';
+    if (support && item.support_message_id) {
+      const body = document.createElement('p'); body.className = 'notification-item-message';
+      detail.append(body);
+      let loading = false, loaded = false;
+      async function loadMessage() {
+        if (!row.open || loading || loaded) return;
+        loading = true; body.textContent = 'Загружаем сообщение…';
+        try {
+          const result = await api(`/api/miniapp/notifications/inbox/support/${item.support_message_id}`);
+          body.textContent = result.text; loaded = true;
+        } catch (_) {
+          body.textContent = 'Не удалось открыть сообщение. ';
+          body.append(plainButton('Повторить', loadMessage, 'ghost'));
+        } finally { loading = false; }
+      }
+      row.addEventListener('toggle', loadMessage);
+    }
+    if (support && item.support_thread_id && item.staff) detail.append(plainButton("Открыть обращение", async () => {
+      if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
+      $("notification-close").click();
+      state.supportTargetId = state.supportFilterId = item.support_thread_id;
+      state.supportPage = 0;
+      await showAdmin("support");
+    }, "ghost"));
+    if (support && item.support_thread_id && !item.staff) detail.append(plainButton("Написать оператору", () => {
+      $("notification-close").click();
+      return openSupport(item.booking_id ? "request" : "profile", item.booking_id || null);
+    }, "ghost"));
+    if (!support && item.booking_id) detail.append(plainButton("Открыть заявку", async () => {
       $("notification-close").click();
       if (!item.staff) return openCustomerBooking(item.booking_id);
       selectedRequestId = item.booking_id;
@@ -3550,12 +4743,12 @@
       state.adminRequestFilter = state.adminQueue = state.adminStatus = "all";
       await revealNavigation(() => showAdmin("orders"), () => document.querySelector(`.request-card[data-booking-id="${item.booking_id}"]`));
     }, "ghost"));
-    if (item.booking_id && !item.staff) copy.append(plainButton("Связаться с оператором", () => {
+    if (!support && item.booking_id && !item.staff) detail.append(plainButton("Связаться с оператором", () => {
       $("notification-close").click();
       return openSupport("request", item.booking_id);
     }, "ghost"));
-    const date = document.createElement('time'); date.dateTime = item.created_at; date.textContent = notificationTime(item.created_at); date.title = dateText(item.created_at);
-    copy.append(date); row.append(icon, copy); $('notification-items').append(row);
+    if (expandable) row.append(detail);
+    $('notification-items').append(row);
   }
   async function loadInboxPage(reset = false) {
     if (inboxBusy) return;
@@ -3563,9 +4756,16 @@
     $('notification-items').setAttribute('aria-busy','true');
     $('notification-more').disabled = true; $('notification-retry').hidden = true;
     try {
-      if (reset) { inboxOffset = 0; $('notification-items').replaceChildren(); }
+      if (reset) { inboxOffset = 0; $('notification-items').replaceChildren(); $('notification-count').hidden = true; }
+      $('notification-status').classList.add('loading-status');
       $('notification-status').textContent = 'Загрузка…';
-      const result = await api(`/api/miniapp/notifications/inbox?offset=${inboxOffset}`);
+      const result = await api(`/api/miniapp/notifications/inbox?offset=${inboxOffset}&support_preview=1`);
+      $('notification-status').classList.remove('loading-status');
+      if (reset && result.unread_count > 0) {
+        const form = new Intl.PluralRules('ru').select(result.unread_count);
+        $('notification-count').textContent = `${result.unread_count} ${form === 'one' ? 'новое' : 'новых'}`;
+        $('notification-count').hidden = false;
+      }
       for (const item of result.items) appendInboxItem(item);
       inboxOffset += result.items.length;
       $('notification-more').hidden = !result.has_more;
@@ -3576,7 +4776,7 @@
       $('notification-status').textContent = 'Не удалось загрузить уведомления';
       $('notification-retry').hidden = false; $('notification-more').hidden = true;
     }
-    finally { inboxBusy = false; $('notification-items').setAttribute('aria-busy','false'); $('notification-more').disabled = false; }
+    finally { inboxBusy = false; $('notification-status').classList.remove('loading-status'); $('notification-items').setAttribute('aria-busy','false'); $('notification-more').disabled = false; }
   }
   document.addEventListener('click', event => {
     const button = event.target.closest?.('.notification-bell'); if (!button) return;
@@ -3665,11 +4865,11 @@
     finally {readyInvitationBusy=false;}
   }
   function appendEquipmentFeatures(parent, order){
-    const items=order.equipment_details || order.handover?.snapshot || [];if(!items.length)return;
+    const items=order.equipment_details || order.handover?.snapshot || [];if(!items.length)return false;
     const section=document.createElement('section');section.className='equipment-features';
     const heading=document.createElement('h4');heading.textContent='Особенности и комплектация';section.append(heading);
     items.forEach((item,index)=>{
-      const title=document.createElement('strong');title.textContent=`${item.name} · экземпляр ${index+1}`;section.append(title);
+      const title=document.createElement('strong');title.textContent=`${item.name} (экземпляр ${index+1})`;section.append(title);
       const rows=(item.features||[]).map(feature=>`Особенность: ${feature.description}`);
       if(!rows.length)rows.push('Известных особенностей нет.');
       for(const component of item.components||[])rows.push(`${component.replacement_name||component.name}${['missing','faulty'].includes(component.state)?' — не выдано':''}`);
@@ -3680,9 +4880,10 @@
       for(const item of order.handover.exceptions){const p=document.createElement('p');p.textContent=`${item.name}${item.component?` / ${item.component}`:''}: ${item.reason==='replacement'?'заменено':'не выдано'}${item.replacement_name?` — ${item.replacement_name}`:''}`;section.append(p);}
     }
     parent.append(section);
+    return Boolean(order.handover?.exceptions?.length);
   }
   async function loadHandoverSettings(){
-    const form=$('handover-settings-form');form.inert=true;form.querySelector('button').disabled=true;
+    const form=$('handover-settings-form');if(form.inert || staffFormDirty(form))return;form.inert=true;form.querySelector('button').disabled=true;
     try{const data=await api('/api/miniapp/admin/handover-settings');for(const key of ['pickup_location','pickup_instructions'])form.elements[key].value=data[key]||'';registerStaffForm(form);form.querySelector('button').disabled=false;}
     catch(error){$('handover-settings-status').textContent=error.message;}
     finally{form.inert=false;}
@@ -3694,7 +4895,9 @@
     text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere'; section.append(text); parent.append(section);
   }
   async function loadBookingSettings() {
-    const form = $('booking-settings-form'), button = form.querySelector('button'); form.inert = true; button.disabled = true;
+    const form = $('booking-settings-form'), button = form.querySelector('button');
+    if (form.inert || staffFormDirty(form)) return;
+    form.inert = true; button.disabled = true;
     try {
       const data = await api('/api/miniapp/admin/booking-settings');
       form.elements.rental_purpose_enabled.checked = data.rental_purpose_enabled;
@@ -3703,7 +4906,9 @@
     finally { form.inert = false; }
   }
   $('booking-settings-form').addEventListener('submit', async event => {
-    event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button'); button.disabled = true;
+    event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button');
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       await api('/api/miniapp/admin/booking-settings', {method:'PUT', body:JSON.stringify({rental_purpose_enabled:form.elements.rental_purpose_enabled.checked})});
       registerStaffForm(form); $('booking-settings-status').textContent = 'Настройки оформления сохранены';
@@ -3711,7 +4916,9 @@
     finally { button.disabled = false; }
   });
   $('handover-settings-form').addEventListener('submit',async event=>{
-    event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');button.disabled=true;
+    event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');
+    if(button.disabled)return;
+    button.disabled=true;
     try{await api('/api/miniapp/admin/handover-settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(form)))});registerStaffForm(form);$('handover-settings-status').textContent='Настройки выдачи сохранены';}
     catch(error){$('handover-settings-status').textContent=error.message;}finally{button.disabled=false;}
   });
@@ -3734,58 +4941,44 @@
   }
   setInterval(() => { void claimStageNotices(); }, 5000);
 
-  async function previewReceipt(order, admin = false) {
-    const path = admin ? `/api/miniapp/admin/bookings/${order.id}/documents/receipt` : `/api/miniapp/bookings/${order.id}/receipt`;
-    const response = await fetch(path,{headers:{"X-Telegram-Init-Data":tg?.initData || ""},cache:"no-store"});
-    if (!response.ok) {
-      let detail = "Не удалось открыть сохранённую расписку";
-      try { const error = await response.json(); if (typeof error.detail === "string") detail = error.detail; } catch (_) {}
-      throw new Error(detail);
-    }
-    if (!response.headers.get("Content-Type")?.includes("application/pdf")) {
-      const preview = await api(`${path}?preview=true`);
-      await workflowDialog("Сохранная расписка DOCX", '<div class="receipt-docx-preview"></div><button type="button" class="button primary receipt-download">Скачать DOCX</button>', "Закрыть", dialog => {
-        dialog.classList.add("receipt-preview-dialog");
-        dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
-        dialog.querySelector('[type="submit"]').hidden = true;
-        const host = dialog.querySelector(".receipt-docx-preview");
-        for (const block of preview.blocks || []) {
-          if (block.type === "paragraph") { const p = document.createElement("p"); p.textContent = block.text || " "; host.append(p); }
-          if (block.type === "table") { const table = document.createElement("table"); for (const row of block.rows || []) { const tr = table.insertRow(); for (const value of row) tr.insertCell().textContent = value; } host.append(table); }
-        }
-        const button = dialog.querySelector(".receipt-download");
-        button.addEventListener("click", async () => {
-          button.disabled = true;
-          try { await downloadSecure(path, `receipt-${order.id}.docx`); }
-          catch (error) { let message = dialog.querySelector(".receipt-error"); if (!message) { message = document.createElement("p"); message.className = "receipt-error"; message.setAttribute("role", "alert"); button.after(message); } message.textContent = error.message; }
-          finally { button.disabled = false; }
-        });
-      }); return;
-    }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    let renderer = null;
-    try {
-      await workflowDialog("Предпросмотр расписки", '<div class="receipt-pdf-preview"><p class="receipt-preview-status" role="status">Загрузка страниц…</p><div class="receipt-preview-skeleton loading-skeleton" aria-hidden="true"><span></span><span></span><span></span></div><div class="receipt-pages"></div><button type="button" class="button primary receipt-download">Скачать PDF</button></div>', "Закрыть", dialog => {
-        dialog.classList.add("receipt-preview-dialog");
-        dialog.querySelector(".workflow-cancel").textContent = "Назад к заявке";
-        dialog.querySelector('[type="submit"]').hidden = true;
-        const host = dialog.querySelector(".receipt-pdf-preview");
-        const button = host.querySelector(".receipt-download");
-        button.addEventListener("click", async () => { button.disabled = true; try { await downloadSecure(path, `receipt-${order.id}.pdf`); } catch (error) { host.querySelector(".receipt-preview-status").textContent = error.message; } finally { button.disabled = false; } });
-        void import("/miniapp/static/receipt-preview.js").then(module => {
-          if (dialog.isConnected) renderer = module.renderReceiptPdf(host, bytes);
-        }).catch(() => { if (dialog.isConnected) host.querySelector(".receipt-preview-status").textContent = "Не удалось загрузить просмотрщик. Скачайте PDF, чтобы открыть его на устройстве."; });
-      });
-    } finally { renderer?.close(); }
-  }
-
   function plainButton(title, handler, className = "secondary") {
     const button = document.createElement("button"); button.type = "button"; button.className = `button ${className}`; button.textContent = title;
-    button.addEventListener("click", async () => { button.disabled = true; try { await handler(); } catch (error) { showError(error.message); } finally { button.disabled = false; } });
+    button.addEventListener("click", () => runButton(button, handler));
     return button;
   }
 
+  async function runButton(button, action, onError = error => showError(error.message)) {
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await action(); }
+    catch (error) { onError(error); }
+    finally { button.disabled = false; }
+  }
+
   function moscowInput(value) { return new Date(new Date(value).getTime() + 3*3600000).toISOString().slice(0,16); }
+
+  function requestEditDate(name, label, timeLabel, value) {
+    const local = moscowInput(value);
+    return `<label class="field"><span>${label}</span><input name="${name}-date" data-form-date inputmode="numeric" maxlength="10" required placeholder="${formDatePlaceholder()}" value="${displayFormDate(local.slice(0, 10))}"></label>
+      <label class="field"><span>${timeLabel}</span><input name="${name}-time" type="time" step="60" required value="${local.slice(11)}"></label>`;
+  }
+
+  function requestEditPeriod(data, originalStart) {
+    const startDate = parseFormDate(data.get("start-date")), endDate = parseFormDate(data.get("end-date"));
+    const startTime = data.get("start-time"), endTime = data.get("end-time");
+    if (!startDate || !endDate || !startTime || !endTime) throw new Error(`Проверьте дату и время аренды. Формат даты — ${formDatePlaceholder()}.`);
+    const pickedStart = `${startDate}T${startTime}`;
+    const current = moscowInput(new Date());
+    const start = pickedStart !== moscowInput(originalStart) && pickedStart < current ? current : pickedStart;
+    const end = `${endDate}T${endTime}`;
+    if (end <= start) throw new Error("Возврат должен быть позже начала аренды.");
+    return {start: toIso(start), end: toIso(end)};
+  }
+
+  function requestEditPosition(id, name, quantity, media) {
+    const photo = media.image_data || media.image_url ? catalogMedia({...media, name}, "request-item") : "";
+    return `<div class="request-edit-position">${photo}<label class="field"><span>${escapeHtml(name)}</span><input name="quantity-${Number(id)}" type="number" min="0" max="30" value="${Number(quantity)}" required></label></div>`;
+  }
 
   async function editRequestDialog(order, manager = false, change = null, force = false) {
     const forceUrl = `/api/miniapp/admin/bookings/${order.id}/force-edit`;
@@ -3794,17 +4987,31 @@
     const catalogUrl = manager ? forceUrl + "/availability" : `/api/miniapp/bookings/${order.id}/edit-availability`;
     const resetPreparation = ["preparing", "ready"].includes(order.status);
     const notice = force ? (resetPreparation ? "Правки сохранятся сразу. Подтвердите заявку заново, затем соберите и проверьте комплект." : "Правки сохранятся сразу. Подтвердите заявку заново. Если клиенту уже отправлено предложение, оно закроется.") : "Клиенту придёт уведомление. На подтверждение — 24 часа.";
-    const content=`<p>Укажите сроки аренды по МСК.</p><label class="field"><span>Начало</span><input name="start" type="datetime-local" value="${moscowInput(values.start)}" required></label><label class="field"><span>Возврат</span><input name="end" type="datetime-local" value="${moscowInput(values.end)}" required></label><div class="request-edit-lines">${values.lines.map(line=>`<label class="field"><span>${escapeHtml(line.name||order.items.find(item=>item.id===line.article_id)?.name||String(line.article_id))}</span><input name="quantity-${line.article_id}" type="number" min="0" max="30" value="${line.quantity}" required></label>`).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>'+notice+'</p>':""}`;
+    const content=`<p>Укажите сроки аренды по МСК.</p><div class="request-edit-period">${requestEditDate('start', 'Начало аренды', 'Время начала', values.start)}${requestEditDate('end', 'Возврат', 'Время возврата', values.end)}</div><div class="request-edit-lines">${values.lines.map(line => { const item = order.items.find(item => item.id === line.article_id); const media = {...item, ...order.article_media?.[line.article_id]}; return requestEditPosition(line.article_id, line.name || item?.name || String(line.article_id), line.quantity, media); }).join("")}</div><button type="button" class="button ghost request-add-position">Добавить позицию</button><div class="request-add-options"></div>${manager?'<label class="field"><span>Комментарий для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label><p>'+notice+'</p>':""}`;
     const data=await workflowDialog(force ? "Изменить без согласования" : manager ? "Изменить заявку" : "Исправить заявку", content, force ? "Применить изменения" : manager ? "Подтвердить" : "Подтверждаю",dialog=>{
+      const startDate = dialog.querySelector('[name="start-date"]');
+      const startTime = dialog.querySelector('[name="start-time"]');
+      const correctStart = () => {
+        const day = parseFormDate(startDate.value);
+        const picked = `${day}T${startTime.value}`;
+        const current = moscowInput(new Date());
+        if (!day || !startTime.value || picked === moscowInput(values.start) || picked >= current) return;
+        startDate.value = displayFormDate(current.slice(0, 10));
+        startTime.value = current.slice(11);
+      };
+      startDate.addEventListener("change", correctStart);
+      startTime.addEventListener("change", correctStart);
       const add=dialog.querySelector(".request-add-position");
       add.addEventListener("click",async()=>{
-        const start=dialog.querySelector('[name="start"]').value, end=dialog.querySelector('[name="end"]').value;
-        if (!start || !end) { showError("Сначала укажите сроки аренды."); return; }
+        let period;
+        try { period = requestEditPeriod(new FormData(dialog.querySelector('form')), values.start); }
+        catch (error) { showError(error.message); return; }
         const existing = new Set([...dialog.querySelectorAll('[name^="quantity-"]')].map(input => Number(input.name.slice(9))));
-        const selected = new Map(); let items = [];
+        const selected = new Map(); let items = null;
         await workflowDialog("Добавить оборудование", `<p>Доступность на сроки заявки. Выберите позиции и количество.</p><label class="field"><span>Поиск в каталоге</span><input type="search" class="request-catalog-search" placeholder="Название, модель или артикул"></label><p class="request-catalog-status" role="status"></p><div class="request-catalog-results"></div><p class="request-catalog-total" role="status">Ничего не выбрано</p><button type="button" class="button secondary request-catalog-retry" hidden>Повторить загрузку</button>`, "Добавить выбранное", picker => {
           const search=picker.querySelector('.request-catalog-search'), host=picker.querySelector('.request-catalog-results'), status=picker.querySelector('.request-catalog-status'), total=picker.querySelector('.request-catalog-total'), retry=picker.querySelector('.request-catalog-retry'), submit=picker.querySelector('[type="submit"]');
           const render=()=>{
+            if (!items) return;
             host.replaceChildren(); const query=search.value.trim().toLocaleLowerCase('ru-RU');
             const found=items.filter(item=>![...existing].includes(Number(item.id)) && [item.title,item.name,item.description,item.brand,item.kind,item.key_spec,item.sku].join(' ').toLocaleLowerCase('ru-RU').includes(query));
             status.textContent=found.length ? 'Доступно на даты заявки' : 'Ничего не найдено. Измените запрос или вернитесь к заявке.';
@@ -3819,24 +5026,22 @@
               const plus=document.createElement('button'); plus.type='button'; plus.className='button ghost'; plus.textContent='+'; plus.setAttribute('aria-label',`Добавить: ${item.title||item.name}`); plus.disabled=count>=Math.min(30,available);
               minus.addEventListener('click',()=>{ if(count===1) selected.delete(item.id); else selected.set(item.id,count-1); render(); });
               plus.addEventListener('click',()=>{ selected.set(item.id,count+1); render(); });
+              if (item.image_data || item.image_url) row.insertAdjacentHTML("beforeend", catalogMedia(item, "request-item"));
               controls.append(minus,value,plus);row.append(heading,hint,controls);host.append(row);
             }
             const quantity=[...selected.values()].reduce((a,b)=>a+b,0);total.textContent=quantity ? `Выбрано: ${quantity} шт.` : 'Ничего не выбрано'; submit.disabled=!quantity;
           };
-          const load=async()=>{retry.hidden=true;status.textContent='';showLoading(host,'');submit.disabled=true;try {const result=await api(`${catalogUrl}?${new URLSearchParams({start:start+":00+03:00",end:end+":00+03:00"})}`);items=result.all_items||result.items||[];render();}catch(error){host.replaceChildren();status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
+          const load=async()=>{retry.hidden=true;status.textContent='';showLoading(host,'Загружаем оборудование…');submit.disabled=true;try {const result=await api(`${catalogUrl}?${new URLSearchParams(period)}`);items=result.all_items||result.items||[];render();}catch(error){host.replaceChildren();status.textContent=`Не удалось загрузить каталог: ${error.message}`;retry.hidden=false;}};
           search.addEventListener('input',render);retry.addEventListener('click',load);void load();
         },async()=>{
           for(const [id,quantityValue] of selected){
             const item=items.find(entry=>entry.id===id);if(!item)continue;
-            const label=document.createElement('label');label.className='field';
-            const name=document.createElement('span');name.textContent=item.title||item.name;
-            const quantity=document.createElement('input');quantity.name=`quantity-${id}`;quantity.type='number';quantity.min='0';quantity.max='30';quantity.value=String(quantityValue);quantity.required=true;
-            label.append(name,quantity);dialog.querySelector('.request-edit-lines').append(label);
+            dialog.querySelector(".request-edit-lines").insertAdjacentHTML("beforeend", requestEditPosition(id, item.title || item.name, quantityValue, item));
           }
         });
       });
     },async data=>{
-      const proposed={start:`${data.get("start")}:00+03:00`,end:`${data.get("end")}:00+03:00`,lines:[...data].filter(([key])=>key.startsWith("quantity-")).map(([key,value])=>({article_id:Number(key.slice(9)),quantity:Number(value)})).filter(line=>line.quantity>0)};
+      const proposed={...requestEditPeriod(data, values.start),lines:[...data].filter(([key])=>key.startsWith("quantity-")).map(([key,value])=>({article_id:Number(key.slice(9)),quantity:Number(value)})).filter(line=>line.quantity>0)};
       if (force) await api(forceUrl, {method:"PUT", body:JSON.stringify({...proposed, comment:data.get("comment"), revision:edit.revision})});
       else if(manager)await api(`/api/miniapp/admin/bookings/${order.id}/changes`,{method:"POST",body:JSON.stringify({change_type:"manager_edit",comment:data.get("comment"),proposed})});
       else if(change)await api(`/api/miniapp/bookings/${order.id}/changes/respond`,{method:"POST",body:JSON.stringify({change_id:change.id,accept:true,corrected:proposed})});
@@ -3846,8 +5051,6 @@
   }
 
   function appendCustomerWorkflow(card, order) {
-    const notice = workflowNotice(order);
-    if (notice) { const strip = document.createElement("p"); strip.className = "notice stage-notice"; strip.setAttribute("role","status"); strip.textContent = notice; card.append(strip); }
     if (order.status === "pending") card.append(plainButton("Изменить заявку", () => editRequestDialog(order)));
     const request = order.customer_change_request;
     if (order.status === "confirmed" && request) {
@@ -3872,8 +5075,16 @@
       const change=await api(`/api/miniapp/bookings/${order.id}/changes`);
       await workflowDialog("Заявка отклонена",`<p>${escapeHtml(change?.comment || "")}</p>`,"Закрыть");
     }));
+    if (order.change_status === "disputed") {
+      const dispute = plainButton("Ваше возражение", async () => {
+        const change = await api(`/api/miniapp/bookings/${order.id}/changes`);
+        await workflowDialog("Изменения оспорены", `<p>Вы отклонили предложенные изменения. Возражение передано сотруднику.</p>${change?.dispute ? `<h3>Ваш комментарий</h3><p>${escapeHtml(change.dispute)}</p>` : ''}`, "Закрыть");
+      });
+      dispute.classList.add("customer-dispute-details");
+      card.append(dispute);
+    }
     if (order.change_type === "staff_edit" || order.status === "needs_changes" || order.change_status === "unanswered") {
-      card.append(plainButton(order.change_status === "unanswered" ? "Клиент не ответил: решение у менеджера" : request?.status === "approved" ? "Внести изменения" : "Посмотреть изменения", async () => {
+      card.append(plainButton(request?.status === "approved" ? "Внести изменения" : "Посмотреть изменения", async () => {
         const change = await api(`/api/miniapp/bookings/${order.id}/changes`);
         if (!change) return;
         if (change.change_type === "staff_edit") {
@@ -3882,16 +5093,35 @@
         }
         if (change.change_type === "client_fix") { const data = await workflowDialog("Нужно исправить", `<p>${escapeHtml(change.comment)}</p>`, "Перейти к исправлению"); if (data) await editRequestDialog(order,false,change); return; }
         const diff = `<p>${escapeHtml(change.comment || "")}</p>${changeDetailsHtml(equipmentComparison(change.before, change.after))}<p>${change.deadline ? `Ответить до ${escapeHtml(dateText(change.deadline))} МСК` : ""}</p>`;
-        const response = await workflowDialog("Изменения заявки", `${diff}<label class="field"><span>Решение</span><select name="decision"><option value="accept">Подтверждаю</option><option value="dispute">Оспорить</option></select></label><label class="field"><span>Комментарий при оспаривании</span><textarea name="comment" maxlength="2000"></textarea></label>`, "Подтверждаю", (dialog) => { dialog.querySelector("select").addEventListener("change", (event) => { dialog.querySelector("textarea").required = event.target.value === "dispute"; }); }, async data=>api(`/api/miniapp/bookings/${order.id}/changes/respond`,{method:"POST",body:JSON.stringify({change_id:change.id,accept:data.get("decision")==="accept",comment:data.get("comment")})}));
+        if (change.status === "unanswered" || order.change_status === "unanswered") {
+          await workflowDialog("Изменения заявки", `${diff}<p>Срок ответа истёк. Сотрудник решит, как продолжить.</p>`, "Закрыть");
+          return;
+        }
+        const response = await workflowDialog("Изменения заявки", `${diff}<label class="field"><span>Ваше решение</span><select name="decision"><option value="accept">Принять изменения</option><option value="dispute">Оспорить изменения</option></select></label><div class="dispute-fields" hidden><p>Исходные условия заявки сохранятся. Сотрудник получит ваш комментарий.</p><label class="field"><span>Почему вы не согласны?</span><textarea name="comment" maxlength="2000"></textarea></label></div>`, "Принять изменения", (dialog) => {
+          const select = dialog.querySelector('[name="decision"]');
+          select.addEventListener("change", () => {
+            const disputing = select.value === "dispute";
+            dialog.querySelector(".dispute-fields").hidden = !disputing;
+            dialog.querySelector("textarea").required = disputing;
+            dialog.querySelector('[type="submit"]').textContent = disputing ? "Отправить возражение" : "Принять изменения";
+          });
+        }, async data => {
+          const accept = data.get("decision") === "accept";
+          await api(`/api/miniapp/bookings/${order.id}/changes/respond`, {method:"POST",body:JSON.stringify({change_id:change.id,accept,comment:accept ? "" : data.get("comment")})});
+        });
         if (!response) return;
         await showOrders();
+        if (response.get("decision") === "dispute") {
+          focusDisclosure(document.querySelector(`.customer-order-card[data-booking-id="${order.id}"] .customer-dispute-details`));
+        }
       }));
     }
-    appendEquipmentFeatures(card, order);
+    const hasPartialIssueDetails = appendEquipmentFeatures(card, order);
     appendHandoverProgress(card, order, false);
-    if (order.partial_issue) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
-    if (order.receipt_available || order.receipt_preview_available) card.append(plainButton("Предпросмотр расписки",()=>previewReceipt(order)));
-    if (order.receipt_preview_available && !order.receipt_available) card.append(plainButton("Скачать для подписи",()=>downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`,`receipt-${order.id}.docx`)));
+    if (order.partial_issue && !hasPartialIssueDetails) { const badge = document.createElement("span"); badge.className="status-pill"; badge.textContent="Частичная выдача"; card.append(badge); }
+    if (order.receipt_available || order.receipt_preview_available) card.append(plainButton(
+      order.receipt_available ? "Скачать расписку" : "Скачать для подписи",
+      () => downloadSecure(`/api/miniapp/bookings/${order.id}/receipt`, `receipt-${(order.human_number || String(order.id)).replace("ТС", "TS")}.docx`)));
     if ((order.status === "issued" || (order.status === "return_inspection" && order.handover?.legacy_issue)) && !order.handover?.returning_at) card.append(plainButton("Сдать оборудование", () => startCustomerReturn(order.id),"primary"));
   }
 
@@ -3903,7 +5133,7 @@
       actions.append(actionButton("Рассмотреть запрос на изменения", async () => {
         const request = await api(`/api/miniapp/bookings/${order.id}/change-request`);
         if (!request || request.status !== "pending") throw new Error("Запрос уже обработан. Обновите заявку.");
-        await workflowDialog("Запрос клиента на изменения", `<p class="eyebrow">Причина клиента</p><p>${escapeHtml(request.reason)}</p><label class="field"><span>Решение</span><select name="decision"><option value="approve">Подтвердить запрос</option><option value="reject">Отклонить запрос</option></select></label><p>При подтверждении клиент сможет исправить заявку и отправить её на повторное подтверждение. При отказе заявка останется подтверждённой.</p><label class="field"><span>Комментарий клиенту (необязательно)</span><textarea name="comment" maxlength="2000"></textarea></label>`, "Сохранить решение", null, async data => {
+        await workflowDialog("Запрос клиента на изменения", `<h3>Причина клиента</h3><p>${escapeHtml(request.reason)}</p><label class="field"><span>Решение</span><select name="decision"><option value="approve">Подтвердить запрос</option><option value="reject">Отклонить запрос</option></select></label><p>При подтверждении клиент сможет исправить заявку и отправить её на повторное подтверждение. При отказе заявка останется подтверждённой.</p><label class="field"><span>Комментарий клиенту (необязательно)</span><textarea name="comment" maxlength="2000"></textarea></label>`, "Сохранить решение", null, async data => {
           await api(`/api/miniapp/admin/bookings/${order.id}/change-request/${request.id}/decision`, {method:"POST",body:JSON.stringify({approve:data.get("decision")==="approve",comment:data.get("comment") || ""})});
         });
       }, order.id, "primary"));
@@ -3924,8 +5154,17 @@
       const data=await workflowDialog("Отклонить заявку",'<label class="field"><span>Причина для клиента</span><textarea name="comment" maxlength="2000" required></textarea></label>',"Подтвердить",null,async data=>api(`/api/miniapp/admin/bookings/${order.id}/decline`,{method:"POST",body:JSON.stringify({comment:data.get("comment")})}));
     },order.id,"ghost danger"));
     if (order.change_status === "unanswered") { const note = document.createElement("p"); note.className="notice"; note.textContent="Клиент не ответил на изменения. Решение принимает менеджер."; actions.append(note); }
+    if (order.change_status === "disputed") {
+      const note = document.createElement("p");
+      note.className = "notice";
+      note.textContent = "Клиент оспорил предложенные изменения. В заявке сохранены исходные условия.";
+      actions.append(note);
+      if (state.role?.pii_admin) actions.append(actionButton("Возражение клиента", async () => {
+        const change = await api(`/api/miniapp/admin/bookings/${order.id}/changes`);
+        await workflowDialog("Возражение клиента", change?.dispute ? `<p>${escapeHtml(change.dispute)}</p>` : '<p>Комментарий недоступен.</p>', "Закрыть");
+      }, order.id, "secondary lock-exempt", false));
+    }
     if (order.handover?.snapshot && state.role?.pii_admin) actions.append(actionButton("Скачать расписку", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/receipt`,`receipt-${order.id}.docx`),order.id,"secondary lock-exempt",false));
-    if (order.handover?.snapshot && state.role?.pii_admin) actions.append(actionButton("Предпросмотр расписки",()=>previewReceipt(order,true),order.id,"secondary lock-exempt",false));
     if (state.role?.pii_admin && order.archived_documents?.includes("issue")) actions.append(actionButton("Архивный акт (устаревший)", () => downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/issue`,`act-${order.id}.docx`),order.id,"ghost lock-exempt",false));
     for(const kind of ["receipt","return","contract"])if(state.role?.pii_admin&&order.archived_documents?.includes(kind))actions.append(actionButton(({receipt:"Архивная расписка DOCX",return:"Архивный акт возврата",contract:"Архивный договор"})[kind],()=>downloadSecure(`/api/miniapp/admin/bookings/${order.id}/documents/${kind==="receipt"?"legacy_receipt":kind}`,`archive-${kind}-${order.id}.docx`),order.id,"ghost lock-exempt",false));
     if (state.role?.pii_admin && ["issued","return_inspection"].includes(order.status) && !order.handover?.snapshot?.length) actions.append(actionButton("Подготовить расписку старой выдачи", async () => {
@@ -3943,102 +5182,182 @@
   }
 
   let assignmentOpening = false;
-  async function manualAssign(order) {
-    const existing = document.querySelector('.assignment-editor');
-    if (existing) { scrollElementIntoView(existing); return; }
-    if (assignmentOpening) return;
-    if (!order.lines.some(line => line.quantity > 0)) { showError('В заявке нет оборудования. Верните заявку на доработку или обратитесь к администратору для восстановления позиции.'); return; }
+  async function manualAssign(order, opener) {
+    if (assignmentOpening || document.querySelector('.next-step-assignment')) return;
+    if (!order.lines.some(line => line.quantity > 0)) throw new Error('В заявке нет запрошенного оборудования.');
     assignmentOpening = true;
     let catalog;
-    try { catalog = await api("/api/miniapp/admin/catalog"); }
+    try { catalog = await api("/api/miniapp/admin/catalog", {fresh:true}); }
     finally { assignmentOpening = false; }
-    if (document.querySelector('.assignment-editor') || state.view !== 'admin' || state.adminMode !== 'orders') return;
-    const editor = document.createElement("article"); editor.className = "admin-card assignment-editor";
-    editor.innerHTML = `<div class="order-head"><div><h3>Замена экземпляров</h3><p>Выберите конкретную технику для каждой позиции заказа.</p></div><button type="button" class="button ghost compact assignment-close">Закрыть</button></div><form class="assignment-form"></form>`;
-    const form = editor.querySelector("form");
-    for (const line of order.lines) {
-      const article = catalog.articles.find((item) => item.id === line.article_id);
-      const current = order.assets.filter((asset) => asset.line_id === line.id || (!asset.line_id && asset.article_id === line.article_id)).map((asset) => asset.id);
-      const group = document.createElement("fieldset"); group.className = "assignment-group";
-      group.innerHTML = `<legend>${escapeHtml(line.name)} × ${line.quantity}</legend>`;
-      for (let index = 0; index < line.quantity; index += 1) {
-        const slot = document.createElement("label"); slot.className = "assignment-slot";
-        slot.innerHTML = `<span>${escapeHtml(line.title || line.name)} · ${index + 1}</span>`;
-        const select = document.createElement("select"); select.name = `line-${line.id}`; select.required = true;
-        select.innerHTML = '<option value="">Выберите технику</option><option value="missing">Не выдано: отсутствует</option><option value="faulty">Не выдано: неисправность</option>';
-        for (const item of article?.equipment || []) {
-          if (item.condition !== "available" && !current.includes(item.id)) continue;
-          const option = document.createElement("option"); option.value = item.id; option.textContent = `${article.title || article.name} #${item.asset_code} · ${item.location || "без ячейки"}`; option.selected = current[index] === item.id; select.append(option);
-        }
-        const note = document.createElement("input"); note.name = `note-${line.id}-${index}`; note.placeholder="Комментарий к исключению (необязательно)"; note.maxLength=2000;
-        const replacement = document.createElement("details"); replacement.innerHTML='<summary>Выбрать замену</summary>';
-        const candidates = catalog.articles.flatMap((model) => model.equipment.filter((item) => item.condition === "available").map((item) => ({...item,label:`${model.title || model.name} #${item.asset_code}`})));
-        const results = document.createElement("div"); results.className="replacement-list";
-        const draw = (query="") => {
-          results.replaceChildren();
-          const filtered = candidates.filter((item) => `${item.id} ${item.label}`.toLocaleLowerCase("ru-RU").includes(query.toLocaleLowerCase("ru-RU"))).slice(0,10);
-          for (const item of filtered) results.append(plainButton(item.label, () => {
-            let option = [...select.options].find((entry) => entry.value === String(item.id));
-            if (!option) { option = new Option(item.label,String(item.id)); select.append(option); }
-            option.dataset.replacement="true"; select.value=String(item.id); select.dispatchEvent(new Event("change")); replacement.open=false;
-          },"ghost"));
-        };
-        if (candidates.length > 10) { const search=document.createElement("input"); search.type="search"; search.placeholder="Поиск по ID или названию"; search.setAttribute("aria-label","Поиск замены по ID или названию"); search.addEventListener("input",()=>draw(search.value)); replacement.append(search); }
-        draw(); replacement.append(results);
-        if (current[index] && ![...select.options].some(option=>option.value===String(current[index]))) {
-          const model=catalog.articles.find(model=>model.equipment.some(item=>item.id===current[index]));
-          const asset=model?.equipment.find(item=>item.id===current[index]);
-          if (asset) {const option=new Option(`${model.title||model.name} #${asset.asset_code}`,String(asset.id),true,true); option.dataset.replacement="true"; select.append(option);}
-        }
-        const components=document.createElement("div"); components.className="component-slots";
-        const drawComponents=()=>{
-          components.replaceChildren();
-          const model=catalog.articles.find(model=>model.equipment.some(item=>item.id===Number(select.value)));
-          for (const component of [...new Set((model?.composition || "").split(/[\n;]+/).map(value=>value.trim()).filter(Boolean))]) {
-            const saved=order.handover?.exceptions?.find(item=>item.equipment_id===Number(select.value)&&item.component===component);
-            const row=document.createElement("div"); row.className="component-slot"; row.dataset.component=component;
-            row.innerHTML=`<label class="field"><span>${escapeHtml(component)}</span><select class="component-state"><option value="issued">Выдано</option><option value="missing">Не выдано: отсутствует</option><option value="faulty">Не выдано: неисправность</option><option value="replacement">Заменено</option></select></label><input class="component-replacement" maxlength="200" placeholder="Что выдано взамен" aria-label="Замена элемента комплектации">`;
-            const stateSelect=row.querySelector("select"),input=row.querySelector("input"); stateSelect.value=saved?.reason || "issued"; input.value=saved?.replacement_name || "";
-            const update=()=>{input.hidden=stateSelect.value!=="replacement";input.required=stateSelect.value==="replacement";}; stateSelect.addEventListener("change",update);update();components.append(row);
-          }
-        };
-        select.addEventListener("change",drawComponents);drawComponents();
-        slot.append(select, note, replacement,components); group.append(slot);
+    if (!opener.isConnected || state.view !== 'admin' || state.adminMode !== 'orders') return;
+    const original = order.handover?.exceptions || [];
+    const candidates = new Map();
+    for (const article of catalog.articles) {
+      for (const item of article.equipment) {
+        if (item.condition === 'available' && article.active !== false) candidates.set(item.id, {...item, article});
       }
-      form.append(group);
     }
-    const buttons = document.createElement("div"); buttons.className = "action-row"; buttons.innerHTML = `<button class="button primary" type="submit">Сохранить замену</button>`; form.append(buttons);
-    $("admin-content").prepend(editor); scrollElementIntoView(editor);
-    registerStaffForm(form);
-    editor.querySelector(".assignment-close").addEventListener("click", () => { if (!staffFormDirty(form) || window.confirm("Отменить несохранённые изменения?")) editor.remove(); });
-    const refreshAssignmentOptions = () => {
-      const selects = [...form.querySelectorAll('select[name^="line-"]')];
-      const selected = new Set(selects.map((select) => select.value).filter((value) => /^\d+$/.test(value)));
-      for (const select of selects) {
-        for (const option of select.options) {
-          option.disabled = Boolean(option.value && selected.has(option.value) && option.value !== select.value);
-        }
-      }
+    const slots = order.lines.flatMap(line => {
+      const assigned = order.assets.filter(asset => asset.line_id === line.id || (!asset.line_id && asset.article_id === line.article_id));
+      const omitted = original.filter(entry => entry.line_id === line.id && !entry.component && entry.reason !== 'replacement');
+      return Array.from({length: line.quantity}, (_, index) => ({
+        line, asset: assigned[index] || null, omission: omitted[index - assigned.length], components: null,
+      }));
+    });
+    const format = asset => {
+      const name = asset.article?.title || asset.article?.name || asset.title || asset.name;
+      const code = asset.asset_code || asset.serial;
+      return code ? `${name}, № ${code}` : name;
     };
-    form.querySelectorAll("select").forEach((select) => select.addEventListener("change", refreshAssignmentOptions));
-    refreshAssignmentOptions();
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault(); const assignments = {}, exceptions = [];
-      for (const line of order.lines) {
-        assignments[String(line.id)] = [];
-        for (const select of form.querySelectorAll(`[name="line-${line.id}"]`)) {
-          const note = select.closest("label").querySelector("input").value;
-          if (["missing","faulty"].includes(select.value)) exceptions.push({line_id:line.id,reason:select.value,note});
-          else {
-            assignments[String(line.id)].push(Number(select.value)); if (select.selectedOptions[0]?.dataset.replacement) exceptions.push({line_id:line.id,reason:"replacement",replacement_id:Number(select.value),note});
-            for (const row of select.closest(".assignment-slot").querySelectorAll(".component-slot")) {const reason=row.querySelector("select").value;if(reason!=="issued")exceptions.push({line_id:line.id,equipment_id:Number(select.value),component:row.dataset.component,reason,replacement_name:row.querySelector("input").value,note});}
+    const slotLabel = (slot, index) => `${slot.line.title || slot.line.name} (позиция ${index + 1})`;
+    let slotList;
+    let catalogSelect;
+    let targetSelect;
+    let submit;
+    function showChoices() {
+      const availableSlots = slots.flatMap((slot, index) => slot.asset ? [] : [index]);
+      const previous = targetSelect.value;
+      targetSelect.replaceChildren(...availableSlots.map(index => new Option(slotLabel(slots[index], index), index)));
+      if (availableSlots.includes(Number(previous)) && previous !== '') targetSelect.value = previous;
+      const selected = new Set(slots.flatMap(slot => slot.asset ? [slot.asset.id] : []));
+      const keep = catalogSelect.value;
+      catalogSelect.replaceChildren(new Option('Выберите экземпляр', ''),
+        ...[...candidates.values()].filter(item => !selected.has(item.id)).map(item => new Option(format(item), item.id)));
+      if ([...catalogSelect.options].some(option => option.value === keep)) catalogSelect.value = keep;
+      targetSelect.disabled = !availableSlots.length;
+      targetSelect.closest('label').hidden = !availableSlots.length;
+      catalogSelect.disabled = !availableSlots.length;
+      catalogSelect.closest('label').hidden = !availableSlots.length;
+      const add = catalogSelect.closest('.next-step-add').querySelector('button');
+      add.disabled = !availableSlots.length || !catalogSelect.value;
+      add.hidden = !availableSlots.length;
+      catalogSelect.closest('.next-step-add').querySelector('p').hidden = Boolean(availableSlots.length);
+      submit.disabled = slots.every(slot => !slot.asset);
+    }
+
+    function makeComponents(slot) {
+      const asset = slot.asset;
+      const components = document.createElement('div');
+      components.className = 'component-slots';
+      const names = asset.components?.map(item => item.name) ||
+        [...new Set((asset.article?.composition || '').split(/[\n;]+/).map(value => value.trim()).filter(Boolean))];
+      for (const name of names) {
+        const saved = original.find(entry => entry.equipment_id === asset.id && entry.component === name);
+        const row = document.createElement('div');
+        row.className = 'component-slot';
+        row.dataset.component = name;
+        row.innerHTML = `<label class="field"><span>${escapeHtml(name)}</span><select class="component-state"><option value="issued">Выдано</option><option value="missing">Не выдано: отсутствует</option><option value="faulty">Не выдано: неисправность</option><option value="replacement">Заменено</option></select></label><input class="component-replacement" maxlength="200" placeholder="Что выдано взамен" aria-label="Замена элемента комплектации">`;
+        const select = row.querySelector('select');
+        const input = row.querySelector('input');
+        select.value = saved?.reason || 'issued';
+        input.value = saved?.replacement_name || '';
+        const update = () => { input.hidden = select.value !== 'replacement'; input.required = !input.hidden; };
+        select.addEventListener('change', update);
+        update();
+        components.append(row);
+      }
+      return components;
+    }
+
+    function renderSlot(slot, index) {
+      const row = document.createElement('li');
+      row.className = 'next-step-row';
+      if (!slot.asset) {
+        row.innerHTML = `<div class="next-step-line next-step-editor-row"><span class="next-step-slot">${pickupIcon('partial')}</span><div><strong>${escapeHtml(slotLabel(slot, index))}</strong><small>Экземпляр не назначен</small></div></div>`;
+        return row;
+      }
+      const asset = slot.asset;
+      const name = format(asset);
+      slot.components ||= makeComponents(slot);
+      const details = slot.components.childElementCount > 0;
+      row.innerHTML = `<div class="next-step-line next-step-editor-row">
+        <span class="next-step-slot">${pickupEquipmentIcon({...asset.article, name:asset.name || name})}</span>
+        <div><strong>${escapeHtml(name)}</strong></div>
+        <button type="button" class="button ghost next-step-icon next-step-remove" aria-label="Удалить: ${escapeHtml(name)}" title="Удалить из состава">${pickupIcon('remove')}</button>
+        ${details ? `<button type="button" class="button ghost next-step-icon next-step-arrow" aria-label="Комплектующие: ${escapeHtml(name)}">${pickupIcon('arrow')}</button>` : ''}
+        </div>`;
+      row.querySelector('.next-step-remove').addEventListener('click', () => {
+        const faulty = asset.condition && asset.condition !== 'available' || inspectionFor(order, asset, 'pre_issue')?.result === 'fail';
+        slot.omission = {line_id: slot.line.id, reason: faulty ? 'faulty' : 'missing'};
+        slot.asset = null;
+        slot.components = null;
+        row.replaceWith(renderSlot(slot, index));
+        showChoices();
+        targetSelect.value = String(index);
+        catalogSelect.focus();
+      });
+      if (details) {
+        const drawer = document.createElement('div');
+        drawer.className = 'next-step-drawer';
+        slot.components.classList.add('next-step-drawer-inner');
+        drawer.append(slot.components);
+        row.append(drawer);
+        pickupDisclosure(row, row.querySelector('.next-step-arrow'), drawer, `pickup-editor-${order.id}-${index}`);
+      }
+      return row;
+    }
+
+    const result = await workflowDialog('Редактор состава', `
+      <p class="next-step-editor-help">Добавьте экземпляр из каталога в свободную позицию заявки. Пустая позиция будет отмечена как не выданная.</p>
+      <ul class="next-step-list next-step-assignment"></ul>
+      <div class="next-step-add">
+        <p>Чтобы выбрать замену из каталога, удалите экземпляр из состава.</p>
+        <label class="field"><span>Позиция заявки</span><select class="next-step-target"></select></label>
+        <label class="field"><span>Добавить из каталога</span><select class="next-step-catalog"></select></label>
+        <button type="button" class="button secondary">Добавить</button>
+      </div>`, 'Сохранить', dialog => {
+        dialog.classList.add('next-step-editor');
+        slotList = dialog.querySelector('.next-step-assignment');
+        catalogSelect = dialog.querySelector('.next-step-catalog');
+        targetSelect = dialog.querySelector('.next-step-target');
+        submit = dialog.querySelector('[type="submit"]');
+        slotList.append(...slots.map(renderSlot));
+        catalogSelect.addEventListener('change', showChoices);
+        dialog.querySelector('.next-step-add button').addEventListener('click', () => {
+          const asset = candidates.get(Number(catalogSelect.value));
+          const index = Number(targetSelect.value);
+          const slot = slots[index];
+          if (!asset || !slot || slot.asset) return;
+          slot.asset = asset;
+          slot.omission = null;
+          const updated = renderSlot(slot, index);
+          slotList.children[index].replaceWith(updated);
+          window.PolyRentalMotion?.enter(updated);
+          showChoices();
+          updated.querySelector('.next-step-remove').focus({preventScroll:true});
+        });
+        showChoices();
+        const initial = catalogSelect.disabled ? slotList.querySelector('.next-step-remove') : catalogSelect;
+        initial?.setAttribute('data-initial-focus', '');
+      }, async () => {
+        const assignments = Object.fromEntries(order.lines.map(line => [line.id, []]));
+        const exceptions = [];
+        for (const {line, asset, omission, components} of slots) {
+          if (!asset) {
+            exceptions.push(omission || {line_id:line.id, reason:'missing'});
+            continue;
+          }
+          assignments[line.id].push(asset.id);
+          if ((asset.article_id ?? asset.article?.id) !== line.article_id) {
+            const saved = original.find(entry => entry.line_id === line.id && entry.replacement_id === asset.id && !entry.component);
+            exceptions.push(saved || {line_id:line.id, reason:'replacement', replacement_id:asset.id});
+          }
+          for (const row of components.querySelectorAll('.component-slot')) {
+            const reason = row.querySelector('select').value;
+            if (reason === 'issued') continue;
+            const saved = original.find(entry => entry.equipment_id === asset.id && entry.component === row.dataset.component);
+            const replacementName = row.querySelector('input').value;
+            if (reason === 'replacement' && !replacementName.trim()) throw new Error(`Укажите замену для элемента «${row.dataset.component}».`);
+            exceptions.push({line_id:line.id, equipment_id:asset.id, component:row.dataset.component,
+              reason, replacement_name:replacementName, note:saved?.note || ''});
           }
         }
-      }
-      const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-      try { await api(`/api/miniapp/admin/bookings/${order.id}/assignments`, { method: "PUT", body: JSON.stringify({ assignments, exceptions }) }); registerStaffForm(form); await showAdmin("orders"); }
-      catch (error) { showError(error.message); submit.disabled = false; }
-    });
+        await api(`/api/miniapp/admin/bookings/${order.id}/assignments`, {method:'PUT', body:JSON.stringify({assignments, exceptions})});
+      }, {opener, confirmDiscard: false});
+    if (result && state.view === 'admin' && state.adminMode === 'orders') {
+      await showAdmin('orders');
+      focusDisclosure(document.querySelector(`.request-card[data-booking-id="${order.id}"] .next-step-banner button`));
+    }
   }
 
   function openInspection(order, asset, stage, saved = null, hostRow = null) {
@@ -4060,7 +5379,7 @@
       openEditor.remove();
     }
     const card = document.createElement("article"); card.className = "admin-card inspection-editor";
-    card.innerHTML = `<div class="order-head"><div><h3>${stage === "pre_issue" ? "Неисправность перед выдачей" : "Неисправность при возврате"}</h3><p>${escapeHtml(asset.name)} · серийный № ${escapeHtml(asset.serial)}</p></div><button type="button" class="button ghost compact inspection-close">Закрыть</button></div><form class="inspection-form"><div class="form-grid"><label class="field wide"><span>Что произошло</span><textarea name="defect" maxlength="4000" required placeholder="Опишите неисправность"></textarea></label><label class="field wide"><span>Комментарий</span><textarea name="notes" maxlength="2000" placeholder="Дополнительная информация"></textarea></label>${stage === "check_in" ? '<label class="field wide"><span>Фото повреждения (необязательно)</span><input name="damage_photo" type="file" accept="image/*" capture="environment"><small>Фото можно сделать камерой телефона. Новое фото заменит предыдущее.</small></label>' : ""}<label class="field"><span>Оценка ущерба, ₽</span><input name="estimated_cost" type="number" min="0" step="0.01" value="0"></label><label class="check-row"><input name="charge_customer" type="checkbox"><span>Ущерб клиента</span></label></div><div class="action-row"><button class="button primary" type="submit">Сохранить неисправность</button></div></form>`;
+    card.innerHTML = `<div class="order-head"><div><h3>${stage === "pre_issue" ? "Неисправность перед выдачей" : "Неисправность при возврате"}</h3><p>${escapeHtml(asset.name)} (серийный № ${escapeHtml(asset.serial)})</p></div><button type="button" class="button ghost compact inspection-close">Закрыть</button></div><form class="inspection-form"><div class="form-grid"><label class="field wide"><span>Что произошло</span><textarea name="defect" maxlength="4000" required placeholder="Опишите неисправность"></textarea></label><label class="field wide"><span>Комментарий</span><textarea name="notes" maxlength="2000" placeholder="Дополнительная информация"></textarea></label>${stage === "check_in" ? '<label class="field wide"><span>Фото повреждения (необязательно)</span><input name="damage_photo" type="file" accept="image/*" capture="environment"><small>Фото можно сделать камерой телефона. Новое фото заменит предыдущее.</small></label>' : ""}<label class="field"><span>Оценка ущерба, ₽</span><input name="estimated_cost" type="number" min="0" step="0.01" value="0"></label><label class="check-row"><input name="charge_customer" type="checkbox"><span>Ущерб клиента</span></label></div><div class="action-row"><button class="button primary" type="submit">Сохранить неисправность</button></div></form>`;
     card.querySelector('[name="defect"]').value = saved?.defect || ""; card.querySelector('[name="notes"]').value = saved?.notes || ""; card.querySelector('[name="estimated_cost"]').value = saved?.estimated_cost || "0"; card.querySelector('[name="charge_customer"]').checked = Boolean(saved?.charge_customer);
     card.addEventListener("click", (event) => event.stopPropagation());
     card.addEventListener("keydown", (event) => event.stopPropagation());
@@ -4099,7 +5418,7 @@
     if (!result.items.length) { content.textContent = "Открытых и завершённых ремонтов нет."; return; }
     for (const ticket of result.items) {
       const card = document.createElement("article"); card.className = "admin-card";
-      card.innerHTML = `<h3>Ремонт №${ticket.id}</h3><p>Серийный № ${escapeHtml(ticket.serial)} · ${escapeHtml(ticket.status)}</p><p>${escapeHtml(ticket.defect)}</p>`;
+      card.innerHTML = `<h3>Ремонт №${ticket.id}</h3><p>Серийный № ${escapeHtml(ticket.serial)}, ${escapeHtml(ticket.status)}</p><p>${escapeHtml(ticket.defect)}</p>`;
       if (ticket.status !== "closed") card.append(actionButton("Закрыть ремонт", () => api(`/api/miniapp/admin/repairs/${ticket.id}/close`, { method: "POST" }), ticket.id, "primary"));
       content.append(card);
     }
@@ -4152,6 +5471,11 @@
     if (row) { row.querySelector("span").textContent = `${deletion.line.title || deletion.line.name} × ${deletion.line.quantity}`; row.style.visibility = deletion.line.quantity ? "" : "hidden"; row.inert = !deletion.line.quantity; updateEquipmentEmpty(row.parentElement); }
   }
   function animateRequestRemoval(card) {
+    if (desktopMotion.matches) {
+      if (window.PolyRentalMotion) window.PolyRentalMotion.reflow([card.parentElement], () => { card.hidden = true; });
+      else card.hidden = true;
+      return;
+    }
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const rect = card.getBoundingClientRect();
     if (!reduced && rect.width && rect.height) {
@@ -4254,13 +5578,25 @@
 
   $("operator-notification-settings").addEventListener("toggle", async (event) => {
     if (!event.currentTarget.open) return;
-    try { const settings = await api("/api/miniapp/admin/notification-preferences"); const form = $("operator-quiet-form"); form.elements.quiet_start.value = settings.quiet_start || ""; form.elements.quiet_end.value = settings.quiet_end || ""; }
+    const form = $("operator-quiet-form");
+    const before = staffFormSnapshot(form);
+    if (staffFormDirty(form)) return;
+    try {
+      const settings = await api("/api/miniapp/admin/notification-preferences");
+      if (before !== staffFormSnapshot(form)) return;
+      form.elements.quiet_start.value = settings.quiet_start || "";
+      form.elements.quiet_end.value = settings.quiet_end || "";
+      registerStaffForm(form);
+    }
     catch (error) { $("operator-quiet-status").textContent = error.message; }
   });
   $("operator-quiet-form").addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget;
-    try { await api("/api/miniapp/admin/notification-preferences", {method:"PUT", body:JSON.stringify({quiet_start:form.elements.quiet_start.value || null, quiet_end:form.elements.quiet_end.value || null})}); $("operator-quiet-status").textContent = "Сохранено"; }
-    catch (error) { $("operator-quiet-status").textContent = error.message; }
+    await runButton(form.querySelector('[type="submit"]'), async () => {
+      await api("/api/miniapp/admin/notification-preferences", {method:"PUT", body:JSON.stringify({quiet_start:form.elements.quiet_start.value || null, quiet_end:form.elements.quiet_end.value || null})});
+      registerStaffForm(form);
+      $("operator-quiet-status").textContent = "Сохранено";
+    }, error => { $("operator-quiet-status").textContent = error.message; });
   });
   $("main-button").addEventListener("click", next);
   $("clear-cart").addEventListener("click", () => {
@@ -4327,41 +5663,55 @@
   $("top-back-button").addEventListener("click", back);
   let settingsReturnScroll = 0;
   function settingsTransition(host, change) {
-    if (window.PolyRentalMotion?.surface) window.PolyRentalMotion.surface(host, change); else change();
+    if (window.PolyRentalMotion?.surface) window.PolyRentalMotion.surface(host, change, {fade:false}); else change();
+  }
+  function slideSettingsHeading(text, direction) {
+    const heading = $("admin-heading");
+    if (window.PolyRentalMotion?.morphText) window.PolyRentalMotion.morphText(heading, text, {direction});
+    else heading.textContent = text;
   }
   function selectSettingsTab(name) {
-    settingsTransition($('admin-settings'), () => {
-      for (const key of ['notifications', 'calendar', 'booking', 'handover', 'staff']) {
-        const selected = key === name, tab = $(`settings-tab-${key}`);
-        tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
-        $(`settings-${key}`).hidden = !selected;
-      }
-    });
+    for (const key of ['notifications', 'calendar', 'booking', 'handover', 'staff']) {
+      const selected = key === name, tab = $(`settings-tab-${key}`);
+      tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
+      $(`settings-${key}`).hidden = !selected;
+    }
   }
-  function closeAdminSettings() {
+  function closeAdminSettings(restorePosition = true) {
     window.PolyRentalMotion?.cancelSurface($('admin-settings'));
     settingsTransition($('admin-panel'), () => {
       $('admin-settings').hidden = true; $('admin-panel').classList.remove('settings-open');
-      changeHeading($('admin-heading'), 'Управление'); syncCatalogBackButton();
+      $("management-settings").hidden = true;
+      slideSettingsHeading('Управление', -1); syncCatalogBackButton();
     });
-    window.scrollTo(0, settingsReturnScroll); $('admin-settings-open').focus({preventScroll:true});
+    if (restorePosition) {
+      window.scrollTo(0, settingsReturnScroll); $('admin-settings-open').focus({preventScroll:true});
+    }
   }
-  $('admin-settings-open').addEventListener('click', () => {
+  function openAdminSettings(reveal = true) {
     if (!guardStaffNavigation() || state.role?.pii_only) return;
-    settingsReturnScroll = window.scrollY; $('settings-tab-handover').hidden = state.role?.staff_role !== 'admin'; if (state.role?.staff_role === 'admin') void loadHandoverSettings(); $('settings-tab-staff').hidden = state.role?.staff_role !== 'admin';
-    $('settings-tab-booking').hidden = state.role?.staff_role !== 'admin'; if (state.role?.staff_role === 'admin') void loadBookingSettings();
+    settingsReturnScroll = window.scrollY;
+    for (const tab of ['handover', 'staff', 'booking']) $('settings-tab-' + tab).hidden = state.role?.staff_role !== 'admin';
     window.PolyRentalMotion?.cancelSurface($('admin-settings'));
     settingsTransition($('admin-panel'), () => {
       selectSettingsTab('notifications'); $('admin-settings').hidden = false; $('admin-panel').classList.add('settings-open');
-      changeHeading($('admin-heading'), 'Настройки'); $('operator-notification-settings').open = true;
+      $("management-settings").hidden = false;
+      slideSettingsHeading('Настройки', 1); $('operator-notification-settings').open = true;
     });
-    syncCatalogBackButton(); $('admin-heading').focus({preventScroll:true});
-    scrollElementIntoView($('admin-settings'));
-  });
-  for (const name of ['notifications', 'calendar', 'booking', 'handover', 'staff']) $('settings-tab-' + name).addEventListener('click', () => {
-    selectSettingsTab(name);
-    scrollElementIntoView($(`settings-${name}`));
-  });
+    syncCatalogBackButton();
+    if (reveal) {
+      $('admin-heading').focus({preventScroll:true});
+      scrollElementIntoView($('admin-heading'), {block:'nearest'});
+    }
+  }
+  for (const name of ['notifications', 'calendar', 'booking', 'handover', 'staff']) {
+    $('settings-tab-' + name).addEventListener('click', () => {
+      selectSettingsTab(name);
+      if (state.role?.staff_role !== 'admin') return;
+      if (name === 'handover') void loadHandoverSettings();
+      if (name === 'booking') void loadBookingSettings();
+    });
+  }
   $('admin-settings').querySelector('[role="tablist"]').addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden);
@@ -4369,7 +5719,7 @@
     event.preventDefault(); index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     tabs[index].click(); tabs[index].focus({preventScroll:true});
   });
-  $("admin-back-button").addEventListener("click", () => { if (guardStaffNavigation()) catalogBack(); });
+  $("admin-back-button").addEventListener("click", () => { if (catalogEditorBackButton() || guardStaffNavigation()) catalogBack(); });
   let supportContext = { screen: "profile", bookingId: null }, supportReturnFocus = null;
   const supportDrafts = new Map();
   const supportDraftKey = context => JSON.stringify([context.screen, context.bookingId]);
@@ -4386,8 +5736,9 @@
     const from = $("app-version").getBoundingClientRect(), to = card.getBoundingClientRect();
     if (reducedMotion?.matches || !to.width || !to.height) return Promise.resolve();
     const x = from.left + from.width / 2 - (to.left + to.width / 2), y = from.top + from.height / 2 - (to.top + to.height / 2);
-    const start = {transform:`translate(${x}px, ${y}px) scale(.08)`, opacity:0}, end = {transform:'translate(0, 0) scale(1)',opacity:1};
-    return card.animate(opening ? [start,end] : [fromCurrent,start], {duration:280,easing:'cubic-bezier(.22,1,.36,1)'}).finished.catch(()=>{});
+    const start = {transform:desktopMotion.matches ? 'scale(.985)' : `translate(${x}px, ${y}px) scale(.08)`, opacity:0};
+    const end = {transform:'translate(0, 0) scale(1)',opacity:1};
+    return card.animate(opening ? [start,end] : [fromCurrent,start], {duration:desktopMotion.matches ? 160 : 280,easing:'cubic-bezier(.22,1,.36,1)'}).finished.catch(()=>{});
   }
   function showPendingRelease() {
     if (!releasePending || document.hidden || state.onboardingLoading || document.querySelector('.dialog-backdrop:not([hidden])')) return;
@@ -4454,7 +5805,7 @@
     const host = $("support-faq");
     const visible = () => sequence === supportFaqSequence && !$("support-dialog").hidden && !host.hidden;
     host.setAttribute("aria-busy", "true");
-    showLoading(host, "Загружаем частые вопросы…", 2);
+    showLoading(host, "Загружаем частые вопросы…");
     try {
       const result = await api("/api/miniapp/support/faq");
       if (!visible()) return;
@@ -4473,7 +5824,9 @@
   $("support-close").addEventListener("click", closeSupport);
   $("support-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("support-dialog")); if (event.key === "Escape") closeSupport(); });
   $("support-form").addEventListener("submit", async (event) => {
-    event.preventDefault(); const button = event.currentTarget.querySelector('[type="submit"]'); button.disabled = true;
+    event.preventDefault(); const button = event.currentTarget.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
     const activeSupportContext = supportContext, context = {...supportContext}, question = $("support-question").value;
     $("support-result").textContent = ""; $("support-result").classList.remove("success");
     try {
@@ -4497,31 +5850,75 @@
     if (!result.items.length) { const empty=document.createElement("p"); empty.textContent = "Обращений пока нет."; content.append(empty); return; }
     for (const thread of result.items) {
       const card = document.createElement("article"); card.className = "admin-card"; card.dataset.supportThreadId = String(thread.id);
-      const heading = document.createElement("h3"); heading.textContent = `Обращение №${thread.id}${thread.request_number ? ` · ${thread.request_number}` : ""}`; card.append(heading);
-      const meta = document.createElement("p"); meta.textContent = `${thread.status === "resolved" ? "Закрыто" : thread.owner_id ? `Ответственный: ${thread.owner_name || "Сотрудник"}` : "Без владельца"} · ${dateText(thread.created_at)} МСК`; card.append(meta);
+      const heading = document.createElement("h3"); heading.textContent = `Обращение №${thread.id}${thread.request_number ? ` (заявка ${thread.request_number})` : ""}`; card.append(heading);
+      const meta = document.createElement("p"); meta.textContent = `${thread.status === "resolved" ? "Закрыто" : thread.owner_id ? `Ответственный: ${thread.owner_name || "Сотрудник"}` : "Без владельца"}, ${dateText(thread.created_at)} МСК`; card.append(meta);
       if (!thread.owner_id && thread.status !== "resolved" && state.role?.pii_admin) {
-        const claim = document.createElement("button"); claim.type = "button"; claim.className = "button secondary"; claim.textContent = "Взять обращение";
-        claim.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/claim`, {method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(claim);
+        card.append(plainButton("Взять обращение", async () => {
+          await api(`/api/miniapp/admin/support/${thread.id}/claim`, {method:"POST"});
+          await showAdmin("support");
+        }));
       }
       if (thread.owner_id === state.role?.id && state.role?.pii_admin) {
-        const open = document.createElement("button"); open.type = "button"; open.className = "button secondary"; open.textContent = "Открыть сообщения"; card.append(open);
+        const open = document.createElement("button"); open.type = "button"; open.className = "button secondary"; open.dataset.openSupportMessages = ""; open.textContent = "Открыть сообщения"; card.append(open);
         const body = document.createElement("div"); card.append(body);
-        open.addEventListener("click", async () => {
-          try {
-            const previousForm = body.querySelector("form");
-            if (previousForm && staffFormDirty(previousForm) && !window.confirm("Отменить несохранённые изменения?")) return;
-            const result = await api(`/api/miniapp/admin/support/${thread.id}/messages`); body.replaceChildren();
-            const context = document.createElement("p"); context.textContent = `${result.customer_name || "Пользователь"} · экран ${result.screen}`; body.append(context);
-            for (const message of result.items) { const p = document.createElement("p"); p.textContent = `${message.direction === "client" ? "Клиент" : "Оператор"}: ${message.text}`; body.append(p); }
-            if (thread.status !== "resolved") { const form = document.createElement("form"); form.innerHTML = `<label class="field"><span>Ответ</span><textarea maxlength="3000" required></textarea></label><button class="button primary" type="submit">Ответить в Telegram</button>`;
-              registerStaffForm(form); form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/reply`, {method:"POST", body:JSON.stringify({text:form.querySelector("textarea").value})}); registerStaffForm(form); await showAdmin("support"); } catch (error) { showError(error.message); } }); body.append(form); }
-          } catch (error) { showError(error.message); }
-        });
+        open.addEventListener("click", () => runButton(open, async () => {
+          const previousForm = body.querySelector("form");
+          if (previousForm && staffFormDirty(previousForm) && !window.confirm("Отменить несохранённые изменения?")) return;
+          const result = await api(`/api/miniapp/admin/support/${thread.id}/messages`); body.replaceChildren();
+          const context = document.createElement("p"); context.textContent = `${result.customer_name || "Пользователь"}, экран ${result.screen}`; body.append(context);
+          for (const message of result.items) {
+            const row = document.createElement("p"); row.className = "support-message";
+            row.dataset.direction = message.direction === "client" ? "client" : "operator";
+            const author = document.createElement("strong");
+            author.textContent = message.direction === "client" ? "Клиент" : "Оператор";
+            row.append(author, document.createTextNode(message.text)); body.append(row);
+          }
+          if (thread.status !== "resolved") { const form = document.createElement("form"); form.innerHTML = `<label class="field"><span>Ответ</span><textarea maxlength="3000" required></textarea></label><button class="button primary" type="submit">Ответить в Telegram</button>`;
+            registerStaffForm(form);
+            form.addEventListener("submit", event => {
+              event.preventDefault();
+              void runButton(form.querySelector('[type="submit"]'), async () => {
+                await api(`/api/miniapp/admin/support/${thread.id}/reply`, {method:"POST", body:JSON.stringify({text:form.querySelector("textarea").value})});
+                registerStaffForm(form);
+                await showAdmin("support");
+              });
+            });
+            body.append(form);
+          }
+        }));
       }
-      if (state.role?.pii_admin && thread.owner_id === state.role?.id && thread.status !== "resolved") { const done = document.createElement("button"); done.type="button"; done.className="button ghost"; done.textContent="Закрыть обращение"; done.addEventListener("click", async () => { try { await api(`/api/miniapp/admin/support/${thread.id}/resolve`,{method:"POST"}); await showAdmin("support"); } catch (error) { showError(error.message); } }); card.append(done); }
-      if (thread.status !== "resolved") { const form = document.createElement("form"); form.className="action-row"; form.innerHTML = `<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>`; for (const id of (result.eligible_owners || [])) { const option = document.createElement("option"); option.value = id; option.textContent = (result.eligible_staff || []).find(item => item.id === id)?.name || "Сотрудник"; form.querySelector("select").append(option); } form.addEventListener("submit", async (event) => { event.preventDefault(); try { await api(`/api/miniapp/admin/support/${thread.id}/owner`,{method:"PUT",body:JSON.stringify({assignee_id:Number(form.querySelector("select").value)})}); await showAdmin("support"); } catch(error) { showError(error.message); } }); card.append(form); }
+      if (state.role?.pii_admin && thread.owner_id === state.role?.id && thread.status !== "resolved") {
+        card.append(plainButton("Закрыть обращение", async () => {
+          await api(`/api/miniapp/admin/support/${thread.id}/resolve`, {method:"POST"});
+          await showAdmin("support");
+        }, "ghost"));
+      }
+      if (thread.status !== "resolved") {
+        const form = document.createElement("form");
+        form.className = "action-row";
+        form.innerHTML = '<label class="field"><span>Сотрудник с доступом к ПД</span><select required></select></label><button class="button ghost" type="submit">Передать</button>';
+        const select = form.querySelector("select");
+        for (const id of result.eligible_owners || []) {
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = (result.eligible_staff || []).find(item => item.id === id)?.name || "Сотрудник";
+          select.append(option);
+        }
+        form.addEventListener("submit", event => {
+          event.preventDefault();
+          void runButton(form.querySelector('[type="submit"]'), async () => {
+            await api(`/api/miniapp/admin/support/${thread.id}/owner`, {method:"PUT", body:JSON.stringify({assignee_id:Number(select.value)})});
+            await showAdmin("support");
+          });
+        });
+        card.append(form);
+      }
       content.append(card);
-      if (state.supportTargetId === thread.id) { state.supportTargetId = null; scrollElementIntoView(card); }
+      if (state.supportTargetId === thread.id) {
+        state.supportTargetId = null;
+        card.querySelector("[data-open-support-messages]")?.click();
+        scrollElementIntoView(card);
+      }
     }
     if (pages > 1) {
       const controls = document.createElement("div"); controls.className = "action-row";
@@ -4565,7 +5962,7 @@
     } catch (_) { showError("Не удалось загрузить инструкцию. Её можно открыть в профиле."); }
     finally { state.onboardingLoading = false; showPendingRelease(); }
   }
-  function enterClientMode() {
+  function enterClientMode({siteRoute, page} = {}) {
     if (bookingSubmitting) return;
     if (!guardStaffNavigation() || !guardIdentityNavigation()) return;
     clearError();
@@ -4577,10 +5974,138 @@
     if (state.step === 4) { state.step = 0; state.quantities.clear(); state.items = []; state.requestId = null; $("start").value = ""; $("end").value = ""; }
     syncDateFields("start"); syncDateFields("end");
     rangeCalendar.setRange($("start-date").value, $("end-date").value); applyBookingDateLimits(); render();
-    if (state.step === 0) void revealNavigation(loadItems, () => $("step-items"));
     void maybeShowOnboarding();
+    if (siteRoute) {
+      state.step = 0;
+      if (siteRoute.category && siteRoute.category !== categoryParent(clientCatalog.category)) {
+        try { localStorage.setItem(`${draftKey}:recent-category`, siteRoute.category); } catch (_) {}
+      }
+      clientCatalog.category = siteRoute.category;
+      clientCatalog.page = page || 0;
+      clearTimeout(clientCatalog.timer);
+      $("client-catalog-search").value = "";
+      render(); renderItems();
+      return loadItems();
+    }
+    if (state.step === 0) void revealNavigation(loadItems, () => $("step-items"));
   }
-  $("tab-new").addEventListener("click", enterClientMode);
+  const catalogSiteRoute = (root, code) => code ? `${root}-${code}` : root;
+  function adminSiteRoute() {
+    return state.adminMode === "catalog" ? catalogSiteRoute("management-catalog", catalogView.category) : `management-${state.adminMode}`;
+  }
+  function currentSiteRoute() {
+    if (state.view === "flow" && state.step === 0) return catalogSiteRoute("catalog", clientCatalog.category);
+    if (state.view === "orders") return "profile";
+    if (state.view === "admin" && !$("admin-panel").classList.contains("catalog-editing")) {
+      return $("admin-settings").hidden ? adminSiteRoute() : "management-settings";
+    }
+    return "";
+  }
+  function readSiteView() {
+    if (state.view === "flow") return {page: clientCatalog.page};
+    if (state.view === "orders") return {page: state.profilePage, filter: state.profileFilter, sort: state.profileSort};
+    const mode = state.adminMode;
+    if (mode === "catalog") return {mode, category: catalogView.category, page: catalogView.page, condition: catalogView.status};
+    if (mode === "support") return {mode, page: state.supportPage};
+    return {mode, page: state.adminPage, filter: state.adminRequestFilter, sort: state.adminSort, status: state.adminStatus};
+  }
+  function restoreSiteSelect(id, value, fallback) {
+    const select = $(id);
+    select.value = [...select.options].some(option => option.value === value) ? value : fallback;
+    return select.value;
+  }
+  async function openSiteRoute(route, saved, {valid, reuse}) {
+    const existing = $(route);
+    if (reuse && existing?.getClientRects().length && !existing.closest("[hidden], [inert]")) return existing;
+    const page = Number.isSafeInteger(saved?.page) && saved.page >= 0 ? saved.page : 0;
+    const [, catalog, code = ""] = siteNavigationAPI.categoryRoute.exec(route) || [];
+    const admin = route === "management" || route.startsWith("management-");
+    let message = "";
+    if (admin && !state.role?.admin) {
+      route = state.profile?.client_allowed === false ? "profile" : "catalog";
+      message = "Раздел управления недоступен для вашей роли.";
+    }
+    if (admin && state.role?.pii_only && route !== "management" && route !== "management-orders") {
+      route = "management-orders";
+      message = "Этот раздел управления недоступен для вашей роли.";
+    }
+    if (code && !message) {
+      const loaded = await siteCategories;
+      if (!valid()) return null;
+      if (!clientCatalog.categories.some(category => category.code === code)) {
+        route = catalog;
+        message = loaded ? "Категория больше недоступна. Открыт каталог." : "Не удалось загрузить категории. Открыт каталог.";
+      }
+    }
+    if (!valid()) return null;
+    const category = message ? "" : code;
+    const leavingSettings = route !== "management-settings" && !$("admin-settings").hidden;
+    if (leavingSettings) closeAdminSettings(false);
+    if (route === "profile" || route === "my-requests") {
+      state.profileTargetId = null; selectedCustomerOrderId = null;
+      state.profileNumber = ""; $("profile-number").value = "";
+      state.profilePage = page;
+      state.profileFilter = restoreSiteSelect("profile-filter", saved?.filter, "all");
+      state.profileSort = restoreSiteSelect("profile-sort", saved?.sort, "date");
+      await showOrders();
+    } else if (route === "management" || route.startsWith("management-")) {
+      if (route === "management-settings") {
+        if (state.view !== "admin") await showAdmin("orders");
+        if (valid()) openAdminSettings(false);
+      } else {
+        const preferred = saved?.mode || (state.view === "admin" ? state.adminMode : state.profile?.last_section);
+        const mode = route === "management" ? (["orders", "catalog", "repairs", "support"].includes(preferred) ? preferred : "orders")
+          : category && catalog === "management-catalog" ? "catalog" : route.slice("management-".length);
+        if (mode === "catalog") {
+          if (saved?.category) await siteCategories;
+          if (!valid()) return null;
+          clearTimeout(catalogView.timer);
+          const savedCategory = route === "management" && clientCatalog.categories.some(item => item.code === saved?.category) ? saved.category : "";
+          catalogView.category = category || savedCategory; catalogView.page = page; catalogView.query = "";
+          catalogView.status = ["available", "maintenance", "retired"].includes(saved?.condition) ? saved.condition : "all";
+        } else if (mode === "orders") {
+          state.adminTargetId = null; selectedRequestId = null;
+          state.adminQueue = "all"; $("admin-queue").value = "all"; state.adminPage = page;
+          state.adminRequestFilter = restoreSiteSelect("admin-request-filter", saved?.filter, "all");
+          state.adminSort = restoreSiteSelect("admin-sort", saved?.sort, "date");
+          state.adminStatus = restoreSiteSelect("admin-status", saved?.status, "all");
+        } else if (mode === "support") {
+          state.supportTargetId = null; state.supportFilterId = null; state.supportPage = page;
+        }
+        await showAdmin(mode);
+        if (leavingSettings && valid() && [document.body, $("main-content"), $("admin-back-button")].includes(document.activeElement)) {
+          $("admin-settings-open").focus({preventScroll:true});
+        }
+      }
+    } else if (route !== "main-content") {
+      if (state.profile?.client_allowed === false) {
+        route = "profile";
+        await showOrders();
+        message = "Бронирование недоступно для вашей роли.";
+      } else {
+        await enterClientMode({siteRoute: {category}, page});
+      }
+    }
+    if (!valid()) return null;
+    if (message) showError(message);
+    document.documentElement.classList.remove("role-pending");
+    const target = $(route);
+    if (!target || target.closest("[hidden], [inert]")) return null;
+    return target;
+  }
+  function bindSiteLink(control, route, fallback) {
+    if (siteNavigation) return siteNavigation.bind(control, route);
+    control.addEventListener("click", fallback);
+    return control;
+  }
+  if (siteNavigationAPI && !preview) {
+    siteNavigation = siteNavigationAPI.create({
+      open: openSiteRoute, current: currentSiteRoute,
+      canLeave: () => Boolean(state.role) && !bookingSubmitting && guardStaffNavigation() && guardIdentityNavigation(),
+      readView: readSiteView, owner: siteProfile?.id || tg?.initDataUnsafe?.user?.id,
+    });
+  }
+  bindSiteLink($("tab-new"), "booking", () => enterClientMode());
   $("floating-cart-button")?.addEventListener("click", openCartView);
   $("onboarding-reopen").addEventListener("click", openOnboarding);
   $("reminders-enabled").addEventListener("change", async (event) => {
@@ -4593,7 +6118,7 @@
   $("onboarding-skip").addEventListener("click", finishOnboarding);
   $("onboarding-next").addEventListener("click", () => { if (onboardingIndex + 1 === onboardingSlides.length) void finishOnboarding(); else { onboardingIndex++; drawOnboarding(); } });
   $("onboarding-dialog").addEventListener("keydown", (event) => { if (event.key === "Tab") trapDialogFocus(event, $("onboarding-dialog")); if (event.key === "Escape") void finishOnboarding(); });
-  $("tab-orders").addEventListener("click", () => revealNavigation(showOrders, () => $("orders-panel")));
+  bindSiteLink($("tab-orders"), "profile", () => revealNavigation(showOrders, () => $("orders-panel")));
   let profileSearchTimer;
   function applyProfileSearch() {
     clearTimeout(profileSearchTimer);
@@ -4639,7 +6164,11 @@
         if(!profileIdentityData[key])continue;
         const row=document.createElement('p'),title=document.createElement('strong'),value=document.createElement('span');
         row.className='profile-identity-row'; row.dataset.label=label; title.textContent=`${label}:`;
-        value.className='profile-identity-value'; value.textContent=String(profileIdentityData[key]);
+        value.className='profile-identity-value';
+        if (formDateNames.has(key)) {
+          value.dataset.isoDate = profileIdentityData[key];
+          value.textContent = displayFormDate(value.dataset.isoDate);
+        } else value.textContent=String(profileIdentityData[key]);
         row.append(title,value);
         row.addEventListener('click',()=>{if(fields.classList.contains('profile-fields-masked'))revealProfileIdentity();});
         row.addEventListener('keydown',event=>{if(fields.classList.contains('profile-fields-masked')&&['Enter',' '].includes(event.key)){event.preventDefault();revealProfileIdentity();}});
@@ -4663,15 +6192,27 @@
   $("profile-identity-edit").addEventListener("click", async () => {
     if (!profileIdentityData) return;
     const labels = {full_name:"ФИО", phone:"Телефон для связи", birth_date:"Дата рождения", passport_series:"Серия паспорта", passport_number:"Номер паспорта", passport_issued_at:"Дата выдачи паспорта", passport_issuer:"Кем выдан паспорт", passport_division_code:"Код подразделения", registration_address:"Адрес регистрации", residential_address:"Адрес проживания", student_id_number:"Номер студенческого", student_institution:"Учебное заведение"};
-    const form = Object.entries(labels).map(([name, label]) => `<label class="field"><span>${escapeHtml(label)}</span><input name="${name}" type="${["birth_date", "passport_issued_at"].includes(name) ? "date" : "text"}" maxlength="500" value="${escapeHtml(profileIdentityData[name] || "")}" ${name.startsWith("student_") ? "" : "required"}></label>`).join("");
-    const result = await workflowDialog("Редактировать личные данные", `<p>Изменения будут использованы при заполнении следующих заявок.</p>${form}`, "Сохранить", null, async data => api("/api/miniapp/profile/identity", {method:"PUT", body:JSON.stringify(Object.fromEntries(Object.keys(labels).map(key => [key, data.get(key) || ""])))}));
+    const form = Object.entries(labels).map(([name, label]) => {
+      const date = formDateNames.has(name);
+      const value = date ? displayFormDate(profileIdentityData[name]) : profileIdentityData[name] || "";
+      return `<label class="field"><span>${escapeHtml(label)}</span><input name="${name}" ${date ? `data-form-date inputmode="numeric" maxlength="10" placeholder="${formDatePlaceholder()}"` : 'maxlength="500"'} value="${escapeHtml(value)}" ${name.startsWith("student_") ? "" : "required"}></label>`;
+    }).join("");
+    const result = await workflowDialog("Редактировать личные данные", `<p>Изменения будут использованы при заполнении следующих заявок.</p>${form}`, "Сохранить", null, async data => {
+      const values = Object.fromEntries(Object.keys(labels).map(key => [key, data.get(key) || ""]));
+      for (const name of formDateNames) {
+        values[name] = parseFormDate(values[name]);
+        if (!values[name]) throw new Error(`${labels[name]}. Используйте формат ${formDatePlaceholder()}.`);
+      }
+      return api("/api/miniapp/profile/identity", {method:"PUT", body:JSON.stringify(values)});
+    });
     if (result && state.view === "orders") { resetProfileIdentity(); await loadProfileIdentity(false); }
   });
   $("profile-sort").addEventListener("change", (event) => { state.profileSort = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-filter").addEventListener("change", (event) => { state.profileTargetId = null; state.profileFilter = event.target.value; state.profilePage = 0; void showOrders(); });
   $("profile-prev").addEventListener("click", () => { state.profilePage = Math.max(0, state.profilePage - 1); void showOrders(); });
   $("profile-next").addEventListener("click", () => { state.profilePage++; void showOrders(); });
-  $("tab-admin").addEventListener("click", () => revealNavigation(() => showAdmin(state.adminMode), () => $("admin-panel")));
+  bindSiteLink($("tab-admin"), "management", () => revealNavigation(() => showAdmin(state.adminMode), () => $("admin-panel")));
+  bindSiteLink($("admin-settings-open"), "management-settings", () => openAdminSettings());
   $("identity-close").addEventListener("click", () => { void showOrders(); });
   $("document-viewer-close").addEventListener("click", closeDocumentViewer);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("document-viewer").hidden) closeDocumentViewer();  });
@@ -4711,7 +6252,7 @@
     const file = input.files?.[0] || null; await saveIdentityPhoto(input.name, file, session.bookingId);
     if (!identitySessionCurrent(session) || session.photoVersions.get(input.name) !== version) return;
     const status = input.closest(".field")?.querySelector(".file-draft-status");
-    if (status) status.textContent = file ? `Загружено ✓ · ${file.name}` : "";
+    if (status) status.textContent = file ? `Загружено: ${file.name}` : "";
     clearIdentityFieldError(input);
   }));
   document.querySelectorAll('#identity-form input[type="file"]').forEach((input) => {
@@ -4723,14 +6264,16 @@
       const version = (session.photoVersions.get(input.name) || 0) + 1; session.photoVersions.set(input.name, version);
       input.value="";
       window.PolyRentalFileDrop?.clear(input);
-      input.required=true;
-      if (!state.identityRequiredPhotos.includes(input.name)) state.identityRequiredPhotos.push(input.name);
-      const status=input.closest(".field").querySelector(".file-draft-status"); if (status) status.textContent="Фото удалено. Загрузите новое перед отправкой.";
+      const needsReplacement = input.name !== "student_front" || state.identityRequiredPhotos.includes(input.name);
+      input.required = needsReplacement;
+      if (needsReplacement && !state.identityRequiredPhotos.includes(input.name)) state.identityRequiredPhotos.push(input.name);
+      const status=input.closest(".field").querySelector(".file-draft-status");
+      if (status) status.textContent = needsReplacement ? "Фото удалено. Загрузите новое перед отправкой." : "Фото удалено.";
       await saveIdentityPhoto(input.name, null, session.bookingId);
     },"ghost danger"); remove.setAttribute("aria-label","Удалить фото"); buttons.append(remove);
     input.closest(".field").insertAdjacentElement("afterend", buttons);
   });
-  document.querySelectorAll(".admin-mode").forEach((button) => button.addEventListener("click", () =>
+  document.querySelectorAll(".admin-mode").forEach(button => bindSiteLink(button, `management-${button.dataset.mode}`, () =>
     revealNavigation(() => showAdmin(button.dataset.mode), () => $("admin-content"))));
   $("admin-queue").addEventListener("change", event => { state.adminQueue = event.target.value; state.adminPage = 0; state.adminTargetId = null; state.adminStatus = "all"; $("admin-status").value = "all"; void showAdmin("orders"); });
   $("admin-request-filter").addEventListener("change", (event) => { state.adminRequestFilter = event.target.value; state.adminTargetId = null; state.adminPage = 0; void showAdmin("orders"); });
@@ -4741,7 +6284,15 @@
   $("admin-next").addEventListener("click", () => { state.adminTargetId = null; state.adminPage++; void showAdmin("orders"); });
   $("done-orders").addEventListener("click", showOrders);
   $("done-chat").addEventListener("click", () => tg?.close?.());
-  for (const id of ["start", "end"]) $(`${id}-time`).addEventListener("input", periodChanged);
+  const bookingStartInput = $("start-time");
+  bookingStartInput.addEventListener("input", () => {
+    if (bookingStartInput.type === "time") normalizePastBookingStart();
+    periodChanged();
+  });
+  const commitBookingStart = () => { if (normalizePastBookingStart()) periodChanged(); };
+  bookingStartInput.addEventListener("change", commitBookingStart);
+  bookingStartInput.addEventListener("blur", commitBookingStart);
+  $("end-time").addEventListener("input", periodChanged);
 
   const passportCombinedInput = document.querySelector('[name="passport_combined"]');
   passportCombinedInput?.addEventListener("input", () => { const digits = passportCombinedInput.value.replace(/\D/g, "").slice(0, 10); passportCombinedInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits; });
@@ -4766,13 +6317,20 @@
     dayNote: day => availabilityLabels[calendarDayState(day)] || "",
     onMonthChange: queueCalendarAvailability,
     onSelect: calendarImpact,
-    onChange: ({start, end}) => { $("start-date").value = start; $("end-date").value = end; periodChanged(); },
+    onChange: ({start, end}) => { $("start-date").value = start; $("end-date").value = end; normalizePastBookingStart(); periodChanged(); },
   });
   if (!preview) void api("/api/miniapp/schedule").then((policy)=>{ if (!policy.enforced) return; schedulePolicy=policy; rangeCalendar.render(); applyBookingDateLimits(); render(); }).catch(()=>{});
   if (siteProfile) {
-    document.querySelector('.eyebrow').textContent = 'БРОНИРОВАНИЕ ЧЕРЕЗ TELEGRAM';
     const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'button ghost'; logout.textContent = 'Выйти';
-    logout.addEventListener('click', async () => { if (!guardIdentityNavigation()) return; try { const response = await fetch('/site/logout', {method:'POST',headers:{'X-Telegram-Init-Data':''}}); if (response.ok || response.redirected) location.assign('/site/login'); else showError('Не удалось выйти. Повторите попытку.'); } catch (_) { showError('Не удалось выйти. Проверьте соединение.'); } });
+    logout.addEventListener('click', () => {
+      if (!guardIdentityNavigation()) return;
+      void runButton(logout, async () => {
+        const response = await fetch('/site/logout', {method:'POST', headers:{'X-Telegram-Init-Data':''}});
+        if (!response.ok && !response.redirected) throw new Error('Не удалось выйти. Повторите попытку.');
+        readCache.clear();
+        location.assign('/site/login');
+      }, error => showError(error instanceof TypeError ? 'Не удалось выйти. Проверьте соединение.' : error.message));
+    });
     document.querySelector('.topbar').append(logout);
   }
   const profile = tg?.initDataUnsafe?.user || siteProfile;
@@ -4785,7 +6343,10 @@
     img.addEventListener("error", () => { img.remove(); tabAvatar.classList.remove("avatar-loading"); });
     img.src = url.href; tabAvatar.append(img);
   } catch (_) { tabAvatar.classList.remove("avatar-loading"); }
-  if (!preview) void api("/api/miniapp/catalog/categories").then(result => { setCategories(result.items || []); render(); if (state.view === "flow" && state.step === 0) renderItems(); }).catch(() => {});
+  const siteCategories = preview ? Promise.resolve(false) : api("/api/miniapp/catalog/categories").then(result => {
+    setCategories(result.items || []); render(); if (state.view === "flow" && state.step === 0) renderItems();
+    return true;
+  }).catch(() => false);
   if (preview) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Демонстрация интерфейса: можно пройти шаги, но заявка не отправляется."; }
   else if (!authorized && !keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "Чтобы оформить бронь, откройте Mini App через кнопку в Telegram-боте."; }
   else if (keyboardMode) { $("mode-banner").hidden = false; $("mode-banner").textContent = "После отправки приложение закроется, а бот пришлёт номер заявки и статус."; }
@@ -4798,7 +6359,8 @@
   }
   tg?.expand?.();
   if (authorized) {
-    Promise.all([api("/api/miniapp/me"), api("/api/miniapp/profile").catch(() => null), api("/api/miniapp/cart").catch(() => null)]).then(([role, profileState, cart]) => {
+    Promise.all([api("/api/miniapp/me"), api("/api/miniapp/profile").catch(() => null), api("/api/miniapp/cart").catch(() => null)]).then(async ([role, profileState, cart]) => {
+      if (startup?.failed()) return;
       state.role = role; state.profile = profileState; $("tab-admin").hidden = !role.admin;
       if (cart && Number.isInteger(cart.version) && Array.isArray(cart.lines)) {
         state.cartVersion = cart.version; cartConfirmed = normalizedCart(cart);
@@ -4819,8 +6381,13 @@
       void claimStageNotices();
       const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp");
       const linkedIdentity = /^identity_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("identity");
-      if (linkedIdentity && /^\d+$/.test(linkedIdentity)) { clearIdentityRestoreKey(); return openIdentity(Number(linkedIdentity)); }
       const linkedBooking = /^booking_(\d+)$/.exec(startParam || "")?.[1] || new URLSearchParams(location.search).get("booking");
+      if (siteNavigation) {
+        const legacy = /^\d+$/.test(linkedIdentity || "") || /^\d+$/.test(linkedBooking || "") ||
+          /^(booking|my_bookings|orders|support_\d+)$/.test(startParam || "");
+        if (await siteNavigation.start({useFragment: !legacy && profileState?.start_screen !== "blocked"})) return;
+      }
+      if (linkedIdentity && /^\d+$/.test(linkedIdentity)) { clearIdentityRestoreKey(); return openIdentity(Number(linkedIdentity)); }
       if (linkedBooking && /^\d+$/.test(linkedBooking)) {
         clearIdentityRestoreKey();
         if (role.admin) { selectedRequestId = Number(linkedBooking); state.adminTargetId = selectedRequestId; return showAdmin("orders"); }
@@ -4838,15 +6405,34 @@
         if (!["orders", "catalog", "repairs", "support", ].includes(mode)) mode = "orders";
         return showAdmin(mode);
       }
-      if (state.view === "flow") void loadItems();
+      if (state.view === "flow") {
+        if (siteNavigation) await loadItems();
+        else void loadItems();
+      }
       void maybeShowOnboarding();
-    }).catch(() => showError("Не удалось определить права. Откройте приложение через Telegram ещё раз."))
-      .finally(() => { document.documentElement.classList.remove("role-pending"); void loadReleaseAnnouncement(); });
+    }).then(() => {
+      if (startup?.failed()) return;
+      siteNavigation?.save();
+      startup?.finish();
+      document.documentElement.classList.remove("role-pending");
+      void loadReleaseAnnouncement();
+    }).catch(error => {
+      if (startup?.active()) {
+        startup.fail(error.status === 401 || error.status === 403
+          ? "Не удалось подтвердить вход. Откройте приложение из Telegram ещё раз."
+          : undefined);
+      } else {
+        document.documentElement.classList.remove("role-pending");
+        showError("Не удалось определить права. Откройте приложение через Telegram ещё раз.");
+        void loadReleaseAnnouncement();
+      }
+    });
   }
   tg?.onEvent?.("activated", () => { if (state.view === "orders") showOrders(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "orders") showOrders(); if (!document.hidden) showPendingRelease(); });
 
-  tg?.ready?.();
+  if (!startup?.active()) tg?.ready?.();
   if (!authorized) void loadItems();
   render();
+  if (!authorized) startup?.finish();
 })();

@@ -38,8 +38,9 @@ const html = fs.readFileSync(path.join(assets, "index.html"), "utf8").replaceAll
       const layoutEpsilon = 0.001;
       assert.ok(dimensions.width >= 44 - layoutEpsilon && dimensions.height >= 44 - layoutEpsilon, JSON.stringify(dimensions));
       await page.locator("#main-button").tap();
-
-
+      await page.locator("#step-contact").waitFor();
+      // The same footer button handles both steps and filters accidental double taps.
+      await page.clock.runFor(350);
       await page.locator("#main-button").tap();
       await page.locator('[data-date="2026-10-30"]').tap();
       await page.locator('[data-date="2026-11-02"]').tap();

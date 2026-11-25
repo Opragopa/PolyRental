@@ -19,7 +19,7 @@ from .roles import validate_role_config
 from .rental import expire_deletion_intents
 from .availability_events import listen_for_availability
 from .sla_escalations import queue_sla_escalations
-from .support import retry_support_replies, purge_expired_support
+from .support import retry_support_replies, purge_expired_support, deliver_thread_copies
 from .booking_changes import process_change_deadlines
 from .roadmap import queue_optional_reminders
 from .return_overdue import queue_return_notifications
@@ -46,6 +46,7 @@ async def retention_loop():
         except Exception as exc:
             logging.getLogger(__name__).warning("Return notification worker will retry after %s", type(exc).__name__)
         await retry_support_replies()
+        await deliver_thread_copies()
 
 
 async def deletion_loop():

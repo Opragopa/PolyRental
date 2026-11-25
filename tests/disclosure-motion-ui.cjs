@@ -9,7 +9,7 @@ const viewportFocus = fs.readFileSync('app/miniapp_static/viewport-focus.js', 'u
   const browser = await engine.launch({headless:true, ...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
     for (const reducedMotion of ['no-preference', 'reduce']) {
-      const page = await browser.newPage({reducedMotion});
+      const page = await browser.newPage({reducedMotion, viewport:{width:390,height:844}});
       await page.setContent('<details><summary>Развернуть</summary><div style="height:180px">Содержимое</div></details><p id="after">Ниже</p>');
       await page.addScriptTag({content: viewportFocus});
       await page.addScriptTag({content: motion});
@@ -161,6 +161,43 @@ const viewportFocus = fs.readFileSync('app/miniapp_static/viewport-focus.js', 'u
       assert.equal(await page.evaluate(() => revealResult), false, 'clicking elsewhere cancels a pending reveal');
       await page.close();
     }
-    console.log('Disclosure motion, layout, keyboard and reduced motion: passed');
+    const wide = await browser.newPage({viewport:{width:1440,height:900}});
+    await wide.setContent('<h2 id="heading">Каталог</h2><section id="category" style="width:900px;height:180px"><button id="card">Камера</button></section><button id="cart">Корзина</button>');
+    await wide.addScriptTag({content:fs.readFileSync('app/miniapp_static/motion.js','utf8')});
+    const desktop = await wide.evaluate(() => {
+      const motion = PolyRentalMotion;
+      const category = document.querySelector('#category'), heading = document.querySelector('#heading');
+      const card = document.querySelector('#card'), cart = document.querySelector('#cart');
+      motion.transitionCategoryView(motion.captureCategoryView(category), category, 1);
+      motion.morphText(heading, 'Камеры');
+      motion.flyToCart(card, cart);
+      motion.quantityFeedback(card, cart);
+      const categoryEffect = category.getAnimations()[0].effect;
+      return {
+        copies: document.querySelectorAll('.cart-flight,.category-level-transition,.heading-morph-copy').length,
+        duration: categoryEffect.getTiming().duration,
+        slides: categoryEffect.getKeyframes().some(frame => frame.transform),
+        caption: heading.textContent,
+        cartPulse: cart.getAnimations()[0].effect.getTiming().duration,
+      };
+    });
+    assert.deepEqual(desktop, {copies:0, duration:160, slides:false, caption:'Камеры', cartPulse:180});
+    const dialogMotion = await wide.evaluate(async () => {
+      const dialog = document.createElement('section');
+      dialog.innerHTML = '<div class="dialog-card"><button>Закрыть</button></div>';
+      document.body.append(dialog);
+      const close = dialog.querySelector('button');
+      PolyRentalMotion.morphEquipmentPreview(dialog, {left:10, top:10, width:50, height:30}, '12px', close);
+      const center = dialog.querySelector('.dialog-card').getAnimations()[0].effect.getKeyframes()[0].transform;
+      const hasCopy = Boolean(dialog.querySelector('.equipment-preview-morph'));
+      const keyboardFocus = document.activeElement === close;
+      await PolyRentalMotion.removeDialog(dialog);
+      return {center, hasCopy, keyboardFocus, removed:!dialog.isConnected};
+    });
+    assert.deepEqual(dialogMotion, {center:'scale(0.985)', hasCopy:false, keyboardFocus:true, removed:true});
+    await wide.emulateMedia({reducedMotion:'reduce'});
+    await wide.waitForFunction(() => document.getAnimations().length === 0);
+    await wide.close();
+    console.log('Mobile and desktop disclosure, motion, keyboard and reduced motion: passed');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

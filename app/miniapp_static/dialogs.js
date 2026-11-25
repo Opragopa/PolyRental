@@ -3,6 +3,7 @@
   "use strict";
   const isolated = new Map();
   const selector = '[role="dialog"][aria-modal="true"]';
+  const desktop = matchMedia('(min-width: 769px)');
   let active = null;
   let openDialogs = new Set();
   let scrollLock = null;
@@ -98,6 +99,15 @@
     }
   }
   document.addEventListener('keydown', trap, true);
+  document.addEventListener('keydown', event => {
+    if (!desktop.matches || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+    refresh();
+    const close = active?.dataset.dialogClose && active.querySelector(active.dataset.dialogClose);
+    if (!close) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat && !close.disabled) close.click();
+  }, true);
   function restoreFocus(node) {
     refresh();
     if (node?.isConnected && !node.disabled && !node.closest('[inert]') && (!active || active.contains(node))) node.focus({preventScroll: true});

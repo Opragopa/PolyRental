@@ -10,7 +10,7 @@ const gate = () => {let resolve;const promise = new Promise(r => {resolve=r;});r
  const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
  try {
   {
-   const page=await browser.newPage({reducedMotion:'no-preference'});
+   const page=await browser.newPage({viewport:{width:390,height:844},reducedMotion:'no-preference'});
    await page.setContent('<style>:root{--accent:#244bd6}button{width:120px;height:48px}#number{display:inline-block}.press-feedback,.cart-flight{position:fixed;pointer-events:none}</style><button id="add">Добавить</button><strong id="number">1</strong><div id="surface">Содержание</div><div id="mark">✓</div>');
    await page.evaluate(()=>{window.motionRecords=[];const animate=Element.prototype.animate;Element.prototype.animate=function(frames,options){window.motionRecords.push({id:this.id,frames,options});return animate.call(this,frames,options);};});
    await page.addScriptTag({content:fs.readFileSync('app/miniapp_static/motion.js','utf8')});
@@ -49,17 +49,26 @@ const gate = () => {let resolve;const promise = new Promise(r => {resolve=r;});r
   }
   {
    const {page,errors}=await fixture(browser,{width:320,order:base('pending')});
-   const item={id:1,name:'Камера Sony',category:'generic',capacity:3,available_quantity:3};
+   const item={id:1,name:'Камера Sony',category:'camera',capacity:3,available_quantity:3};
+   await page.route('**/api/miniapp/catalog/categories',r=>r.fulfill({json:{items:[
+    {code:'generic',name:'Оборудование'},{code:'camera',name:'Камера',parent_code:'generic'}
+   ]}}));
    await page.route('**/api/miniapp/catalog?*',r=>r.fulfill({json:{items:[item],selected_items:[item],page:0,page_size:20,total:1}}));
    await page.route('**/api/miniapp/cart',r=>r.fulfill({json:r.request().method()==='PUT'?{...r.request().postDataJSON(),version:1}:{start:'',end:'',lines:[],version:0}}));
    const availability=gate(),received=gate();
    await page.route('**/api/miniapp/availability?*',async r=>{received.resolve();await availability.promise;await r.fulfill({json:{items:[item],all_items:[item],selected_items:[item],unavailable_count:0}});});
+   await page.reload();
    await page.locator('#tab-new').click();
    assert.equal(await page.locator('#frame-progress').isVisible(),true,'four chunks are visible in classic style too');
    await page.locator('[data-category-code="generic"]').click();
    await page.locator('#client-catalog-back').click();
+   assert.equal(await page.locator('#recent-category').isVisible(),false,'the shortcut must not duplicate an existing root category');
+   await page.locator('[data-category-code="generic"]').click();
+   await page.locator('[data-category-code="camera"]').click();
+   await page.locator('#client-catalog-back').click();
+   await page.locator('#client-catalog-back').click();
    await page.locator('#recent-category').waitFor();
-   assert.match(await page.locator('#recent-category').innerText(),/Оборудование/);
+   assert.match(await page.locator('#recent-category').innerText(),/Камера/);
    await page.reload();await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
    await page.locator('#recent-category').click();
    const immediate=await page.locator('.item-card .plus').first().evaluate(el=>{const start=performance.now();el.click();return {elapsed:performance.now()-start,count:document.querySelector('.quantity-value').textContent,footer:document.querySelector('#main-button').textContent};});
@@ -83,6 +92,41 @@ const gate = () => {let resolve;const promise = new Promise(r => {resolve=r;});r
    assert.equal(await page.locator('#frame-progress [aria-current]').innerText(),'4\nПроверка');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    assert.deepEqual(errors,[]);await page.close();
+  }
+  for (const surface of ['miniapp','site']) {
+   const {page,errors}=await fixture(browser,{surface,width:440,height:956,openOrder:false});
+   await page.emulateMedia({reducedMotion:'reduce'});
+   await page.evaluate(()=>{
+    window.testClicks=0;
+    const target=document.createElement('button');
+    target.id='touch-test-button'; target.type='button'; target.textContent='Проверка касания';
+    target.style.cssText='position:fixed;top:150px;left:38px;width:180px;height:64px;z-index:100';
+    target.addEventListener('click',()=>window.testClicks++);
+    document.body.append(target);
+   });
+   const touch=page.locator('#touch-test-button');
+   assert.equal(await touch.evaluate(el=>getComputedStyle(el.ownerDocument.documentElement).touchAction),'manipulation');
+   const scale=await page.evaluate(()=>visualViewport.scale);
+   await touch.dblclick();
+   assert.equal(await page.evaluate(()=>window.testClicks),1);
+   await page.waitForTimeout(350);
+   const point=await touch.boundingBox();
+   await touch.evaluate(first=>{
+    first.addEventListener('click',()=>{
+     const next=first.cloneNode(true);next.id='replacement-touch-button';
+     next.addEventListener('click',()=>window.testClicks++);
+     first.replaceWith(next);
+    },{once:true});
+   });
+   await page.touchscreen.tap(point.x+50,point.y+25);
+   await page.touchscreen.tap(point.x+50,point.y+25);
+   assert.equal(await page.evaluate(()=>window.testClicks),2,'second tap does not activate a replacement control at the same point');
+   assert.equal(await page.evaluate(()=>visualViewport.scale),scale);
+   await page.waitForTimeout(350);
+   await page.touchscreen.tap(point.x+50,point.y+25);
+   assert.equal(await page.evaluate(()=>window.testClicks),3,'a later deliberate tap still works');
+   assert.deepEqual(errors,[]);
+   await page.close();
   }
   console.log(`Interaction principles (${engine.name()}): press geometry, squash/settle, follow-through, arc, depth, timing, reduced motion, targets, four stages, focus, recent shortcut, tolerant contact and delayed response passed`);
  }finally{await browser.close();}

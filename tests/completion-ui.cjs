@@ -13,8 +13,8 @@ const base = (status='ready') => ({id:7,human_number:'ТС260007',status,identit
   handover:{snapshot:[{id:21,name:'Камера Sony',features:[{description:'Небольшая царапина'}]}],
     exceptions:[{line_id:11,name:'Камера Sony',reason:'missing',note:'Нет на складе'}]}});
 
-async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null,isMobile=true,continuousCorners=false}={}) {
-  const page=await browser.newPage({viewport:{width,height:844},isMobile,hasTouch:isMobile});
+async function fixture(browser,{admin=false,role='operator',trusted=false,order=base(),change=null,width=390,height=844,failWriteOnce=false,notices=[],deferInspectionRefresh=false,receipt=null,isMobile=true,continuousCorners=false,surface='miniapp',openOrder=true,piiAdmin=false,piiOnly=false}={}) {
+  const page=await browser.newPage({viewport:{width,height},isMobile,hasTouch:isMobile});
   const errors=[],writes=[];let catalogPreview='';
   let releaseInspectionRefresh;
   const inspectionRefresh=new Promise(resolve=>{releaseInspectionRefresh=resolve;});
@@ -23,20 +23,27 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
   await page.clock.install({time:new Date('2026-10-29T10:00:00Z')});
   await page.route('**/*',async route=>{
     const url=new URL(route.request().url()),method=route.request().method();
-    if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:'window.Telegram={WebApp:{initData:"synthetic",initDataUnsafe:{user:{id:42}}}}'});
+    if (url.hostname==='telegram.org' && surface==='site') return route.fulfill({contentType:'text/javascript',body:''});
+    if (url.hostname==='telegram.org') return route.fulfill({contentType:'text/javascript',body:`
+      window.Telegram = {WebApp:{initData:"synthetic", initDataUnsafe:{user:{id:42}}, close(){}, BackButton:{
+        isVisible:false, show(){this.isVisible=true;}, hide(){this.isVisible=false;},
+        onClick(handler){this.handler=handler;}, press(){if(this.isVisible) this.handler();}
+      }}};
+    `});
     if (url.pathname.startsWith('/miniapp/static/')) {
       const file=path.resolve(assets,url.pathname.slice('/miniapp/static/'.length));
       assert.ok(file.startsWith(assets+path.sep));
       return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':file.endsWith('.wasm')?'application/wasm':/\.m?js$/.test(file)?'text/javascript':'application/octet-stream'});
     }
-    if (url.pathname.endsWith('/receipt') && receipt) return route.fulfill({status:receipt.status || 200,body:receipt.body,contentType:receipt.type || 'application/pdf'});
+    if (url.pathname.endsWith('/receipt') && receipt) return route.fulfill({status:receipt.status || 200,body:receipt.body,contentType:receipt.type || 'application/pdf',headers:receipt.headers});
     if (url.pathname==='/api/miniapp/notifications/claim') return route.fulfill({json:{items:notices.splice(0)}});
     if (url.pathname==='/api/miniapp/catalog/categories') return route.fulfill({json:{items:categories}});
     if (url.pathname==='/api/miniapp/admin/catalog/categories') {
       const category={code:'custom_sound',name:route.request().postDataJSON().name};categories.push(category);
       return route.fulfill({json:category});
     }
-    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:false,...(admin?{staff_role:role,trusted_signer:trusted}:{})}});
+    if (url.pathname==='/api/site/session') return route.fulfill({json:{id:admin?100:42,first_name:'QA'}});
+    if (url.pathname==='/api/miniapp/me') return route.fulfill({json:{id:admin?100:42,admin,pii_admin:piiAdmin,pii_only:piiOnly,...(admin&&!piiOnly?{staff_role:role,trusted_signer:trusted}:{})}});
     if (url.pathname==='/api/miniapp/profile') return route.fulfill({json:{display_name:'QA',onboarding_seen:true,client_allowed:true,system_admin:role==='admin',start_screen:admin?'management':'booking'}});
     if (url.pathname==='/api/miniapp/operator/last-section') return route.fulfill({json:{section:'orders'}});
     if (url.pathname===`/api/miniapp/bookings/${order.id}`) return route.fulfill({json:order});
@@ -46,7 +53,10 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
       return route.fulfill({json:{items:[order],total:1,undo_seconds:5}});
     }
     if (url.pathname.endsWith('/history')) return route.fulfill({json:{items:[]}});
-    if (url.pathname==='/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[{id:1,name:'Камера Sony',title:'Камера Sony',sku:'CAM',category:'camera',image_data:catalogPreview,composition:'Корпус\nКабель',equipment:Array.from({length:15},(_,index)=>({id:21+index,asset_code:`CAM-${index+1}`,condition:'available',location:'A1'}))}],dependencies:[]}});
+    if (url.pathname==='/api/miniapp/admin/catalog') return route.fulfill({json:{articles:[
+      {id:1,name:'Камера Sony',title:'Камера Sony',sku:'CAM',category:'camera',image_data:catalogPreview,composition:'Корпус\nКабель',equipment:Array.from({length:15},(_,index)=>({id:21+index,asset_code:`CAM-${index+1}`,condition:'available',location:'A1'}))},
+      {id:2,name:'Камера Canon',category:'camera',composition:'Корпус\nКабель',equipment:[{id:36,asset_code:'CAN-1',condition:'available'}]},
+    ],dependencies:[]}});
     if (url.pathname==='/api/miniapp/admin/staff') return route.fulfill({json:{items:[{telegram_id:100,role:'admin',full_name:'QA Admin',trusted:true},{telegram_id:200,role:'operator',full_name:'QA Staff',trusted:false}]}});
     if (url.pathname==='/api/miniapp/admin/assignees') return route.fulfill({json:{items:[{id:100,name:'QA Admin'},{id:200,name:'QA Staff'}]}});
     if (url.pathname.endsWith('/changes')&&method==='GET') return route.fulfill({json:change});
@@ -63,7 +73,10 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
       if (url.pathname.endsWith('/transition')) order.status=body.action;
       if (url.pathname.endsWith('/assignee')) { order.assignee_id=body.assignee_id; order.assignee_name='QA Staff'; }
       if (url.pathname.endsWith('/changes')) order.status='needs_changes';
-      if (url.pathname.endsWith('/respond')) order.status='pending';
+      if (url.pathname.endsWith('/respond')) {
+        order.status = 'pending';
+        if (body.accept === false) { order.change_status = 'disputed'; change = {...change, status:'disputed', dispute:body.comment}; }
+      }
       return route.fulfill({json:order});
     }
     if (url.pathname.startsWith('/api/')) return route.fulfill({json:{items:[]}});
@@ -72,10 +85,12 @@ async function fixture(browser,{admin=false,role='operator',trusted=false,order=
       : html;
     return route.fulfill({body:document,contentType:'text/html'});
   });
-  await page.goto('http://polyrental.test/miniapp');
+  await page.goto(`http://polyrental.test/${surface}`);
   await page.waitForFunction(()=>!document.documentElement.classList.contains('role-pending'));
-  if (admin) {await page.locator('.request-toggle').waitFor();await page.locator('.request-toggle').click();const more=page.locator('.request-more-actions > summary').first();if(await more.isVisible())await more.click();}
-  else {await page.locator('#tab-orders').click();await page.locator('#orders-content .customer-order-toggle').first().click();}
+  if (openOrder) {
+    if (admin) {await page.locator('.request-toggle').waitFor();await page.locator('.request-toggle').click();const more=page.locator('.request-more-actions > summary').first();if(await more.isVisible())await more.click();}
+    else {await page.locator('#tab-orders').click();await page.locator('#orders-content .customer-order-toggle').first().click();}
+  }
   return {page,errors,writes,releaseInspectionRefresh};
 }
 
@@ -198,8 +213,10 @@ if(require.main===module)(async()=>{
       const {page,errors,writes}=await fixture(browser,{admin:true,role:'manager',order:base('pending')});
       await page.getByRole('button',{name:'Изменить заявку',exact:true}).click();
       const dialog=page.locator('.workflow-dialog');
-      await dialog.locator('[name="start"]').fill('2026-11-05T10:00');
-      await dialog.locator('[name="end"]').fill('2026-11-06T10:00');
+      await dialog.locator('[name="start-date"]').fill('05.11.2026');
+      await dialog.locator('[name="start-time"]').fill('10:00');
+      await dialog.locator('[name="end-date"]').fill('06.11.2026');
+      await dialog.locator('[name="end-time"]').fill('10:00');
       await dialog.locator('[name="comment"]').fill('QA: изменены даты');await noOverflow(page);
       await dialog.getByRole('button',{name:'Подтвердить',exact:true}).click();
       assert.equal(writes[0].body.change_type,'manager_edit');
@@ -215,26 +232,39 @@ if(require.main===module)(async()=>{
       const dialog=page.locator('.workflow-dialog');
       assert.match(await dialog.innerText(),/2 → 1/);
       await dialog.locator('[name="decision"]').selectOption('dispute');
-      await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();assert.equal(writes.length,0);
+      await dialog.getByRole('button',{name:'Отправить возражение',exact:true}).click();assert.equal(writes.length,0);
       await dialog.locator('[name="comment"]').fill('Оспариваю количество');
-      await dialog.getByRole('button',{name:'Подтверждаю',exact:true}).click();
+      await dialog.getByRole('button',{name:'Отправить возражение',exact:true}).click();
       assert.deepEqual(writes[0].body,{change_id:9,accept:false,comment:'Оспариваю количество'});
+      await page.getByText('Вы отклонили предложенные изменения.',{exact:false}).waitFor();
+      await page.waitForFunction(() => document.activeElement?.textContent === 'Ваше возражение');
+      await page.getByRole('button',{name:'Ваше возражение',exact:true}).click();
+      await page.getByText('Оспариваю количество',{exact:true}).waitFor();
       assert.deepEqual(errors,[]);await page.close();passed++;
     }
     {
       const {page,errors,writes}=await fixture(browser,{admin:true,role:'admin',order:base('preparing')});
-      await page.getByRole('button',{name:'Заменить экземпляры',exact:true}).click();
-      const editor=page.locator('.assignment-editor');
-      await editor.locator('.assignment-slot').first().getByText('Выбрать замену',{exact:true}).click();
-      assert.equal(await editor.locator('.assignment-slot').first().locator('.replacement-list .button').count(),10);
-      await editor.locator('.assignment-slot').first().getByRole('searchbox').fill('CAM-15');
-      await editor.locator('.assignment-slot').first().getByRole('button',{name:'Камера Sony #CAM-15',exact:true}).click();
-      await editor.locator('[name="line-11"]').nth(1).selectOption('missing');
-      await editor.locator('.assignment-slot').first().locator('.component-state').nth(1).selectOption('faulty');
-      await editor.getByRole('button',{name:'Сохранить замену',exact:true}).click();
+      const pencil=page.getByRole('button',{name:'Редактировать состав',exact:true});
+      const editor=page.getByRole('dialog',{name:'Редактор состава'});
+      await pencil.click();
+      await editor.getByRole('button',{name:/Удалить: Камера Sony/}).click();
+      await editor.getByLabel('Добавить из каталога').selectOption('36');
+      await editor.getByRole('button',{name:'Добавить',exact:true}).click();
+      await editor.getByRole('button',{name:'Отмена',exact:true}).click();
+      await editor.waitFor({state:'hidden'});
+      assert.equal(writes.filter(write=>write.path.endsWith('/assignments')).length,0);
+      await pencil.click();
+      await editor.getByRole('button',{name:/Удалить: Камера Sony/}).click();
+      await editor.getByLabel('Добавить из каталога').selectOption('36');
+      await editor.getByRole('button',{name:'Добавить',exact:true}).click();
+      await editor.getByRole('button',{name:/Комплектующие: Камера Canon/}).click();
+      await editor.locator('.component-state').nth(1).selectOption('faulty');
+      const written = page.waitForRequest(request=>request.url().endsWith('/assignments') && request.method()==='PUT');
+      await editor.getByRole('button',{name:'Сохранить',exact:true}).click();
+      await written;
       assert.equal(writes[0].body.exceptions.length,3);
       assert.ok(writes[0].body.exceptions.some(row=>row.component==='Кабель'&&row.reason==='faulty'));
-      assert.ok(writes[0].body.exceptions.some(row=>row.reason==='replacement'&&row.replacement_id===35));
+      assert.ok(writes[0].body.exceptions.some(row=>row.reason==='replacement'&&row.replacement_id===36));
       assert.deepEqual(errors,[]);await page.close();passed++;
     }
     {

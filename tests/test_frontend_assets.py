@@ -26,8 +26,8 @@ def test_served_html_and_static_revalidate():
     response = client.get('/miniapp')
     assert response.status_code == 200
     assert response.headers['cache-control'] == 'no-store'
-    urls = re.findall(r'/miniapp/static/(?:app.js|design.css)\?v=[0-9a-f]{16}', response.text)
-    assert len(urls) == 2
+    urls = re.findall(r'/miniapp/static/(?:(?:app|site-navigation)\.js|(?:design|desktop)\.css|startup\.(?:js|css))\?v=[0-9a-f]{16}', response.text)
+    assert len(urls) == 6
     for url in urls:
         asset = client.get(url)
         assert asset.status_code == 200

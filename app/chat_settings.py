@@ -69,13 +69,13 @@ async def staff_settings_command(message: Message):
 async def staff_list(message,actor,page):
     if not await asyncio.to_thread(staff_allows,actor,'admin'):raise PermissionError('Нужна роль администратора')
     staff=await asyncio.to_thread(staff_snapshot);page=max(0,min(page,max(0,(len(staff)-1)//PAGE_SIZE)))
-    rows=[[button(f"{row.get('name') or row['signer'].get('full_name') or 'Сотрудник'} · {staff_role(row['role'])}"[:60],f"as:open:{row['id']}")] for row in staff[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows=[[button(f"{row.get('name') or row['signer'].get('full_name') or 'Сотрудник'} ({staff_role(row['role'])})"[:60],f"as:open:{row['id']}")] for row in staff[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
-    if page:nav.append(button('← Назад',f'as:page:{page-1}'))
-    if (page+1)*PAGE_SIZE<len(staff):nav.append(button('Далее →',f'as:page:{page+1}'))
+    if page:nav.append(button('Назад',f'as:page:{page-1}'))
+    if (page+1)*PAGE_SIZE<len(staff):nav.append(button('Далее',f'as:page:{page+1}'))
     if nav:rows.append(nav)
     if not rows:return await message.answer('Нет настроенных сотрудников.')
-    await message.answer(f'Сотрудники · страница {page+1}. Доступ к персональным данным назначается отдельно.',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f'Сотрудники, страница {page+1}. Доступ к персональным данным назначается отдельно.',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def staff_detail(message,actor,target):
@@ -83,7 +83,7 @@ async def staff_detail(message,actor,target):
     row=next((item for item in await asyncio.to_thread(staff_snapshot) if item['id']==target),None)
     if not row:raise ValueError('Сотрудник не найден в списке администраторов')
     signer=row['signer']
-    text=f"Сотрудник: {row.get('name') or signer.get('full_name') or 'Имя не указано'}\nРоль: {staff_role(row['role'])}\nДоверенный подписант: {signer.get('full_name') or 'не указан'} · {'активен' if signer.get('active') else 'неактивен'}"
+    text=f"Сотрудник: {row.get('name') or signer.get('full_name') or 'Имя не указано'}\nРоль: {staff_role(row['role'])}\nДоверенный подписант: {signer.get('full_name') or 'не указан'} ({'активен' if signer.get('active') else 'неактивен'})"
     rows=[[button('Оператор',f'as:role:{target}:operator'),button('Менеджер',f'as:role:{target}:manager'),button('Администратор',f'as:role:{target}:admin')],
           [button('Настроить подписанта',f'as:signer:{target}')],[button('К списку','as:page:0')]]
     await message.answer(text,reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))

@@ -15,6 +15,9 @@ templates/*.docx
 
 # Local editor settings, design exports and release/test workspaces
 /.idea/
-/.codex/
+/.codex/*
+!/.codex/agents/
+/.codex/agents/*
+!/.codex/agents/polyrental-layout.toml
 /tmp/
 /*.fig

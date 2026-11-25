@@ -52,6 +52,28 @@ def test_support_messages_are_visible_only_to_their_recipient(monkeypatch):
         assert client.get('/api/miniapp/notifications/inbox', headers=stranger).json()['items'] == []
 
 
+def test_support_preview_is_private_and_loaded_only_when_requested(monkeypatch):
+    from app.support import claim_thread, reply, submit_question
+    configure(monkeypatch)
+    result = submit_question(42, None, "profile", "Текст обращения")
+    claim_thread(result["id"], 200)
+    reply_id = reply(result["id"], 200, "Текст ответа")
+    url = "/api/miniapp/notifications/inbox"
+    with TestClient(app) as client:
+        staff = client.get(url, headers={"X-Telegram-Init-Data": signed_init_data(200)}).json()
+        item = next(row for row in staff["items"] if row["id"] == f"s:{result['message_id']}")
+        assert item["tone"] == "support" and item["support_thread_id"] == result["id"]
+        assert "Текст обращения" not in str(item)
+        opened = client.get(url, params={"support_preview": True}, headers={"X-Telegram-Init-Data": signed_init_data(200)}).json()
+        assert next(row for row in opened["items"] if row["id"] == item["id"])["preview"] == "Текст обращения"
+        for user, message_id, body in [(200, result["message_id"], "Текст обращения"), (42, reply_id, "Текст ответа")]:
+            response = client.get(f"{url}/support/{message_id}", headers={"X-Telegram-Init-Data": signed_init_data(user)})
+            assert response.json() == {"text": body}
+        for user in (42, 43, 100):
+            response = client.get(f"{url}/support/{result['message_id']}", headers={"X-Telegram-Init-Data": signed_init_data(user)})
+            assert response.status_code == 404
+
+
 def test_inbox_presents_compact_copy_without_changing_stored_message(monkeypatch):
     configure(monkeypatch)
     from app.notification_inbox import inbox

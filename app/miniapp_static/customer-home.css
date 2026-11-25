@@ -6,7 +6,7 @@
 .equipment-features { padding:14px; border:1px solid var(--line); border-radius:12px; }
 .equipment-features p { white-space:pre-wrap; overflow-wrap:anywhere; }
 .file-drop-zone { position:relative; border-radius:12px; }
-.file-drop-zone.drag-over { outline:3px dashed var(--accent); outline-offset:4px; background:var(--soft); }
+.file-drop-zone.drag-over { outline:3px dashed var(--accent); outline-offset:-3px; background:var(--soft); }
 .drop-hint,.drop-status { display:block; font-size:12px; overflow-wrap:anywhere; }
 .drop-status.error { color:var(--danger); }
 .drop-preview { display:block; max-width:100%; width:160px; height:120px; object-fit:contain; border-radius:8px; background:var(--soft); }
