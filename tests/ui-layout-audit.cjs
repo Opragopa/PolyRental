@@ -417,7 +417,9 @@ async function operator(page, audit, where, profileSelects) {
   });
   await filters.click();
   await audit.design('management/document-viewer-backdrop', async () => {
-    await page.getByRole('button', {name:'Посмотреть анкету', exact:true}).click();
+    const review = page.getByRole('button', {name:'Посмотреть анкету', exact:true});
+    await review.waitFor();
+    await review.press('Enter');
     await page.getByRole('button', {name:'Просмотр документов', exact:true}).click();
     try {
       await assertModalBackdrop(page.locator(`#document-viewer${modalSelector}`));
