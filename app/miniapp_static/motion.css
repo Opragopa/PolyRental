@@ -58,6 +58,12 @@
 
 /* Main tabs are animated by the navigation controller; avoid overlapping entry animations. */
 #orders-panel:not([hidden]), #admin-panel:not([hidden]) { animation: none; }
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .tabs > .tab, .catalog-layout .button, .request-toggle, .customer-order-toggle {
+    transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+  }
+}
 #release-dialog:not([hidden]) .dialog-card { animation: none; transition: none; }
 
 .dialog-backdrop.equipment-preview-dialog:not([hidden]),
@@ -94,3 +100,43 @@
 
 /* Transition copies keep their text on one line while the mask changes size. */
 .category-transition-copy .category-card-name, .heading-morph-copy { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+@media (min-width: 769px) and (prefers-reduced-motion: no-preference) {
+  :root { --motion-normal: 160ms; --motion-exit: 130ms; }
+  #booking-flow > .step-panel:not([hidden]) { animation: none; }
+  #identity-panel:not([hidden]), .login-card,
+  .document-viewer:not([hidden]) .document-viewer-card,
+  .stage-toast, .notice:not([hidden]), .profile-identity-actions .button:not([hidden]), .delete-snackbar:not([hidden]),
+  .floating-cart-button:not([hidden]) { animation: desktop-fade-in var(--motion-normal) var(--motion-ease) both; }
+  @keyframes desktop-fade-in { from { opacity: .65; } to { opacity: 1; } }
+
+  .dialog-backdrop > .dialog-card { transform-origin: center; }
+  .dialog-backdrop:not([hidden], .equipment-preview-dialog, #release-dialog) > .dialog-card {
+    animation: desktop-dialog-enter var(--motion-normal) var(--motion-ease) backwards;
+  }
+  @keyframes desktop-dialog-enter {
+    from { opacity: 0; transform: scale(.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @supports (transition-behavior: allow-discrete) {
+    .dialog-backdrop:not([hidden], .equipment-preview-dialog, #release-dialog) > .dialog-card { animation: none; }
+    .dialog-backdrop[hidden] .dialog-card { transform: scale(.985); }
+    @starting-style {
+      .dialog-backdrop:not([hidden]) .dialog-card { transform: scale(.985); }
+    }
+  }
+
+  .equipment-card-drawer, .article-collapse { transition-duration: 160ms, 130ms; }
+  .category-edit-tile .category-card { animation: none; }
+  .equipment-preview-source.is-preview-pressed { scale: 1; }
+  .range-calendar .calendar-day-reveal::before,
+  #range-calendar .calendar-day.calendar-day-reveal::before,
+  #range-calendar .calendar-status-reveal > .calendar-availability-fill { animation-duration: 200ms; }
+  #range-calendar .calendar-day[data-availability]:not(:disabled):active::after { animation-duration: 160ms; }
+}
+
+@media (min-width: 769px) and (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  #range-calendar .calendar-day[data-availability]::after { transition: opacity 100ms ease-out; }
+  #range-calendar .calendar-day[data-availability]:not(:disabled):hover::after,
+  #range-calendar .calendar-day[data-availability]:focus-visible::after { animation: none; }
+}

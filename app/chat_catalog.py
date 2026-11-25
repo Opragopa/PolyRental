@@ -74,13 +74,13 @@ async def catalog_list(message, actor, page):
         return query in " ".join(str(value or "") for value in parts).casefold()
     articles = [article for article in articles if matches(article)]
     page = max(0, min(page, max(0, (len(articles)-1)//PAGE_SIZE)))
-    rows = [[button(f"{article.name} · {article.sku}"[:60], f"cat:article:{article.id}")] for article in articles[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows = [[button(f"{article.name} ({article.sku})"[:60], f"cat:article:{article.id}")] for article in articles[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     navigation = []
-    if page: navigation.append(button("← Назад", f"cat:page:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(articles): navigation.append(button("Далее →", f"cat:page:{page+1}"))
+    if page: navigation.append(button("Назад", f"cat:page:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(articles): navigation.append(button("Далее", f"cat:page:{page+1}"))
     if navigation: rows.append(navigation)
     rows.append([button("Новая модель", "ce:newarticle"), button("Комплекты", "cat:dependencies:0")])
-    text = f"Каталог · страница {page+1}. Найдено моделей: {len(articles)}.\nПоиск: /catalog НАЗВАНИЕ или ID. Импорт: /import_catalog. Связь комплекта: /dependency."
+    text = f"Каталог, страница {page+1}. Найдено моделей: {len(articles)}.\nПоиск: /catalog НАЗВАНИЕ или ID. Импорт: /import_catalog. Связь комплекта: /dependency."
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -89,11 +89,11 @@ async def article_detail(message, actor, article_id, page=0):
     article = next((item for item in await asyncio.to_thread(list_articles) if item.id == article_id), None)
     if article is None: raise ValueError("Артикул не найден")
     page = max(0, min(page, max(0,(len(article.equipment)-1)//PAGE_SIZE)))
-    text = f"<b>{html.escape(article.name)}</b> · {html.escape(article.sku)}\nНомер модели: {article.id} · {'в каталоге' if article.is_active else 'скрыт'}\nКатегория: {html.escape(article.category)} · проверка: {INSPECTION_PROFILES.get(article.inspection_profile, 'Общая')}\nКомплектация: {html.escape((article.composition or 'не указана')[:1000])}\nЭкземпляров: {len(article.equipment)}"
-    rows = [[button(f"{asset.inventory_number} · {equipment_condition(asset.condition)}"[:60], f"cat:asset:{asset.id}")] for asset in article.equipment[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    text = f"<b>{html.escape(article.name)}</b> ({html.escape(article.sku)})\nНомер модели: {article.id} ({'в каталоге' if article.is_active else 'скрыта'})\nКатегория: {html.escape(article.category)}\nПроверка: {INSPECTION_PROFILES.get(article.inspection_profile, 'Общая')}\nКомплектация: {html.escape((article.composition or 'не указана')[:1000])}\nЭкземпляров: {len(article.equipment)}"
+    rows = [[button(f"{asset.inventory_number}: {equipment_condition(asset.condition)}"[:60], f"cat:asset:{asset.id}")] for asset in article.equipment[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"cat:article:{article_id}:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(article.equipment): nav.append(button("Далее →", f"cat:article:{article_id}:{page+1}"))
+    if page: nav.append(button("Назад", f"cat:article:{article_id}:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(article.equipment): nav.append(button("Далее", f"cat:article:{article_id}:{page+1}"))
     if nav: rows.append(nav)
     rows.append([button("Изменить модель", f"ce:article:{article.id}"), button("Добавить экземпляр", f"ce:newasset:{article.id}")])
     if await asyncio.to_thread(staff_allows,actor,"admin"):
@@ -108,7 +108,7 @@ async def asset_detail(message, actor, asset_id):
     from .rental import list_equipment
     asset = next((item for item in await asyncio.to_thread(list_equipment) if item.id == asset_id), None)
     if asset is None: raise ValueError("Экземпляр не найден")
-    text = f"<b>{html.escape(asset.name)}</b>\nНомер экземпляра: {asset.id} · код: {html.escape(asset.inventory_number)}\nСостояние: {equipment_condition(asset.condition)}\nМесто: {html.escape(asset.storage_location or 'не указано')}\nСерийный номер: {html.escape(asset.serial_number or 'не указан')}\nИнвентарный номер: {html.escape(asset.asset_inventory_code or 'не указан')}"
+    text = f"<b>{html.escape(asset.name)}</b>\nНомер экземпляра: {asset.id}\nКод: {html.escape(asset.inventory_number)}\nСостояние: {equipment_condition(asset.condition)}\nМесто: {html.escape(asset.storage_location or 'не указано')}\nСерийный номер: {html.escape(asset.serial_number or 'не указан')}\nИнвентарный номер: {html.escape(asset.asset_inventory_code or 'не указан')}"
     rows = [[button("Изменить экземпляр", f"ce:asset:{asset.id}"), button("Удалить экземпляр", f"cat:askdelete:{asset.id}")], [button("Владелец, занятость, особенности", f"iv:menu:{asset.id}")], [button("К модели", f"cat:article:{asset.article_id}")]]
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -119,8 +119,8 @@ async def dependencies_list(message, actor, page):
     page = max(0, min(page, max(0,(len(entries)-1)//PAGE_SIZE)))
     rows = [[button(f"{item.parent_article_id} → {item.child_article_id} × {item.quantity}", f"cat:askunlink:{item.parent_article_id}:{item.child_article_id}")] for item in entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"cat:dependencies:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее →", f"cat:dependencies:{page+1}"))
+    if page: nav.append(button("Назад", f"cat:dependencies:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее", f"cat:dependencies:{page+1}"))
     if nav: rows.append(nav)
     rows.append([button("К каталогу", "cat:page:0")])
     await message.answer("Справочные связи комплектов. Они не добавляют оборудование автоматически. Создать: /dependency. Нажмите связь для удаления.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -414,7 +414,7 @@ async def categories_command(message: Message):
     if not await allowed(message,message.from_user.id): return
     from .catalog_categories import list_categories
     categories=await asyncio.to_thread(list_categories)
-    text="\n".join(f"{html.escape(item['code'])} · {html.escape(item['name'])}" for item in categories)
+    text="\n".join(f"{html.escape(item['code'])}: {html.escape(item['name'])}" for item in categories)
     await message.answer((text or "Категорий нет") + "\nСоздать категорию: /new_category",parse_mode=ParseMode.HTML)
 
 
@@ -446,7 +446,7 @@ async def category_save(query: CallbackQuery,state: FSMContext):
         try: result=await asyncio.to_thread(create_category,data["category_name"],query.from_user.id)
         except (ValueError,PermissionError) as exc: return await query.answer(str(exc)[:180],show_alert=True)
         await state.clear(); await query.answer("Категория создана")
-        await query.message.answer(f"Категория создана: {result['name']} · код {result['code']}")
+        await query.message.answer(f"Категория создана: {result['name']} (код {result['code']})")
 
 
 @router.message(CatalogPhoto.upload)

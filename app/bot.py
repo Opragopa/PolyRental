@@ -21,13 +21,13 @@ from sqlalchemy.exc import IntegrityError
 from .db import init_db
 from .booking_messages import booking_status_text
 from .chat_labels import booking_status, equipment_condition
-from .notification_outbox import notify, notify_actionable
+from .notification_outbox import notify
 from .miniapp import BookingRequest
 from .roles import configured_ids, is_staff, audit_admin_access, validate_role_config, staff_allows
 from .service import Conflict, availability, booking_total, create_booking, get_booking, list_bookings, list_customer_bookings, list_equipment, save_equipment, transition
 from .rental import resolve_booking_number, ClientBlocked
 from .booking_settings import get_booking_settings, normalize_rental_purpose
-from .support import submit_question, reply as support_reply, deliver_reply, SupportConflict
+from .support import submit_question, reply as support_reply, deliver_reply, deliver_operator_copy, SupportConflict
 from .catalog_titles import catalog_title
 
 router = Router()
@@ -140,10 +140,10 @@ def equipment_keyboard(items, selected):
     for item in items:
         item_id = item["id"]
         count = quantities.get(str(item_id), quantities.get(item_id, 0))
-        buttons.append([InlineKeyboardButton(text=f'{item.get("title") or item["name"]} · {count} / {item["available_quantity"]}', callback_data=f'rent:info:{item_id}'),
+        buttons.append([InlineKeyboardButton(text=f'{item.get("title") or item["name"]} ({count} / {item["available_quantity"]})', callback_data=f'rent:info:{item_id}'),
                         InlineKeyboardButton(text="−", callback_data=f'rent:minus:{item_id}'),
                         InlineKeyboardButton(text="+", callback_data=f'rent:plus:{item_id}')])
-    buttons.append([InlineKeyboardButton(text="Продолжить →", callback_data="rent:next")])
+    buttons.append([InlineKeyboardButton(text="Продолжить", callback_data="rent:next")])
     buttons.append([InlineKeyboardButton(text="Показать мой выбор", callback_data="rent:selected")])
     buttons.append([InlineKeyboardButton(text="Изменить сроки", callback_data="rent:dates")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -245,7 +245,7 @@ async def start(message: Message, state: FSMContext):
             rows = []
             for item in items[:5]:
                 callback = f"cw:askattest:{item['booking_id']}:returning" if item['action']=='return' else f"cw:open:{item['booking_id']}"
-                rows.append([InlineKeyboardButton(text=f"{item['human_number']} · {item['label']}",callback_data=callback)])
+                rows.append([InlineKeyboardButton(text=f"{item['human_number']}: {item['label']}",callback_data=callback)])
             rows.append([InlineKeyboardButton(text="Все мои заявки",callback_data="cw:page:0")])
             await message.answer("\n\n".join(f"{item['human_number']}: {item['title']}\n{item['description']}" for item in items[:5]),reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -260,7 +260,7 @@ async def return_equipment_menu(message: Message):
     if not items:
         return await message.answer("Сейчас у вас нет выданного оборудования. Статус других заявок можно посмотреть ниже.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Мои заявки", callback_data="cw:page:0")]]))
     await message.answer("Выберите заявку, по которой передаёте оборудование сотруднику:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"Сдать · {item['human_number']}", callback_data=f"cw:askattest:{item['booking_id']}:returning")] for item in items]))
+        InlineKeyboardButton(text=f"Сдать по заявке {item['human_number']}", callback_data=f"cw:askattest:{item['booking_id']}:returning")] for item in items]))
 
 
 @router.message(Command("book"))
@@ -643,7 +643,7 @@ async def find_request(message: Message):
         if not booking or (booking.customer_id != message.from_user.id and not is_staff(message.from_user.id)):
             raise ValueError("Заявка не найдена")
         status = booking_status(booking.status)
-        await message.answer(f"Заявка {html.escape(booking.human_number)} · {status}")
+        await message.answer(f"Заявка {html.escape(booking.human_number)}: {status}")
     except ValueError:
         await message.answer("Заявка не найдена. Укажите полный номер или однозначные последние четыре цифры.")
 
@@ -669,10 +669,10 @@ async def support_message(message: Message, state: FSMContext, bot: Bot):
         return await message.answer(str(exc))
     except Conflict:
         return await message.answer("Поддержка временно недоступна. Попробуйте позже.")
-    if result["owner_id"]:
-        await notify_actionable(None, result["owner_id"], "support_action", f"Новое обращение №{result['id']}. Откройте поддержку в приложении.")
     await state.clear()
     await message.answer("Обращение получено.", reply_markup=main_keyboard())
+    if result["owner_id"]:
+        await deliver_operator_copy(result["message_id"])
 
 
 @router.message(Command("reply"))

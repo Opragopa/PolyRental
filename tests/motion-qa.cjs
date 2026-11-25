@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const assets = path.resolve(__dirname, "../app/miniapp_static");
-const output = path.resolve(__dirname, "../artifacts/motion-qa");
+const output = process.env.QA_MOTION_OUTPUT ? path.resolve(process.env.QA_MOTION_OUTPUT) : path.resolve(__dirname, "../artifacts/motion-qa");
 fs.mkdirSync(output, {recursive: true});
 const results = [];
 const settle = page => page.waitForTimeout(300);
@@ -14,8 +14,10 @@ const settle = page => page.waitForTimeout(300);
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "msedge"});
   try {
-    for (const [width, height, cpu] of (process.env.QA_MOTION_LIVE_ONLY ? [] : [[240,320,1],[390,844,1],[568,320,1],[1440,900,1],[390,844,4]]).filter(item=>!process.env.QA_MOTION_CPU_ONLY || item[2]===Number(process.env.QA_MOTION_CPU_ONLY))) {
-      const context = await browser.newContext({viewport: {width,height}, recordVideo: {dir: output, size: {width: Math.min(width, 720), height: Math.min(height, 900)}}});
+    const viewports = process.env.QA_MOTION_DESKTOP_ONLY ? [[1024,900,1],[1440,900,1],[1920,900,1]] : [[240,320,1],[390,844,1],[568,320,1],[1440,900,1],[390,844,4]];
+    for (const [width, height, cpu] of (process.env.QA_MOTION_LIVE_ONLY ? [] : viewports.filter(item=>!process.env.QA_MOTION_CPU_ONLY || item[2]===Number(process.env.QA_MOTION_CPU_ONLY)))) {
+      const videoSize = process.env.QA_MOTION_DESKTOP_ONLY ? {width: 1024, height: Math.round(512 * height / width) * 2} : {width: Math.min(width, 720), height: Math.min(height, 900)};
+      const context = await browser.newContext({viewport: {width,height}, recordVideo: {dir: output, size: videoSize}});
       const page = await context.newPage();
       const traceEnabled=cpu===4 && !process.env.QA_MOTION_NO_TRACE;
       if(traceEnabled) await context.tracing.start({screenshots:true,snapshots:true});
@@ -140,6 +142,18 @@ const settle = page => page.waitForTimeout(300);
         return {inert,same,removed:!el.isConnected};
       });
       assert.deepEqual(dynamic,{inert:true,same:true,removed:true});
+      if (width >= 1024) {
+        const settings = page.locator('#profile-header');
+        await settings.locator('summary').focus();
+        const wasOpen = await settings.evaluate(element => element.open);
+        await settings.locator('summary').dispatchEvent('click');
+        await page.setViewportSize({width:1023,height});
+        await settle(page);
+        assert.equal(await settings.evaluate(element => element.open), !wasOpen);
+        assert.equal(await settings.evaluate(element => element.style.overflow), '');
+        assert.equal(await settings.evaluate(element => element.querySelector('summary') === document.activeElement), true);
+        await page.setViewportSize({width,height});
+      }
       // Preference changes during a JS height animation must finish immediately.
       await page.locator("#profile-header > summary").dispatchEvent("click");
       await page.emulateMedia({reducedMotion:"reduce"});
@@ -160,6 +174,7 @@ const settle = page => page.waitForTimeout(300);
       await context.close();
       report.video=`motion-${width}x${height}-cpu${cpu}${traceEnabled?'-trace':''}.webm`;
       fs.copyFileSync(video,path.join(output,report.video));
+      if (process.env.QA_MOTION_DESKTOP_ONLY) fs.unlinkSync(video);
       console.log(`PASS motion ${width}x${height} CPU×${cpu}: p95 ${report.p95ms}ms, max gap ${report.maxGapMs}ms`);
     }
     if (process.env.QA_LIVE_URL) {

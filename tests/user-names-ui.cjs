@@ -47,7 +47,7 @@ const { fixture, base } = require('./completion-ui.cjs');
     await page.locator('[data-mode="support"]').click();
     await page.getByText(/Ответственный: Анна Иванова/).waitFor();
     await page.getByRole('button',{name:'Открыть сообщения'}).click();
-    await page.getByText('@customer_name · экран profile').waitFor();
+    await page.getByText('@customer_name, экран profile').waitFor();
     const support = page.locator('[data-support-thread-id="1"]');
     assert.deepEqual(await support.locator('select option').allTextContents(), ['Борис']);
     assert.doesNotMatch(await support.innerText(), /234567890|987654321|Telegram ID/);

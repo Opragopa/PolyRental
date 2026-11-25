@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Следующий шаг — макет PolyRental</title>
+  <style>
+    @font-face {
+      font-family: Onest;
+      src: url("../../app/miniapp_static/onest-latin-400-normal.woff2") format("woff2");
+      font-display: swap;
+      unicode-range: U+0000-00FF,U+2000-206F,U+2116;
+    }
+    @font-face {
+      font-family: Onest;
+      src: url("../../app/miniapp_static/onest-cyrillic-400-normal.woff2") format("woff2");
+      font-display: swap;
+      unicode-range: U+0400-045F,U+0490-0491,U+04B0-04B1;
+    }
+    @font-face {
+      font-family: Onest;
+      src: url("../../app/miniapp_static/onest-latin-700-normal.woff2") format("woff2");
+      font-weight: 700;
+      font-display: swap;
+      unicode-range: U+0000-00FF,U+2000-206F,U+2116;
+    }
+    @font-face {
+      font-family: Onest;
+      src: url("../../app/miniapp_static/onest-cyrillic-700-normal.woff2") format("woff2");
+      font-weight: 700;
+      font-display: swap;
+      unicode-range: U+0400-045F,U+0490-0491,U+04B0-04B1;
+    }
+    :root {
+      color-scheme: light;
+      --canvas: #eef1f5; --paper: #fff; --ink: #182637; --muted: #44566d;
+      --line: #cdd6e2; --edge: #687d96; --well: #f3f6fa; --hover: #e6edf6;
+      --accent: #244bd6; --on-accent: #fff; --action: #eaf0ff;
+      --done: #17614c; --done-bg: #e8f5ef;
+      --fault: #8d3029; --fault-bg: #fff0ed;
+      --shadow: 0 10px 30px #172c4910;
+      font-family: Onest, 'Segoe UI', sans-serif;
+      line-height: 1.5;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --canvas: #111c2b; --paper: #1b2c41; --ink: #eff5ff; --muted: #b5c5da;
+      --line: #455b75; --edge: #8298b4; --well: #22364f; --hover: #2a4161;
+      --accent: #acbfff; --on-accent: #172650; --action: #253a68;
+      --done: #a5e6c9; --done-bg: #20433d;
+      --fault: #ffc0b7; --fault-bg: #502e34;
+      --shadow: 0 10px 30px #030b1740;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--canvas); color: var(--ink); }
+    h1, h2, h3, p { margin: 0; }
+    button, select, input { font: inherit; }
+    button, select { color: inherit; }
+    button { cursor: pointer; }
+    button:is(:disabled, [aria-disabled="true"]) { cursor: default; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .icon { width: 21px; height: 21px; display: block; flex: none; }
+    .page { width: min(100%, 1160px); margin: auto; padding: clamp(24px, 4.5vw, 64px) clamp(14px, 4vw, 48px) 42px; }
+    .masthead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-bottom: 26px; }
+    .masthead h1 { font-size: clamp(25px, 3.6vw, 43px); letter-spacing: -.045em; line-height: 1.12; }
+    .masthead p { margin-top: 8px; color: var(--muted); font-size: 14px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+    .field { display: grid; gap: 5px; min-width: 0; }
+    .field span { color: var(--muted); font-size: 13px; font-weight: 700; }
+    select, .button, .icon-button {
+      border: 1px solid var(--edge); border-radius: 10px; background: var(--paper); min-height: 44px;
+    }
+    select { max-width: 100%; width: 100%; padding: 7px 12px 7px 10px; }
+    .button { padding: 8px 14px; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+    .button:hover:not(:disabled, [aria-disabled="true"]), .icon-button:hover:not(:disabled), .row-toggle:hover { background: var(--hover); }
+    .icon-button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; flex: none; }
+    .mockups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: clamp(16px, 3vw, 32px); }
+    .role { font-size: 14px; color: var(--muted); margin: 0 0 8px 3px; }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
+    .card-head { padding: clamp(14px, 2.2vw, 24px) clamp(12px, 2.2vw, 24px) 0; }
+    .card-title { font-size: 19px; letter-spacing: -.025em; margin-bottom: 12px; }
+    .status {
+      display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center;
+      gap: 10px; padding: 10px 12px; min-height: 76px; border-radius: 12px;
+      background: var(--well);
+    }
+    .status:has(.icon-button) { grid-template-columns: 36px minmax(0, 1fr) auto; }
+    .status[data-tone="action"] { background: var(--action); --status-ink: var(--accent); }
+    .status[data-tone="done"] { background: var(--done-bg); --status-ink: var(--done); }
+    .status-icon { color: var(--status-ink, var(--muted)); display: grid; place-items: center; }
+    .status-icon .icon { width: 26px; height: 26px; }
+    .status h3 { font-size: 16px; line-height: 1.3; color: var(--status-ink, var(--ink)); }
+    .status p { font-size: 14px; color: var(--muted); margin-top: 4px; }
+    .status .icon-button { color: var(--accent); }
+    .body { padding: 16px clamp(12px, 2.2vw, 24px) clamp(14px, 2.2vw, 24px); }
+    .list-title { font-size: 14px; margin: 0 0 9px; }
+    .progress { height: 5px; margin-bottom: 14px; border-radius: 10px; overflow: hidden; background: var(--hover); }
+    .progress div { height: 100%; background: var(--accent); border-radius: inherit; transition: width 240ms cubic-bezier(.22, 1, .36, 1); }
+    .items { margin: 0; padding: 0; list-style: none; border-block: 1px solid var(--line); }
+    .items:empty { border: 0; }
+    .item + .item { border-top: 1px solid var(--line); }
+    .item-head, .row-toggle { display: grid; align-items: center; gap: 5px; min-height: 58px; width: 100%; }
+    .item-head { grid-template-columns: 36px minmax(0, 1fr) 44px 44px; padding: 5px 3px; }
+    .row-toggle {
+      grid-template-columns: 36px minmax(0, 1fr) 34px 36px; padding: 5px 3px;
+      text-align: left; background: none; border: 0; border-radius: 7px;
+    }
+    .item-label { font-size: 15px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+    .item-note { display: block; font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 3px; }
+    .item-note.fault { color: var(--fault); font-weight: 700; }
+    .slot { display: grid; place-items: center; color: var(--muted); }
+    .quantity { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .chevron { border-color: transparent; background: transparent; color: var(--muted); }
+    [aria-expanded="true"] .arrow { transform: rotate(180deg); }
+    .arrow { transition: transform 130ms ease; }
+    .mark[aria-checked="mixed"] { background: var(--action); color: var(--accent); border-color: var(--accent); }
+    .mark[aria-checked="true"] { background: var(--done-bg); color: var(--done); border-color: var(--done); }
+    .details { margin: 0 3px 8px 44px; padding: 7px 10px; border-radius: 9px; background: var(--well); font-size: 14px; }
+    .details ul { margin: 2px 0; padding-left: 20px; }
+    .component { display: flex; align-items: center; gap: 9px; min-height: 44px; cursor: pointer; }
+    .component input { width: 19px; height: 19px; margin: 0; flex: none; accent-color: var(--accent); }
+    .notice { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--fault-bg); color: var(--fault); font-size: 14px; }
+    .notice strong { display: block; }
+    .action-area { margin-top: 14px; }
+    .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+    .primary:hover:not(:disabled, [aria-disabled="true"]) { background: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+    .primary:is(:disabled, [aria-disabled="true"]) { background: var(--well); color: var(--muted); border-color: var(--edge); }
+    .action-area .primary { width: 100%; }
+    .mobile-tabs { display: none; }
+    .dialog {
+      border: 1px solid var(--edge); border-radius: 18px; background: var(--paper); color: var(--ink);
+      width: min(calc(100% - 24px), 550px); max-height: calc(100% - 24px);
+      padding: clamp(14px, 4vw, 24px); box-shadow: var(--shadow); overflow-wrap: anywhere;
+    }
+    .dialog::backdrop { background: #091426a8; backdrop-filter: blur(4px); }
+    .dialog[open]:not([data-closing]) { animation: editor-in 200ms cubic-bezier(.22, 1, .36, 1); }
+    .dialog[open]:not([data-closing])::backdrop { animation: shade-in 180ms ease-out; }
+    .dialog[data-closing] { animation: editor-out 140ms ease-in both; }
+    .dialog[data-closing]::backdrop { animation: shade-out 140ms ease-in both; }
+    @keyframes editor-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+    @keyframes editor-out { to { opacity: 0; transform: translateY(5px) scale(.99); } }
+    @keyframes shade-in { from { opacity: 0; } }
+    @keyframes shade-out { to { opacity: 0; } }
+    .dialog h2 { font-size: 22px; margin-bottom: 14px; }
+    .dialog h3 { font-size: 15px; margin-bottom: 6px; }
+    .dialog .item-head { grid-template-columns: 36px minmax(0, 1fr) 44px 44px; }
+    .dialog .remove { color: var(--fault); }
+    .catalog { margin-top: 16px; }
+    .catalog-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+    .dialog-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .message { color: var(--muted); font-size: 14px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @media (max-width: 740px) {
+      .masthead { margin-bottom: 18px; }
+      .controls { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) minmax(100px, .55fr) 44px; }
+      .mobile-tabs {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 12px;
+        border: 1px solid var(--line); border-radius: 13px; background: var(--well);
+      }
+      .mobile-tabs button { min-height: 44px; padding: 5px; background: transparent; border: 1px solid transparent; border-radius: 9px; font-size: 14px; font-weight: 700; }
+      .mobile-tabs [aria-selected="true"] { background: var(--paper); color: var(--accent); border-color: var(--edge); }
+      .mockups { grid-template-columns: minmax(0, 1fr); }
+      .mockups > [data-active="false"], .role { display: none; }
+    }
+    @media (max-width: 360px) {
+      .controls { grid-template-columns: repeat(2, minmax(0, 1fr)) 44px; }
+      .controls .field:first-child { grid-column: 1 / -1; }
+      .controls .field:nth-child(2) { grid-column: 1 / 3; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .arrow, .progress div { transition: none; }
+      .dialog[open], .dialog[open]::backdrop { animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <div>
+        <h1>Подготовка к выдаче</h1>
+        <p>Демонстрационная заявка</p>
+      </div>
+      <div class="controls">
+        <label class="field"><span>Пример</span>
+          <select id="example">
+            <option value="inspection">Проверка</option>
+            <option value="fault">Неисправность</option>
+            <option value="ready">Готово</option>
+          </select>
+        </label>
+        <label class="field"><span>Тема</span>
+          <select id="theme">
+            <option value="light">Светлая</option>
+            <option value="dark">Тёмная</option>
+          </select>
+        </label>
+        <button class="icon-button" id="reset" type="button" aria-label="Сбросить пример" title="Сбросить пример"></button>
+      </div>
+    </header>
+    <div class="mobile-tabs" role="tablist" aria-label="Сценарий заявки">
+      <button id="customer-tab" role="tab" type="button" aria-selected="true" aria-controls="customer">Профиль клиента</button>
+      <button id="management-tab" role="tab" type="button" aria-selected="false" aria-controls="management" tabindex="-1">Управление</button>
+    </div>
+    <div class="mockups">
+      <section id="customer" aria-labelledby="customer-role" data-active="true">
+        <p id="customer-role" class="role">Профиль клиента</p>
+        <div class="card" id="customer-card"></div>
+      </section>
+      <section id="management" aria-labelledby="management-role" data-active="false">
+        <p id="management-role" class="role">Управление</p>
+        <div class="card" id="management-card"></div>
+      </section>
+    </div>
+    <p class="sr-only" id="announcement" role="status"></p>
+  </main>
+  <dialog class="dialog" id="editor" aria-labelledby="editor-title">
+    <h2 id="editor-title">Редактор состава</h2>
+    <h3>Комплектация заявки</h3>
+    <ul class="items" id="draft-items"></ul>
+    <p class="message" id="draft-empty" hidden>Добавьте хотя бы один комплект, чтобы сохранить состав.</p>
+    <div class="catalog">
+      <div class="catalog-row">
+        <label class="field"><span>Добавить из каталога</span><select id="catalog" autofocus></select></label>
+        <button class="button" id="add" type="button">Добавить</button>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button class="button" id="cancel" type="button">Отмена</button>
+      <button class="button primary" id="save" type="button">Сохранить</button>
+    </div>
+  </dialog>
+  <script>
+  function mountNextStep(root, themeRoot, embeddedRole = '') {
+    const icons = {
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      clipboard: '<rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m8.7 14 2 2 4.8-5"/>',
+      ready: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.6 2.6 5.4-5.4"/>',
+      camera: '<path d="M3 8h4l2-3h6l2 3h4v11H3Z"/><circle cx="12" cy="13.5" r="3.2"/>',
+      lens: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/><path d="M12 9a3 3 0 0 1 3 3"/>',
+      light: '<path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-.7.6-1 1.2-1 2h-6c0-.8-.3-1.4-1-2Z"/>',
+      check: '<path d="m5 12 4 4L19 6"/>',
+      minus: '<path d="M6 12h12"/>',
+      chevron: '<path d="m6 9 6 6 6-6"/>',
+      pencil: '<path d="m14 6 4 4M5 19l4-.8L20 7l-4-4L5 14Z"/>',
+      reset: '<path d="M4 11a8 8 0 1 1 2 6M4 5v6h6"/>',
+      trash: '<path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/>',
+    };
+    const catalog = [
+      { id: 'fx3', name: 'Sony FX3', number: '014', icon: 'camera', parts: ['Аккумулятор', 'Зарядное устройство', 'Кабель питания'] },
+      { id: 'zoom', name: 'Объектив 24–70 мм', number: '021', icon: 'lens', parts: ['Передняя крышка', 'Задняя крышка', 'Бленда'] },
+      { id: 'light', name: 'Светодиодный осветитель Aputure Light Storm 600d Pro с комплектом креплений и транспортировочным кейсом', number: '038', icon: 'light', parts: ['Блок питания', 'Рефлектор', 'Транспортировочный кейс'] },
+      { id: 'prime', name: 'Объектив Sony 85 мм', number: '026', icon: 'lens', parts: ['Передняя крышка', 'Задняя крышка'] },
+    ];
+    const byId = id => root.getElementById(id);
+    const equipment = id => catalog.find(entry => entry.id === id);
+    const newItem = id => ({ id, checks: equipment(id).parts.map(() => false), fault: '' });
+    const fullyChecked = item => item.checks.every(Boolean);
+    const editor = byId('editor');
+    const narrow = matchMedia('(max-width: 740px)');
+    const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+    const runningMotion = new Set();
+    const disclosures = new WeakMap();
+    const sessionKey = 'polyrental-next-step-preview';
+    const roles = ['customer', 'management'];
+    let activeRole = 'customer';
+    let items;
+    let ready;
+    let draft;
+    let customerOpen;
+    let managementOpen;
+
+    function svg(name, extraClass = '') {
+      return `<svg class="icon ${extraClass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+    }
+
+    function status(tone, icon, title, description, action = '') {
+      return `<div class="card-head">
+        <h2 class="card-title">Следующий шаг</h2>
+        <div class="status" data-tone="${tone}">
+          <span class="status-icon">${svg(icon)}</span>
+          <div><h3>${title}</h3><p>${description}</p></div>
+          ${action}
+        </div>
+      </div>`;
+    }
+
+    function announce(message) {
+      byId('announcement').textContent = message;
+    }
+
+    function animate(element, frames, duration, options = {}) {
+      if (!element || motionPreference.matches || !element.animate) return;
+      const animation = element.animate(frames, { duration, easing: 'cubic-bezier(.22, 1, .36, 1)', ...options });
+      runningMotion.add(animation);
+      animation.finished.catch(() => {}).then(() => runningMotion.delete(animation));
+      return animation;
+    }
+
+    function animateStatuses() {
+      for (const element of root.querySelectorAll('.status')) {
+        if (element.getClientRects().length) animate(element, [{ opacity: .72, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], 210);
+      }
+    }
+
+    function savePreviewState() {
+      if (embeddedRole) sessionStorage.setItem(sessionKey, JSON.stringify({ example: byId('example').value, items, ready }));
+    }
+
+    function setExample(withMotion = false) {
+      const example = byId('example').value;
+      items = [newItem('fx3'), newItem('zoom')];
+      items[0].checks[0] = true;
+      items[1].checks.fill(true);
+      ready = example === 'ready';
+      if (example !== 'inspection') items[0].checks.fill(true);
+      if (example === 'fault') items[0].fault = 'Камера периодически теряет питание.';
+      customerOpen = new Set();
+      managementOpen = new Set(ready ? [] : ['fx3']);
+      render();
+      savePreviewState();
+      if (withMotion) animateStatuses();
+    }
+
+    function renderCustomer() {
+      const header = ready
+        ? status('done', 'ready', 'Оборудование готово к выдаче', 'Оборудование можно забрать.')
+        : status('waiting', 'clock', 'Оборудование готовится к выдаче', 'Сообщим, когда можно будет забрать оборудование.');
+      const rows = items.map(({ id }) => {
+        const entry = equipment(id);
+        const open = customerOpen.has(id);
+        return `<li class="item">
+          <button class="row-toggle" id="customer-toggle-${id}" type="button" data-customer-toggle="${id}" aria-expanded="${open}" aria-controls="customer-parts-${id}">
+            <span class="slot">${svg(entry.icon)}</span>
+            <span class="item-label">${entry.name}</span>
+            <span class="slot quantity" aria-label="Количество 1">× 1</span>
+            <span class="slot">${svg('chevron', 'arrow')}</span>
+          </button>
+          <div class="details" id="customer-parts-${id}" ${open ? '' : 'hidden'}>
+            <ul>${entry.parts.map(part => `<li>${part}</li>`).join('')}</ul>
+          </div>
+        </li>`;
+      }).join('');
+      byId('customer-card').innerHTML = `${header}<div class="body"><h3 class="list-title">Комплектация</h3><ul class="items">${rows}</ul></div>`;
+    }
+
+    function managementRow(item) {
+      const { id, checks, fault } = item;
+      const entry = equipment(id);
+      const mark = markState(item);
+      const open = managementOpen.has(id);
+      const label = `${entry.name}, №\u00a0${entry.number}`;
+      const parts = entry.parts.map((part, index) => `<label class="component">
+        <input id="part-${id}-${index}" type="checkbox" data-item="${id}" data-part="${index}" ${checks[index] ? 'checked' : ''} ${ready ? 'disabled' : ''}>
+        <span>${part}</span>
+      </label>`).join('');
+      return `<li class="item">
+        <div class="item-head">
+          <span class="slot">${svg(entry.icon)}</span>
+          <span class="item-label">${label}${fault ? '<span class="item-note fault">Неисправность</span>' : ''}</span>
+          <button class="icon-button mark" id="mark-${id}" type="button" role="checkbox" aria-checked="${mark}" aria-label="Проверка комплекта: ${label}" data-mark="${id}" ${ready ? 'disabled' : ''}>${markIcon(mark)}</button>
+          <button class="icon-button chevron" id="management-toggle-${id}" type="button" data-management-toggle="${id}" aria-label="Комплектующие: ${label}" aria-expanded="${open}" aria-controls="management-parts-${id}">${svg('chevron', 'arrow')}</button>
+        </div>
+        <div class="details" id="management-parts-${id}" ${open ? '' : 'hidden'}>${parts}</div>
+      </li>`;
+    }
+
+    function markState(item) {
+      return fullyChecked(item) ? 'true' : item.checks.some(Boolean) ? 'mixed' : 'false';
+    }
+
+    function markIcon(mark) {
+      return mark === 'false' ? '' : svg(mark === 'true' ? 'check' : 'minus');
+    }
+
+    function progressText(checked) {
+      return `Проверено ${checked} из ${items.length} ${items.length === 1 ? 'комплекта' : 'комплектов'}`;
+    }
+
+    function renderManagement() {
+      const checked = items.filter(fullyChecked).length;
+      const faults = items.filter(item => item.fault);
+      const readyButtonEnabled = checked === items.length && faults.length === 0;
+      const progress = progressText(checked);
+      const pencil = `<button class="icon-button" id="edit" type="button" aria-label="Редактировать состав" title="Редактировать состав">${svg('pencil')}</button>`;
+      const header = ready
+        ? status('done', 'ready', 'Готовность подтверждена', progress)
+        : status('action', 'clipboard', 'Проверка перед выдачей', progress, pencil);
+      const warning = faults.length ? `<div class="notice" id="blocked">
+        <strong>Подтверждение заблокировано</strong>
+        ${faults.map(item => `<p>${equipment(item.id).name}, № ${equipment(item.id).number}. ${item.fault}</p>`).join('')}
+        <p>Замените неисправный комплект в редакторе состава и проверьте замену.</p>
+      </div>` : '';
+      const action = ready ? '' : `<div class="action-area">
+        <button class="button primary" id="confirm" type="button" ${readyButtonEnabled ? '' : 'aria-disabled="true"'} ${faults.length ? 'aria-describedby="blocked"' : ''}>Подтвердить готовность к выдаче</button>
+      </div>`;
+      byId('management-card').innerHTML = `${header}<div class="body">
+        ${ready ? '' : `<div class="progress" aria-hidden="true"><div style="width:${checked / items.length * 100}%"></div></div>`}
+        <ul class="items">${items.map(managementRow).join('')}</ul>${warning}${action}
+      </div>`;
+    }
+
+    function render() {
+      if (embeddedRole !== 'management') renderCustomer();
+      if (embeddedRole !== 'customer') renderManagement();
+    }
+
+    function changeDisclosure(button, openItems, id) {
+      const open = !openItems.has(id);
+      if (open) openItems.add(id);
+      else openItems.delete(id);
+      button.setAttribute('aria-expanded', open);
+      const panel = byId(button.getAttribute('aria-controls'));
+      const height = panel.getBoundingClientRect().height;
+      const current = getComputedStyle(panel);
+      const start = {
+        height: `${height}px`, overflow: 'clip',
+        paddingBlock: height ? current.paddingBlock : '0px',
+        marginBottom: height ? current.marginBottom : '0px',
+        opacity: height ? current.opacity : 0,
+      };
+      disclosures.get(panel)?.cancel();
+      panel.inert = !open;
+      panel.hidden = false;
+      const targetHeight = open ? panel.getBoundingClientRect().height : 0;
+      const animation = animate(panel, [
+        start,
+        { height: `${targetHeight}px`, overflow: 'clip', paddingBlock: open ? '7px' : '0px', marginBottom: open ? '8px' : '0px', opacity: open ? 1 : 0 },
+      ], open ? 220 : 170, { fill: 'both' });
+      disclosures.set(panel, animation);
+      const finish = () => {
+        if (animation !== disclosures.get(panel)) return;
+        panel.hidden = !open;
+        animation?.cancel();
+        disclosures.delete(panel);
+      };
+      if (animation) animation.finished.then(finish, finish);
+      else finish();
+    }
+
+    function refreshChecks(item) {
+      const mark = markState(item);
+      const button = byId(`mark-${item.id}`);
+      if (button.getAttribute('aria-checked') !== mark) {
+        button.setAttribute('aria-checked', mark);
+        button.innerHTML = markIcon(mark);
+        animate(button.querySelector('svg'), [{ opacity: .35, transform: 'scale(.7)' }, { opacity: 1, transform: 'scale(1)' }], 170);
+      }
+      item.checks.forEach((checked, index) => { byId(`part-${item.id}-${index}`).checked = checked; });
+      const checked = items.filter(fullyChecked).length;
+      const management = byId('management-card');
+      const progress = progressText(checked);
+      management.querySelector('.status p').textContent = progress;
+      management.querySelector('.progress div').style.width = `${checked / items.length * 100}%`;
+      if (checked === items.length && !items.some(entry => entry.fault)) byId('confirm').removeAttribute('aria-disabled');
+      else byId('confirm').setAttribute('aria-disabled', 'true');
+      savePreviewState();
+      announce(progress);
+    }
+
+    function renderDraft(selected = '') {
+      byId('draft-items').innerHTML = draft.map(({ id }) => {
+        const entry = equipment(id);
+        const label = `${entry.name}, №\u00a0${entry.number}`;
+        return `<li class="item">
+          <div class="item-head">
+            <span class="slot">${svg(entry.icon)}</span><span class="item-label">${label}</span>
+            <button class="icon-button remove" type="button" data-remove="${id}" aria-label="Удалить: ${label}" title="Удалить комплект">${svg('trash')}</button>
+          </div>
+        </li>`;
+      }).join('');
+      const available = catalog.filter(entry => !draft.some(item => item.id === entry.id));
+      byId('catalog').innerHTML = available.length
+        ? available.map(entry => `<option value="${entry.id}">${entry.name}, № ${entry.number}</option>`).join('')
+        : '<option>Все комплекты добавлены</option>';
+      if (available.some(entry => entry.id === selected)) byId('catalog').value = selected;
+      byId('catalog').disabled = !available.length;
+      byId('add').disabled = !available.length;
+      byId('save').disabled = !draft.length;
+      byId('draft-empty').hidden = Boolean(draft.length);
+    }
+
+    function openEditor() {
+      draft = items.map(item => ({ ...item, checks: [...item.checks] }));
+      renderDraft();
+      editor.showModal();
+    }
+
+    function closeEditor(afterClose) {
+      if (editor.hasAttribute('data-closing')) return;
+      const finish = () => {
+        editor.close();
+        editor.removeAttribute('data-closing');
+        draft = undefined;
+        if (typeof afterClose === 'function') afterClose();
+        byId('edit').focus({ preventScroll: true });
+      };
+      if (motionPreference.matches) return finish();
+      editor.setAttribute('data-closing', '');
+      const animation = editor.getAnimations().find(entry => entry.animationName === 'editor-out');
+      if (animation) animation.finished.then(finish, finish);
+      else finish();
+    }
+
+    function setRole(role, moveFocus = false) {
+      activeRole = role;
+      roles.forEach(name => {
+        const active = name === role;
+        byId(name).dataset.active = active;
+        byId(`${name}-tab`).setAttribute('aria-selected', active);
+        byId(`${name}-tab`).tabIndex = active ? 0 : -1;
+      });
+      if (moveFocus) byId(`${role}-tab`).focus();
+      if (!embeddedRole && narrow.matches) animate(byId(`${role}-card`), [{ opacity: .74 }, { opacity: 1 }], 150);
+    }
+
+    function syncPanels() {
+      roles.forEach(name => {
+        const panel = byId(name);
+        if (embeddedRole) panel.removeAttribute('aria-labelledby');
+        else panel.setAttribute('aria-labelledby', `${name}-${narrow.matches ? 'tab' : 'role'}`);
+        if (!embeddedRole && narrow.matches) panel.setAttribute('role', 'tabpanel');
+        else panel.removeAttribute('role');
+      });
+    }
+
+    byId('reset').innerHTML = svg('reset');
+    byId('theme').value = (themeRoot.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    themeRoot.dataset.theme = byId('theme').value;
+    byId('theme').addEventListener('change', event => {
+      themeRoot.dataset.theme = event.target.value;
+    });
+    byId('example').addEventListener('change', () => setExample(true));
+    byId('reset').addEventListener('click', () => {
+      setExample(true);
+      announce('Пример сброшен');
+    });
+    for (const role of roles) byId(`${role}-tab`).addEventListener('click', () => setRole(role));
+    root.querySelector('.mobile-tabs').addEventListener('keydown', event => {
+      const destinations = { ArrowLeft: roles.find(role => role !== activeRole), ArrowRight: roles.find(role => role !== activeRole), Home: roles[0], End: roles[1] };
+      if (!destinations[event.key]) return;
+      event.preventDefault();
+      setRole(destinations[event.key], true);
+    });
+    narrow.addEventListener('change', syncPanels);
+    motionPreference.addEventListener('change', event => {
+      if (event.matches) runningMotion.forEach(animation => animation.cancel());
+    });
+    byId('customer-card').addEventListener('click', event => {
+      const button = event.target.closest('[data-customer-toggle]');
+      if (button) changeDisclosure(button, customerOpen, button.dataset.customerToggle);
+    });
+    byId('management-card').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.managementToggle) changeDisclosure(button, managementOpen, button.dataset.managementToggle);
+      if (button.dataset.mark && !ready) {
+        const item = items.find(entry => entry.id === button.dataset.mark);
+        item.checks.fill(!fullyChecked(item));
+        refreshChecks(item);
+      }
+      if (button.id === 'edit') openEditor();
+      if (button.id === 'confirm' && button.getAttribute('aria-disabled') !== 'true') {
+        ready = true;
+        render();
+        savePreviewState();
+        animateStatuses();
+        const title = byId('management-card').querySelector('.status h3');
+        title.tabIndex = -1;
+        title.focus({ preventScroll: true });
+        announce('Готовность к выдаче подтверждена');
+      }
+    });
+    byId('management-card').addEventListener('change', event => {
+      const input = event.target;
+      if (!input.dataset.item || ready) return;
+      const item = items.find(entry => entry.id === input.dataset.item);
+      item.checks[Number(input.dataset.part)] = input.checked;
+      refreshChecks(item);
+    });
+    byId('draft-items').addEventListener('click', event => {
+      const button = event.target.closest('[data-remove]');
+      if (!button || editor.hasAttribute('data-closing')) return;
+      const index = draft.findIndex(item => item.id === button.dataset.remove);
+      draft.splice(index, 1);
+      renderDraft(byId('catalog').value);
+      const buttons = byId('draft-items').querySelectorAll('[data-remove]');
+      (buttons[Math.min(index, buttons.length - 1)] || byId('catalog')).focus();
+    });
+    byId('add').addEventListener('click', () => {
+      if (editor.hasAttribute('data-closing')) return;
+      const id = byId('catalog').value;
+      draft.push(newItem(id));
+      renderDraft();
+      animate(root.querySelector(`[data-remove="${id}"]`).closest('li'), [{ opacity: .5, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], 180);
+      (byId('catalog').disabled ? byId('save') : byId('catalog')).focus();
+    });
+    byId('cancel').addEventListener('click', closeEditor);
+    editor.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeEditor();
+    });
+    editor.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeEditor();
+    });
+    byId('save').addEventListener('click', () => {
+      const updated = draft;
+      closeEditor(() => {
+        items = updated;
+        customerOpen = new Set(items.map(item => item.id).filter(id => customerOpen.has(id)));
+        managementOpen = new Set(items.map(item => item.id).filter(id => managementOpen.has(id)));
+        render();
+        savePreviewState();
+        announce('Состав сохранён');
+      });
+    });
+
+    if (embeddedRole) {
+      setRole(embeddedRole);
+      for (const role of roles) byId(role).hidden = role !== embeddedRole;
+    }
+    syncPanels();
+    const saved = embeddedRole && JSON.parse(sessionStorage.getItem(sessionKey));
+    if (saved) {
+      byId('example').value = saved.example;
+      ({ items, ready } = saved);
+      customerOpen = new Set();
+      managementOpen = new Set(!ready && items.some(item => item.id === 'fx3') ? ['fx3'] : []);
+      render();
+    } else setExample();
+  }
+
+  mountNextStep(document, document.documentElement);
+  </script>
+</body>
+</html>

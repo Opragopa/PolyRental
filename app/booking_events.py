@@ -52,26 +52,41 @@ def booking_link(booking_id):
 def render_card(session, booking):
     from .db import BookingLine, Article
     from .catalog_titles import catalog_title
-    from .booking_messages import STATUS_LABELS
+    from .booking_messages import CARD_HEADINGS
+    from .customer_next import next_action
     from .user_names import user_name
     lines = session.execute(select(Article, BookingLine.quantity).join(BookingLine).where(
         BookingLine.booking_id == booking.id, BookingLine.deleted_at.is_(None)).order_by(BookingLine.id)).all()
     local = ZoneInfo("Europe/Moscow")
     period = f"{booking.starts_at.astimezone(local):%d.%m.%Y %H:%M} — {booking.ends_at.astimezone(local):%d.%m.%Y %H:%M} МСК"
-    items = ""
+    items = []
+    remaining = 2800
     for index, (article, quantity) in enumerate(lines):
         name = catalog_title(article.name, article.kind, article.brand, article.key_spec)
-        line = f"• {escape(name[:100])} — {quantity} шт.\n"
-        if len(items) + len(line) > 2800:
-            items += f"… ещё позиций: {len(lines) - index}"
+        line = f"• {escape(name[:100])} × {quantity}"
+        remaining -= len(line) + 1
+        if remaining < 0:
+            items.append(f"… ещё позиций: {len(lines) - index}")
             break
-        items += line
-    status = "Заявка удалена" if booking.deleted_at else STATUS_LABELS.get(booking.status, booking.status)
-    return (f"<b>Заявка {escape(booking.human_number or str(booking.id))}</b>\n"
-            f"Создана: {booking.created_at.astimezone(local):%d.%m.%Y %H:%M} МСК\n"
-            f"Кем: {escape(user_name(session, booking.customer_id, fallback='Пользователь', saved=booking.customer_name)[:160])}\n"
-            f"Статус: {escape(status)}\n{period}\n{items}\n"
-            f'<a href="{escape(booking_link(booking.id), quote=True)}">Открыть заявку</a>')
+        items.append(line)
+    heading = "Заявка удалена" if booking.deleted_at else CARD_HEADINGS.get(booking.status, "Заявка обновлена")
+    number = escape(booking.human_number or str(booking.id))
+    customer = escape(user_name(session, booking.customer_id, fallback="Пользователь", saved=booking.customer_name)[:160])
+    created = f"{booking.created_at.astimezone(local):%d.%m.%Y %H:%M} МСК"
+    sections = [
+        f"<b>{heading}</b>",
+        f"<b>Заявка</b> <code>{number}</code>\n<b>Аренда</b> {period}\n<b>Создана</b> {created}\n<b>Кем</b> {customer}",
+        "<b>Оборудование</b>\n" + "\n".join(items or ["Оборудование не указано"]),
+    ]
+    if not booking.deleted_at and booking.status == "confirmed":
+        guidance = next_action(booking)
+        instruction = guidance["description"]
+        if guidance["action"] == "identity":
+            instruction = ("Исправьте данные анкеты в приложении." if booking.identity_status == "needs_changes"
+                           else "Заполните документы в приложении.")
+        sections.append(f"<i>{escape(instruction)}</i>")
+    sections.append(f'<a href="{escape(booking_link(booking.id), quote=True)}">Открыть заявку</a>')
+    return "\n\n".join(sections)
 
 
 def install_booking_events(factory):

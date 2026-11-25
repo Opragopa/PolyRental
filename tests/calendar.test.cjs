@@ -18,7 +18,8 @@ test("same day range allowed when the end time is later, in Moscow", () => {
   assert.match(periodError(start, start, "2026-10-30", 0), /позже/);
   assert.match(periodError(start, "2026-10-30T09:00", "2026-10-30", 0), /позже/);
   assert.match(periodError(start, "2026-10-30T18:00", "2026-10-31", 0), /текущую или будущую дату/);
-  assert.match(periodError(start, "2026-10-30T18:00", "2026-10-30", Date.parse("2026-10-30T07:01Z")), /будущем/);
+  assert.equal(periodError(start, "2026-10-30T18:00", "2026-10-30", Date.parse("2026-10-30T07:00:45Z")), "");
+  assert.match(periodError(start, "2026-10-30T18:00", "2026-10-30", Date.parse("2026-10-30T07:01Z")), /прошлом/);
   assert.match(periodError(start, "", "2026-10-30", 0), /двумя/);
   assert.match(periodError(start, "2026-10-30T25:00", "2026-10-30", 0), /время/);
   assert.match(periodError("2027-02-30T10:00", "2027-03-02T10:00", "2026-10-30", 0), /дату/);

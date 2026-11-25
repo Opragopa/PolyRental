@@ -42,16 +42,16 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
    await page.locator('#client-product-layout').getByRole('button',{name:layout==='list'?'Список':'Плитка'}).click();
    const card=page.locator('.item-card').first();
    assert.equal(await card.locator('.quantity-control').innerText(),'−\n0\n+');
-   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 0');
+   assert.equal(await page.locator('#main-button').innerText(),'В корзину (0)');
    for (const [control,expected] of [['plus',1],['plus',2],['minus',1],['minus',0]]) {
     const actual=await card.locator(`.${control}`).evaluate(button=>{button.click();return document.querySelector('#main-button').textContent;});
-    assert.equal(actual,`В корзину · ${expected}`,'footer must change in the same click handler, before cart sync');
+    assert.equal(actual,`В корзину (${expected})`,'footer must change in the same click handler, before cart sync');
     assert.equal(await card.locator('.quantity-value').innerText(),String(expected));
     assert.deepEqual(f.getServer().lines,[],'the update must not wait for a server acknowledgement');
    }
    assert.equal(await card.locator('.minus').isDisabled(),true);
    await card.locator('.plus').evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('.item-card .plus').click();});
-   assert.equal(await page.locator('#main-button').innerText(),'В корзину · 3');
+   assert.equal(await page.locator('#main-button').innerText(),'В корзину (3)');
    assert.equal(await card.locator('.plus').isDisabled(),true);
    assert.equal(await card.locator('.quantity-value').innerText(),'3');
    assert.doesNotMatch(await card.innerText(),/добавить в корзину|в корзине:/i);
@@ -69,8 +69,8 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  }
  {
   const f=await setup('conflict'), {page}=f;const plus=page.getByRole('button',{name:'Увеличить количество: Камера 1'});
-  await plus.click();await page.clock.runFor(350);await f.requestReceived;await plus.click();assert.equal(await page.locator('#selected-count').innerText(),'2');assert.equal(await page.locator('#main-button').innerText(),'В корзину · 2');
-  f.release();await page.locator('#cart-sync-notice').waitFor();assert.equal(await page.locator('#selected-count').innerText(),'1');assert.equal(await page.locator('#main-button').innerText(),'В корзину · 1');
+  await plus.click();await page.clock.runFor(350);await f.requestReceived;await plus.click();assert.equal(await page.locator('#selected-count').innerText(),'2');assert.equal(await page.locator('#main-button').innerText(),'В корзину (2)');
+  f.release();await page.locator('#cart-sync-notice').waitFor();assert.equal(await page.locator('#selected-count').innerText(),'1');assert.equal(await page.locator('#main-button').innerText(),'В корзину (1)');
   assert.match(await page.locator('#cart-sync-summary').innerText(),/на сервере: 1 шт\.; в ваших несохранённых изменениях: 2 шт/i);
   await page.reload();await page.locator('#cart-sync-notice').waitFor();
   await page.getByRole('button',{name:'Сохранить мои изменения'}).click();await page.locator('#cart-sync-notice').waitFor({state:'hidden'});

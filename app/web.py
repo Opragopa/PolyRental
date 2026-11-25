@@ -12,7 +12,6 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from icalendar import Calendar, Event
 from itsdangerous import BadSignature, URLSafeSerializer
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
@@ -222,21 +221,8 @@ def calendar_feed(token: str):
     expected = os.getenv("ICAL_TOKEN", "")
     if not expected or not hmac.compare_digest(token, expected):
         raise HTTPException(404)
-    cal = Calendar()
-    cal.add("prodid", "-//PolyRental//Calendar//RU")
-    cal.add("version", "2.0")
-    for booking in list_bookings(limit=None):
-        if booking.status not in {"confirmed", "preparing", "ready", "issued", "return_inspection"}:
-            continue
-        event = Event()
-        event.add("uid", f"booking-{booking.id}@polyrental")
-        equipment = ", ".join(f"{line.article.name} × {line.quantity}" for line in booking.lines)
-        event.add("summary", f"Аренда {booking.human_number or 'заявка'}: {equipment or 'оборудование'}")
-        event.add("description", f"ПолиРентал · статус: {booking.status}")
-        event.add("dtstart", booking.starts_at)
-        event.add("dtend", booking.ends_at)
-        cal.add_component(event)
-    return Response(cal.to_ical(), media_type="text/calendar")
+    from .calendar_feed import calendar_bytes
+    return Response(calendar_bytes(), media_type="text/calendar", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/admin/bookings/{booking_id}/documents/{kind}")

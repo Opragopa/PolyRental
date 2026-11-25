@@ -1,0 +1,75 @@
+.shell:has(> .new-year-garland:not([hidden])) {
+  --garland-height: 39px;
+  --garland-wire: #536d6a;
+  --garland-tint: #78b3971a;
+  position: relative;
+  padding-block-start: calc(max(var(--space-4), var(--safe-top)) + var(--garland-height));
+}
+:root[data-theme="dark"] .shell:has(> .new-year-garland:not([hidden])) {
+  --garland-wire: #9ab8ad;
+  --garland-tint: #72c69f16;
+}
+.new-year-garland {
+  position: absolute;
+  z-index: 2;
+  inset: var(--safe-top) max(5px, var(--safe-right)) auto max(5px, var(--safe-left));
+  height: var(--garland-height);
+  container-type: inline-size;
+  background: linear-gradient(var(--garland-tint), transparent);
+  pointer-events: none;
+}
+.new-year-strand { position: absolute; inset: 5px auto auto 0; width: 50%; height: 33px; }
+.new-year-strand:nth-child(2) { left: 50%; }
+.new-year-strand::before {
+  content: "";
+  position: absolute;
+  inset: -13px -1px auto;
+  height: 29px;
+  border-bottom: 1.5px solid var(--garland-wire);
+  border-radius: 0 0 50% 50% / 0 0 58% 58%;
+}
+.new-year-lamp {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: 8px;
+  height: 12px;
+  margin-left: -4px;
+  transform: rotate(var(--angle));
+  transform-origin: center -2px;
+  border: 1px solid var(--shade);
+  border-radius: 54% 54% 48% 48% / 60% 60% 39% 39%;
+  background: radial-gradient(ellipse at 32% 24%, #fff9 0 13%, transparent 47%), var(--lamp);
+  box-shadow: 0 0 9px 2px var(--glow);
+}
+.new-year-lamp::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--garland-wire);
+}
+.new-year-lamp:nth-child(4n + 1) { --lamp: #ffd479; --shade: #ab6d2d; --glow: #ffc36470; }
+.new-year-lamp:nth-child(4n + 2) { --lamp: #79dcc0; --shade: #3e9b88; --glow: #6ce0be6b; }
+.new-year-lamp:nth-child(4n + 3) { --lamp: #f89388; --shade: #b85856; --glow: #f7817866; }
+.new-year-lamp:nth-child(4n) { --lamp: #a8c8fb; --shade: #618cc5; --glow: #8fbdfc76; }
+:root[data-theme="dark"] .new-year-lamp { border-color: var(--lamp); box-shadow: 0 0 10px 3px var(--glow); }
+
+@container (max-width: 430px) {
+  .new-year-lamp:nth-child(even) { display: none; }
+  .new-year-lamp:nth-child(4n + 3) { --lamp: #a8c8fb; --shade: #618cc5; --glow: #8fbdfc76; }
+  .new-year-strand:nth-child(2) .new-year-lamp:nth-child(4n + 1) { --lamp: #79dcc0; --shade: #3e9b88; --glow: #6ce0be6b; }
+  .new-year-strand:nth-child(2) .new-year-lamp:nth-child(4n + 3) { --lamp: #f89388; --shade: #b85856; --glow: #f7817866; }
+}
+
+@media (769px <= width < 1024px) {
+  .shell:has(> .new-year-garland:not([hidden])) .tabs {
+    inset-block-start: calc(max(var(--workspace-gutter), var(--safe-top)) + var(--garland-height));
+  }
+}
+@media (min-width: 1024px) {
+  .shell:has(> .new-year-garland:not([hidden])) { padding-block-start: var(--garland-height); }
+}

@@ -99,13 +99,20 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8').replaceAll
       if(process.env.QA_SCREENSHOTS){fs.mkdirSync(process.env.QA_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.QA_SCREENSHOTS,`profile-revealed-${admin}.png`),fullPage:true});}
       await page.locator('#profile-identity-fields').getByText('Номер паспорта:', {exact:false}).waitFor();
       assert.match(await page.locator('#profile-identity-fields').innerText(), /123456/);
+      await page.locator('#profile-header > summary').click();
+      await page.getByLabel('Формат даты').selectOption('mdy');
+      assert.equal(await page.evaluate(() => localStorage.getItem('polyrental-date-format')), 'mdy');
+      await page.locator('#profile-header > summary').click();
       await page.getByRole('button',{name:'Редактировать',exact:true}).click();
       const edit = page.locator('.workflow-dialog');
+      assert.equal(await edit.locator('[name="birth_date"]').inputValue(), '01/01/2000');
+      await edit.locator('[name="birth_date"]').fill('11/25/2000');
       await edit.locator('[name="residential_address"]').fill('Новый тестовый адрес');
       await edit.getByRole('button',{name:'Сохранить',exact:true}).click();
       await edit.waitFor({state:'detached'});
       await page.locator('#profile-identity-fields').getByText('Новый тестовый адрес').waitFor();
       assert.equal(identity.residential_address, 'Новый тестовый адрес');
+      assert.equal(identity.birth_date, '2000-11-25');
       await page.getByRole('button',{name:'Скрыть данные'}).click();
       assert.match(await page.locator('#profile-identity-fields').innerText(),/Новый тестовый адрес/);
       assert.equal(await page.locator('.profile-fields-masked .profile-identity-value').count(),Object.values(identity).filter(Boolean).length);

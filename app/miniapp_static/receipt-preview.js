@@ -3,6 +3,7 @@ export function renderReceiptPdf(host, bytes) {
   let closed = false, task = null, renderTask = null;
   const status = host.querySelector('.receipt-preview-status');
   const pages = host.querySelector('.receipt-pages');
+  const skeleton = host.querySelector('.receipt-preview-skeleton');
   const ready = (async () => {
     const pdfjs = await import('./pdf.min.mjs');
     if (closed) return;
@@ -25,15 +26,27 @@ export function renderReceiptPdf(host, bytes) {
       const canvas = document.createElement('canvas');
       canvas.setAttribute('aria-label', caption.textContent);
       canvas.width = Math.ceil(viewport.width * ratio); canvas.height = Math.ceil(viewport.height * ratio);
-      figure.append(caption, canvas); pages.append(figure);
+      figure.append(caption, canvas);
       renderTask = page.render({canvasContext: canvas.getContext('2d'), viewport,
         transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0]});
       await renderTask.promise;
+      if (closed) return;
+      skeleton?.remove();
+      pages.append(figure);
       renderTask = null; page.cleanup();
     }
-    if (!closed) {host.querySelector('.receipt-preview-skeleton')?.remove(); status.textContent = `Страниц: ${pdf.numPages}`; host.dataset.previewReady = 'true';}
+    if (!closed) {
+      skeleton?.remove();
+      status.classList.remove('loading-status');
+      status.textContent = `Страниц: ${pdf.numPages}`;
+      host.dataset.previewReady = 'true';
+    }
   })().catch(() => {
-    if (!closed) { host.querySelector('.receipt-preview-skeleton')?.remove(); status.textContent = 'Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.'; status.setAttribute('role', 'alert'); }
+    if (closed) return;
+    skeleton?.remove();
+    status.classList.remove('loading-status');
+    status.textContent = 'Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.';
+    status.setAttribute('role', 'alert');
   });
   return {ready, close() {
     closed = true; renderTask?.cancel();

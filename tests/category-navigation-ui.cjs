@@ -48,9 +48,9 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  assert.equal(await page.evaluate(()=>window.__categoryScrollOptions),undefined,'category navigation must not force a scroll to the heading');
  {const now=await page.evaluate(()=>scrollY); assert(Math.abs(now-categoryScrollY)<2,`opening a category preserves scroll: ${categoryScrollY} -> ${now}`);}
  assert(Math.abs(await page.locator('#app-version').evaluate(el=>el.getBoundingClientRect().x)-versionX)<1,'category navigation must not shift the page horizontally');
- await page.locator('#items-grid .loading-skeleton').waitFor({state:'visible'});
+ await page.locator('#items-grid .loading-skeleton').first().waitFor({state:'visible'});
  assert.equal(await page.getByText('Загружаем каталог…').count(),0,'loading skeleton has no duplicate loading text');
- assert.equal(await page.locator('#items-grid .catalog-skeleton-card').count(),3,'catalog loading uses card-shaped placeholders');
+ assert.equal(await page.locator('#items-grid .catalog-skeleton-card:visible').count(),3,'catalog loading uses card-shaped placeholders');
  await page.locator('.category-level-transition').waitFor({state:'attached'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth),false,'category transition must not widen the page');
  releaseCatalog();
@@ -94,8 +94,8 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.waitForFunction(()=>document.querySelector('#operator-quiet-form input[name="quiet_start"]').value==='21:00');
  await page.locator('#operator-quiet-form input[name="quiet_start"]').fill('22:00'); await page.locator('#settings-tab-calendar').click(); assert(await page.locator('#settings-calendar').isVisible()); await page.locator('#settings-tab-notifications').click(); assert.equal(await page.locator('#operator-quiet-form input[name="quiet_start"]').inputValue(),'22:00');
  await page.evaluate(()=>window.__telegramBack()); assert.equal(await page.locator('#admin-heading').innerText(),'Управление'); assert.equal(await page.locator('[data-mode="catalog"]').getAttribute('aria-pressed'),'true');
- assert.equal(await page.locator('#admin-panel > .panel-head h2').innerText(),'Управление'); assert(await page.locator('#admin-back-button').isVisible()); assert(await page.locator('#admin-back-button').isDisabled());
- for (const width of [320,390]) { await page.setViewportSize({width,height:844}); const tabs=page.locator('.admin-tabs .admin-mode'); assert.equal(await tabs.count(),4); for(let i=0;i<4;i++) assert(await tabs.nth(i).isVisible()); const before=await tabs.evaluateAll(nodes=>nodes.map(el=>({x:el.getBoundingClientRect().x,w:el.getBoundingClientRect().width}))); const heading=await page.locator('.admin-panel-heading').evaluate(el=>{const row=el.getBoundingClientRect(),title=el.querySelector('h2').getBoundingClientRect();return {row:row.x+row.width/2,title:title.x+title.width/2}}); assert(Math.abs(heading.row-heading.title)<1,'management title is centered'); await page.locator('[data-mode="repairs"]').click(); assert.equal(await page.locator('[data-mode="repairs"]').getAttribute('aria-pressed'),'true'); assert(await page.locator('#admin-back-button').isDisabled()); const after=await tabs.evaluateAll(nodes=>nodes.map(el=>({x:el.getBoundingClientRect().x,w:el.getBoundingClientRect().width}))); before.forEach((p,i)=>assert(Math.abs(p.x-after[i].x)<1 && Math.abs(p.w-after[i].w)<1,'tab positions remain fixed')); await page.locator('[data-mode="catalog"]').click(); await page.locator('#admin-catalog-heading').waitFor(); }
+ assert.equal(await page.locator('#admin-heading').innerText(),'Управление'); assert(await page.locator('#admin-back-button').isHidden());
+ for (const width of [320,390]) { await page.setViewportSize({width,height:844}); const tabs=page.locator('.admin-tabs .admin-mode'); assert.equal(await tabs.count(),4); for(let i=0;i<4;i++) assert(await tabs.nth(i).isVisible()); const before=await tabs.evaluateAll(nodes=>nodes.map(el=>({x:el.getBoundingClientRect().x,w:el.getBoundingClientRect().width}))); const heading=await page.locator('.admin-panel-heading').evaluate(el=>{const row=el.getBoundingClientRect(),title=el.querySelector('.admin-heading-viewport').getBoundingClientRect();return {row:row.x+row.width/2,title:title.x+title.width/2}}); assert(Math.abs(heading.row-heading.title)<1,'management title is centered'); await page.locator('[data-mode="repairs"]').click(); assert.equal(await page.locator('[data-mode="repairs"]').getAttribute('aria-pressed'),'true'); assert(await page.locator('#admin-back-button').isDisabled()); const after=await tabs.evaluateAll(nodes=>nodes.map(el=>({x:el.getBoundingClientRect().x,w:el.getBoundingClientRect().width}))); before.forEach((p,i)=>assert(Math.abs(p.x-after[i].x)<1 && Math.abs(p.w-after[i].w)<1,'tab positions remain fixed')); await page.locator('[data-mode="catalog"]').click(); await page.locator('#admin-catalog-heading').waitFor(); }
  await page.locator('.admin-categories').evaluate(host=>{const spacer=document.createElement('div');spacer.style.height='900px';host.prepend(spacer);});
  await page.locator('.admin-categories').getByRole('button',{name:'Свет'}).scrollIntoViewIfNeeded();
  const adminVersionX=await page.locator('#app-version').evaluate(el=>el.getBoundingClientRect().x);
@@ -116,7 +116,7 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  await page.locator('#admin-content .category-empty-overlay').waitFor({state:'attached'});
  await page.evaluate(y=>window.scrollTo(0,y),adminScrollY); await page.clock.runFor(50);
  await page.locator('#admin-catalog-level .catalog-search-back').click(); await page.locator('#admin-catalog-heading').getByText('Каталог оборудования').waitFor(); await page.locator('.catalog-controls input').fill('Sony'); await page.locator('.admin-search-hide-keyboard').click(); await page.clock.runFor(350); await page.waitForTimeout(100); assert.equal(await page.locator('.catalog-controls input').evaluate(el=>el===document.activeElement),false,'refresh must not reopen keyboard'); await page.locator('.catalog-controls input').fill(''); await page.clock.runFor(350); await page.locator('.admin-categories').getByRole('button',{name:'Камеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor();
- await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); assert(await page.locator('#admin-back-button').isEnabled()); await page.locator('#admin-back-button').click(); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor(); assert(await page.locator('#admin-panel').isVisible());
+ await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры').waitFor(); assert(await page.locator('#admin-back-button').isHidden()); await page.locator('#admin-catalog-level .catalog-search-back').click(); await page.locator('#admin-catalog-heading').getByText('Камеры',{exact:true}).waitFor(); assert(await page.locator('#admin-panel').isVisible());
  await page.emulateMedia({reducedMotion:'reduce'}); await page.locator('.admin-categories').getByRole('button',{name:'Кинокамеры'}).click(); await page.locator('#admin-catalog-heading').getByText('Кинокамеры',{exact:true}).waitFor(); assert.equal(await page.locator('.category-level-transition').count(),0); assert.equal(await page.locator('.category-morph-surface, .category-morph-label').count(),0);
  await page.locator('#admin-catalog-level .product-layout').getByRole('button',{name:'Плитка'}).click(); assert(await page.locator('.admin-catalog-items').evaluate(el=>el.classList.contains('tiles'))); assert.equal(await page.locator('.catalog-search-row .notification-bell').evaluate(el=>Boolean(el.closest('.catalog-search-input'))),false);
  const articleHeader=page.locator('.article-card-head'), toggle=articleHeader.locator('.article-toggle');
@@ -124,14 +124,15 @@ const html=fs.readFileSync(path.join(assets,'index.html'),'utf8').replaceAll('__
  assert.equal(await toggle.getAttribute('aria-expanded'),'true');
  await toggle.press('Enter');
  assert.equal(await toggle.getAttribute('aria-expanded'),'false');
- await articleHeader.getByRole('button',{name:'Занятость вне сервиса',exact:true}).click();
+ await toggle.click();
+ await page.locator('.article-collapse').getByRole('button',{name:'Занятость вне сервиса',exact:true}).click();
  const picker=page.getByRole('dialog',{name:'Выберите экземпляр'});
  await picker.getByLabel('Экземпляр оборудования').selectOption('2');
  await picker.getByRole('button',{name:'Открыть занятость'}).click();
  const occupancy=page.getByRole('dialog',{name:'Занятость вне сервиса'});
  await occupancy.waitFor();
  assert.equal(openedAsset,2);
- assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+ assert.equal(await toggle.getAttribute('aria-expanded'),'true');
  await occupancy.getByRole('button',{name:'Отмена'}).click();
  await page.evaluate(()=>window.__telegramBack()); await page.evaluate(()=>window.__telegramBack());
  await page.locator('#admin-catalog-heading').getByText('Каталог оборудования').waitFor();

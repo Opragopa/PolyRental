@@ -1,0 +1,56 @@
+:root {
+  /* Telegram reports its chrome separately from the device's unsafe area. */
+  --safe-top: calc(max(env(safe-area-inset-top, 0px), var(--tg-safe-area-inset-top, 0px)) + var(--tg-content-safe-area-inset-top, 0px));
+  --safe-right: calc(max(env(safe-area-inset-right, 0px), var(--tg-safe-area-inset-right, 0px)) + var(--tg-content-safe-area-inset-right, 0px));
+  --safe-bottom: calc(max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px)) + var(--tg-content-safe-area-inset-bottom, 0px));
+  --safe-left: calc(max(env(safe-area-inset-left, 0px), var(--tg-safe-area-inset-left, 0px)) + var(--tg-content-safe-area-inset-left, 0px));
+}
+
+html[data-miniapp-startup] .shell { visibility: hidden; }
+
+#miniapp-startup:not([hidden]) {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  align-content: safe center;
+  justify-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: max(20px, var(--safe-top)) max(20px, var(--safe-right))
+    max(20px, var(--safe-bottom)) max(20px, var(--safe-left));
+  background: var(--bg, #f3f6fb);
+  color: var(--text, #17243d);
+  font: 16px/1.45 system-ui, sans-serif;
+  text-align: center;
+}
+
+#miniapp-startup p { max-width: 30ch; margin: 0; }
+.startup-brand { font-size: 24px; font-weight: 700; }
+.startup-progress { display:flex; align-items:center; justify-content:center; gap:10px; text-align:start; }
+.startup-spinner { --spinner-size:20px; }
+.loading-spinner, .loading-status::before {
+  box-sizing:border-box; display:block; flex:none;
+  width:var(--spinner-size, 16px); height:var(--spinner-size, 16px);
+  border:2px solid color-mix(in srgb, var(--accent, #3157d5) 28%, transparent);
+  border-top-color:var(--accent, #3157d5); border-radius:50%;
+}
+[data-miniapp-startup="failed"] .startup-spinner { display: none; }
+#startup-retry {
+  min-height: 44px;
+  padding: 8px 20px;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+@media (prefers-color-scheme: dark) {
+  #miniapp-startup:not([hidden]) { background: var(--bg, #17212b); color: var(--text, #fff); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .loading-spinner, .loading-status::before { animation:loading-spin .8s linear infinite; }
+}
+@keyframes loading-spin { to { transform:rotate(1turn); } }

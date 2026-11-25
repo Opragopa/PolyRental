@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -12,7 +13,7 @@ from app import bot
 from app.client_profile import booking_identity
 from app.miniapp import require_customer
 from app.miniapp_server import app
-from app.pii import consent_text, sanitize_image, submit_identity, validate_identity_payload, IdentityFieldError
+from app.pii import consent_text, validate_identity_payload, IdentityFieldError
 from app.rental import availability, get_booking, now, save_equipment, transition
 from tests.test_chat_customer_integration import MemoryState
 from tests.test_miniapp import configure, image_bytes
@@ -56,9 +57,12 @@ def test_form_updates_booking_and_next_booking_uses_full_name(monkeypatch):
                   'passport_series':'4510', 'passport_number':'123456', 'passport_issued_at':'2020-01-01',
                   'passport_issuer':'Тестовый отдел', 'passport_division_code':'770-001',
                   'registration_address':'Тестовый адрес', 'residential_address':'Тестовый адрес'}
-        documents = {kind:sanitize_image(image_bytes(), 'image/png') for kind in
-                     ('passport_main','passport_registration','student_front')}
-        submit_identity(booking_id,42,fields,documents,'test-v1',hashlib.sha256(consent_text().encode()).hexdigest())
+        documents = {kind:('photo.png', image_bytes(), 'image/png') for kind in
+                     ('passport_main','passport_registration')}
+        submitted = client.post(f'/api/miniapp/bookings/{booking_id}/identity', files=documents,
+                                data={'payload':json.dumps(fields), 'policy_version':'test-v1',
+                                      'text_hash':hashlib.sha256(consent_text().encode()).hexdigest()})
+        assert submitted.status_code == 200, submitted.text
         booking = get_booking(booking_id)
         assert booking.customer_name == fields['full_name']
         assert booking.customer_contact.startswith('+7')

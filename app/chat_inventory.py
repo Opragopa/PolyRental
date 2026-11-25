@@ -39,7 +39,7 @@ async def inventory_menu(message, actor, asset_id):
     asset = next((item for item in await asyncio.to_thread(list_equipment) if item.id == asset_id),None)
     if not asset: raise ValueError("Экземпляр не найден")
     info = await asyncio.to_thread(inventory_details, asset_id)
-    text = f"<b>{html.escape(asset.name)}</b> · {html.escape(asset.inventory_number)}\nВладелец: {html.escape(info.get('owner') or 'не указан')}\nКонтакт: {html.escape(info.get('owner_contact') or 'не указан')}\nОсобенностей: {len(info['features'])}"
+    text = f"<b>{html.escape(asset.name)}</b> ({html.escape(asset.inventory_number)})\nВладелец: {html.escape(info.get('owner') or 'не указан')}\nКонтакт: {html.escape(info.get('owner_contact') or 'не указан')}\nОсобенностей: {len(info['features'])}"
     rows = [[button("Особенности",f"iv:features:{asset_id}:0"),button("Занятость",f"iv:blocks:{asset_id}:0")]]
     if await asyncio.to_thread(staff_allows,actor,"manager"): rows.append([button("Изменить владельца",f"iv:owner:{asset_id}")])
     rows.append([button("К экземпляру",f"cat:asset:{asset_id}")])
@@ -49,26 +49,26 @@ async def inventory_menu(message, actor, asset_id):
 async def feature_list(message, actor, asset_id, page=0):
     info=await asyncio.to_thread(inventory_details,asset_id); features=info['features']
     page=max(0,min(page,max(0,(len(features)-1)//PAGE_SIZE)))
-    rows=[[button(f"№{item['id']} · {item['description']}"[:60],f"iv:feature:{asset_id}:{item['id']}")] for item in features[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows=[[button(f"№{item['id']}: {item['description']}"[:60],f"iv:feature:{asset_id}:{item['id']}")] for item in features[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
-    if page: nav.append(button("← Назад",f"iv:features:{asset_id}:{page-1}"))
-    if (page+1)*PAGE_SIZE<len(features): nav.append(button("Далее →",f"iv:features:{asset_id}:{page+1}"))
+    if page: nav.append(button("Назад",f"iv:features:{asset_id}:{page-1}"))
+    if (page+1)*PAGE_SIZE<len(features): nav.append(button("Далее",f"iv:features:{asset_id}:{page+1}"))
     if nav: rows.append(nav)
     rows.extend([[button("Добавить особенность",f"iv:addfeature:{asset_id}")],[button("К экземпляру",f"iv:menu:{asset_id}")]])
-    await message.answer(f"Особенности · страница {page+1}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Особенности, страница {page+1}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def block_list(message, actor, asset_id, page=0):
     blocks=await asyncio.to_thread(external_blocks,asset_id)
     page=max(0,min(page,max(0,(len(blocks)-1)//PAGE_SIZE)))
-    rows=[[button(f"№{row['id']} · {row['start'][:10]} — {row['end'][:10]}",f"iv:block:{asset_id}:{row['id']}")] for row in blocks[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows=[[button(f"№{row['id']}: {row['start'][:10]} — {row['end'][:10]}",f"iv:block:{asset_id}:{row['id']}")] for row in blocks[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
-    if page: nav.append(button("← Назад",f"iv:blocks:{asset_id}:{page-1}"))
-    if (page+1)*PAGE_SIZE<len(blocks): nav.append(button("Далее →",f"iv:blocks:{asset_id}:{page+1}"))
+    if page: nav.append(button("Назад",f"iv:blocks:{asset_id}:{page-1}"))
+    if (page+1)*PAGE_SIZE<len(blocks): nav.append(button("Далее",f"iv:blocks:{asset_id}:{page+1}"))
     if nav: rows.append(nav)
     if await asyncio.to_thread(staff_allows,actor,"manager"): rows.append([button("Отметить занятость",f"iv:addblock:{asset_id}")])
     rows.append([button("К экземпляру",f"iv:menu:{asset_id}")])
-    await message.answer(f"Внешняя занятость · страница {page+1}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Внешняя занятость, страница {page+1}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def begin_edit(query,state,asset_id,operation,**values):

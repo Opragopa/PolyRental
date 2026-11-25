@@ -9,6 +9,7 @@
 | Проверить версию, схему, CI и ограничения | [Текущее состояние](current-state.md) |
 | Узнать изменения | [CHANGELOG](../CHANGELOG.md), [0.5.4](releases/v0.5.4.md) |
 | Проверить права | [Матрица ролей](design/roles.md) |
+| Проверить оформление и тексты бота | [Антипримеры дизайна](design/interface-anti-patterns.md) |
 | Сверить требования и остаток работ | [Требования](../requirements.md), [ROADMAP](../ROADMAP.md) |
 | Настроить домен, HTTPS, откат | [Переезд на opragopa.com](domain-migration-opragopa.md) |
 | Проверить хранение, резервные копии | [Хранение и сроки](storage-and-retention.md) |

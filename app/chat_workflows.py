@@ -124,14 +124,14 @@ async def customer_screen(message, text, *, replace=False, **options):
 async def customer_list(message: Message, customer_id: int, page: int = 0, *, replace=False):
     page = max(0, min(page, 100000))
     bookings, total = await asyncio.to_thread(customer_history_page, customer_id, "all", page, PAGE_SIZE, "", None)
-    rows = [[button(f"{booking.human_number or booking.id} · {booking_status(booking.status)}", f"cw:open:{booking.id}")] for booking in bookings]
+    rows = [[button(f"{booking.human_number or booking.id}: {booking_status(booking.status)}", f"cw:open:{booking.id}")] for booking in bookings]
     navigation = []
-    if page: navigation.append(button("← Назад", f"cw:page:{page-1}"))
-    if (page + 1) * PAGE_SIZE < total: navigation.append(button("Далее →", f"cw:page:{page+1}"))
+    if page: navigation.append(button("Назад", f"cw:page:{page-1}"))
+    if (page + 1) * PAGE_SIZE < total: navigation.append(button("Далее", f"cw:page:{page+1}"))
     if navigation: rows.append(navigation)
     if not rows:
         return await customer_screen(message, "Заявок пока нет. Нажмите «Забронировать», чтобы начать.", replace=replace, reply_markup=None)
-    await customer_screen(message, f"Ваши заявки · страница {page+1}\nМои обращения: /my_support · Напоминания: /reminders", replace=replace, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await customer_screen(message, f"Ваши заявки, страница {page+1}\nМои обращения: /my_support\nНапоминания: /reminders", replace=replace, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def owned_booking(booking_id, user_id):
@@ -278,7 +278,7 @@ async def customer_action(query: CallbackQuery, state: FSMContext):
             new_lines = {line["article_id"]: line for line in after.get("lines", [])}
             for article_id in old_lines.keys() | new_lines.keys():
                 old, new = old_lines.get(article_id, {}), new_lines.get(article_id, {})
-                text += "\n• " + html.escape(str(new.get("name") or old.get("name") or "Оборудование")) + f" · {int(old.get('quantity', 0))} → {int(new.get('quantity', 0))}"
+                text += "\n• " + html.escape(str(new.get("name") or old.get("name") or "Оборудование")) + f": {int(old.get('quantity', 0))} → {int(new.get('quantity', 0))}"
             text += "\nПеред подтверждением прочитайте комментарий в защищённой заявке."
             secure = app_button("Оспорить или исправить", booking_id)
             rows = [[button("Ознакомлен, принимаю", f"cw:accept:{booking_id}:{change['id']}")], [button("Оспорить", f"cw:dispute:{booking_id}:{change['id']}")]]
@@ -299,13 +299,13 @@ async def staff_list(message, user_id, page=0):
         raise ValueError("Доступ только для сотрудников")
     page = max(0, min(page, 33))
     bookings = await asyncio.to_thread(list_bookings)
-    rows = [[button(f"{booking.human_number or booking.id} · {booking_status(booking.status)}", f"sw:open:{booking.id}")] for booking in bookings[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]]
+    rows = [[button(f"{booking.human_number or booking.id}: {booking_status(booking.status)}", f"sw:open:{booking.id}")] for booking in bookings[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"sw:page:{page-1}"))
-    if (page + 1) * PAGE_SIZE < len(bookings): nav.append(button("Далее →", f"sw:page:{page+1}"))
+    if page: nav.append(button("Назад", f"sw:page:{page-1}"))
+    if (page + 1) * PAGE_SIZE < len(bookings): nav.append(button("Далее", f"sw:page:{page+1}"))
     if nav: rows.append(nav)
     if not rows: return await message.answer("Заявок нет.")
-    await message.answer(f"Очередь заявок · страница {page+1}\nПоиск: /find НОМЕР\nКаталог: /catalog · Ремонты: /repairs · Поддержка: /support · Тихие часы: /quiet · Сотрудники: /staff_settings · Скрытые тестовые: /hidden_tests", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Очередь заявок, страница {page+1}\nПоиск: /find НОМЕР\nКаталог: /catalog\nРемонты: /repairs\nПоддержка: /support\nТихие часы: /quiet\nСотрудники: /staff_settings\nСкрытые тестовые: /hidden_tests", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def show_staff_booking(message, booking_id, user_id):
@@ -409,7 +409,7 @@ async def staff_action(query: CallbackQuery, state: FSMContext):
                 raise Conflict("Комплектация доступна для подтверждённой заявки")
             await state.clear(); await state.update_data(booking_id=booking.id)
             await state.set_state(StaffAssignment.choose)
-            details = "\n".join(f"Строка {row.id} · {html.escape(row.article.name)} · {row.quantity} шт." for row in booking.lines)
+            details = "\n".join(f"Строка {row.id}: {html.escape(row.article.name)} ({row.quantity} шт.)" for row in booking.lines)
             await query.answer()
             return await query.message.answer("Назначение экземпляров:\n" + details + "\n\nОтправьте − для автоматического подбора или укажите все строки: строка:ID,нет,неисправен,замена=ID; строка:ID. Для каждой позиции нужен один вариант. Список ID: /equipment. Отмена: /cancel_booking.", parse_mode=ParseMode.HTML)
         if parts[1] == "assignconfirm" and len(parts) == 4:
@@ -514,7 +514,7 @@ async def manager_edit_dates(message: Message, state: FSMContext):
     lines = [{"article_id": row["article_id"], "quantity": row["quantity"]} for row in data["before"]["lines"]]
     await state.update_data(proposed={"start": start.isoformat(), "end": end.isoformat(), "lines": lines})
     await state.set_state(ManagerEdit.lines)
-    examples = "\n".join(f"{item['id']} · {html.escape(item.get('title') or item['name'])} · доступно {item['available_quantity']}" for item in items[:20])
+    examples = "\n".join(f"{item['id']}: {html.escape(item.get('title') or item['name'])} (доступно {item['available_quantity']})" for item in items[:20])
     await message.answer("Отправьте полный состав в формате ID:количество, например 12:2, 18:1. Чтобы сохранить состав, отправьте −. Для поиска отправьте название.\n\n" + (examples or "Каталог пуст."), parse_mode=ParseMode.HTML)
 
 
@@ -532,7 +532,7 @@ async def manager_edit_lines(message: Message, state: FSMContext):
                 return await message.answer(f"Не удалось загрузить каталог: {exc}")
             query = text.casefold()
             found = [item for item in items if query and query in " ".join(str(item.get(k) or "") for k in ("title", "name", "sku", "brand")).casefold()]
-            result = "\n".join(f"{item['id']} · {html.escape(item.get('title') or item['name'])} · доступно {item['available_quantity']}" for item in found[:20])
+            result = "\n".join(f"{item['id']}: {html.escape(item.get('title') or item['name'])} (доступно {item['available_quantity']})" for item in found[:20])
             return await message.answer(result or "Ничего не найдено. Введите название или состав в формате ID:количество.", parse_mode=ParseMode.HTML)
         lines = [{"article_id": int(part.split(":")[0]), "quantity": int(part.split(":")[1])} for part in text.split(",")]
         if len(lines) > 30 or len({row["article_id"] for row in lines}) != len(lines) or any(not 1 <= row["quantity"] <= 30 or row["article_id"] < 1 for row in lines):
@@ -634,7 +634,7 @@ async def staff_assignment_choose(message: Message, state: FSMContext):
     except ValueError as exc: return await message.answer(str(exc))
     await state.update_data(assignments=assignments, exceptions=exceptions, assignment_components=components)
     await state.set_state(StaffAssignment.components)
-    items = [f"{asset_id} · {html.escape(name)}" for asset_id, names in components.items() for name in names]
+    items = [f"{asset_id}: {html.escape(name)}" for asset_id, names in components.items() for name in names]
     await message.answer("Элементы выбранных экземпляров:\n" + ("\n".join(items) or "Не указаны") + "\n\nДля исключения отправьте: номер экземпляра | элемент | нет / неисправен / замена | что выдано взамен (только для замены). Повторите для других элементов или отправьте готово.", parse_mode=ParseMode.HTML)
 
 
@@ -701,14 +701,18 @@ async def inspection_list(message, booking_id, user_id, page=0):
     rows = []
     for asset in booking.assets[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
         saved = next((item for item in booking.inspections if item.equipment_id == asset.equipment_id and item.stage == stage), None)
-        label = f"{asset.equipment.name} · {asset.equipment.inventory_number} · " + ("исправно" if saved and saved.result == "pass" else "неисправность" if saved else "не проверено")
+        result_labels = {"pass": "исправно", "fail": "неисправность"}
+        status = result_labels.get(saved.result, "проверено частично" if any(
+            checked for key, checked in (saved.checklist or {}).items() if key.startswith("component:")
+        ) else "не проверено") if saved else "не проверено"
+        label = f"{asset.equipment.name} ({asset.equipment.inventory_number}): {status}"
         rows.append([button(label[:60], f"sw:inspection:{booking_id}:{asset.equipment_id}")])
     navigation = []
-    if page: navigation.append(button("← Назад", f"sw:inspect:{booking_id}:{page-1}"))
-    if (page + 1) * PAGE_SIZE < len(booking.assets): navigation.append(button("Далее →", f"sw:inspect:{booking_id}:{page+1}"))
+    if page: navigation.append(button("Назад", f"sw:inspect:{booking_id}:{page-1}"))
+    if (page + 1) * PAGE_SIZE < len(booking.assets): navigation.append(button("Далее", f"sw:inspect:{booking_id}:{page+1}"))
     if navigation: rows.append(navigation)
     rows.append([button("К заявке", f"sw:open:{booking_id}")])
-    await message.answer(("Проверка перед выдачей" if stage == "pre_issue" else "Проверка при возврате") + f" · страница {page+1}", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(("Проверка перед выдачей" if stage == "pre_issue" else "Проверка при возврате") + f", страница {page+1}", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def start_inspection(query, state, booking_id, equipment_id):
@@ -723,8 +727,8 @@ async def start_inspection(query, state, booking_id, equipment_id):
     nonce = secrets.token_hex(4)
     await state.clear(); await state.update_data(booking_id=booking_id, equipment_id=equipment_id, stage=stage, signature=signature, components=components, nonce=nonce)
     await state.set_state(StaffInspection.choose)
-    component_text = "\n".join("• " + html.escape(str(item.get("replacement_name") or item.get("name") or "Элемент")) + (" · не выдано" if item.get("state") in {"missing", "faulty"} else "") for item in components)
-    text = f"<b>{html.escape(asset.equipment.name)}</b> · {html.escape(asset.equipment.inventory_number)}\n" + (component_text or "Комплектация не указана.")
+    component_text = "\n".join("• " + html.escape(str(item.get("replacement_name") or item.get("name") or "Элемент")) + (" (не выдано)" if item.get("state") in {"missing", "faulty"} else "") for item in components)
+    text = f"<b>{html.escape(asset.equipment.name)}</b> ({html.escape(asset.equipment.inventory_number)})\n" + (component_text or "Комплектация не указана.")
     rows = [[button("Всё проверено и исправно", f"sw:inspectionpass:{booking_id}:{equipment_id}:{nonce}")],
             [button("Зафиксировать неисправность", f"sw:inspectionfail:{booking_id}:{equipment_id}:{nonce}")],
             [button("К списку проверок", f"sw:inspect:{booking_id}")]]
@@ -883,13 +887,13 @@ async def repair_list(message, user_id, page=0):
     tickets = await asyncio.to_thread(list_repairs)
     tickets = [ticket for ticket in tickets if query in f"{ticket.id} {ticket.equipment.name} {ticket.equipment.inventory_number} {ticket.status}".casefold()]
     page = max(0, min(page, max(0, (len(tickets)-1)//PAGE_SIZE)))
-    rows = [[button(f"№{ticket.id} · {ticket.equipment.name} · {'закрыт' if ticket.status == 'closed' else 'в ремонте'}"[:60], f"rp:open:{ticket.id}")] for ticket in tickets[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows = [[button(f"№{ticket.id}: {ticket.equipment.name} ({'закрыт' if ticket.status == 'closed' else 'в ремонте'})"[:60], f"rp:open:{ticket.id}")] for ticket in tickets[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"rp:page:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(tickets): nav.append(button("Далее →", f"rp:page:{page+1}"))
+    if page: nav.append(button("Назад", f"rp:page:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(tickets): nav.append(button("Далее", f"rp:page:{page+1}"))
     if nav: rows.append(nav)
     if not rows: return await message.answer("Ремонтов по этому запросу нет. Для поиска: /repairs НАЗВАНИЕ или НОМЕР.")
-    await message.answer(f"Ремонты · страница {page+1}. Поиск: /repairs НАЗВАНИЕ или НОМЕР.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Ремонты, страница {page+1}. Поиск: /repairs НАЗВАНИЕ или НОМЕР.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def repair_detail(message, user_id, ticket_id):
@@ -899,7 +903,7 @@ async def repair_detail(message, user_id, ticket_id):
     ticket = next((item for item in await asyncio.to_thread(list_repairs) if item.id == ticket_id), None)
     if not ticket: raise ValueError("Ремонт не найден")
     description = html.escape((ticket.defect or "Не указано")[:1000])
-    text = f"<b>Ремонт №{ticket.id}</b>\n{html.escape(ticket.equipment.name)} · № {html.escape(ticket.equipment.inventory_number)}\nСтатус: {'закрыт' if ticket.status == 'closed' else 'в ремонте'}\nНеисправность: {description}\nОценка: {html.escape(str(ticket.estimated_cost))} ₽\nУщерб клиента: {'да' if ticket.charge_customer else 'нет'}"
+    text = f"<b>Ремонт №{ticket.id}</b>\n{html.escape(ticket.equipment.name)} (№ {html.escape(ticket.equipment.inventory_number)})\nСтатус: {'закрыт' if ticket.status == 'closed' else 'в ремонте'}\nНеисправность: {description}\nОценка: {html.escape(str(ticket.estimated_cost))} ₽\nУщерб клиента: {'да' if ticket.charge_customer else 'нет'}"
     rows = []
     if ticket.status != "closed": rows.append([button("Закрыть ремонт", f"rp:ask:{ticket.id}")])
     rows.append([button("К списку", "rp:page:0")])
@@ -1001,10 +1005,10 @@ async def customer_support_list(message, user_id, page):
     from .support import list_threads
     entries = await asyncio.to_thread(list_threads, customer_id=user_id)
     page = max(0, min(page, max(0, (len(entries)-1)//PAGE_SIZE)))
-    lines = [f"№{row['id']}" + (f" · {html.escape(row['request_number'])}" if row['request_number'] else "") + f" · {html.escape(row['customer_state'])}" for row in entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    lines = [f"№{row['id']}" + (f" (заявка {html.escape(row['request_number'])})" if row['request_number'] else "") + f": {html.escape(row['customer_state'])}" for row in entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"sc:page:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее →", f"sc:page:{page+1}"))
+    if page: nav.append(button("Назад", f"sc:page:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее", f"sc:page:{page+1}"))
     await message.answer("Ваши обращения:\n" + ("\n".join(lines) or "Нет обращений"), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=[nav]) if nav else None)
 
 
@@ -1032,13 +1036,13 @@ async def staff_support_list(message, user_id, page):
     entries = await asyncio.to_thread(list_threads)
     entries = [row for row in entries if search in f"{row['id']} {row['request_number']} {row['status']} {support_status(row['status'])}".casefold()]
     page = max(0, min(page, max(0, (len(entries)-1)//PAGE_SIZE)))
-    rows = [[button(f"№{row['id']} · {row['request_number'] or 'общее'} · {support_status(row['status'])}", f"sp:open:{row['id']}")] for row in entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
+    rows = [[button(f"№{row['id']} ({row['request_number'] or 'общее'}): {support_status(row['status'])}", f"sp:open:{row['id']}")] for row in entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav = []
-    if page: nav.append(button("← Назад", f"sp:page:{page-1}"))
-    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее →", f"sp:page:{page+1}"))
+    if page: nav.append(button("Назад", f"sp:page:{page-1}"))
+    if (page+1)*PAGE_SIZE < len(entries): nav.append(button("Далее", f"sp:page:{page+1}"))
     if nav: rows.append(nav)
     if not rows: return await message.answer("Обращений не найдено. Поиск: /support НОМЕР.")
-    await message.answer(f"Обращения · страница {page+1}. Поиск: /support НОМЕР.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Обращения, страница {page+1}. Поиск: /support НОМЕР.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def support_detail(message, actor_id, thread_id):
@@ -1080,9 +1084,10 @@ async def staff_support_action(query: CallbackQuery):
         if action in {"claim", "askclose", "close"} and actor not in configured_ids("PII_ADMIN_IDS"):
             raise PermissionError("Для работы с обращением нужен доступ к персональным данным")
         if action == "claim" and len(parts) == 3:
-            from .support import claim_thread
+            from .support import claim_thread, deliver_thread_copies
             await asyncio.to_thread(claim_thread, identifier, actor)
             await query.answer("Обращение принято в работу")
+            await deliver_thread_copies(identifier)
             return await support_detail(query.message, actor, identifier)
         if action == "askclose" and len(parts) == 3:
             await query.answer(); return await query.message.answer("Закрыть обращение?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button("Закрыть", f"sp:close:{identifier}"),button("Назад",f"sp:open:{identifier}")]]))
@@ -1102,9 +1107,10 @@ async def staff_support_action(query: CallbackQuery):
         if action == "owner" and len(parts) == 4:
             from .support import reassign_thread
             from .miniapp import notify_support_owner
-            new_owner = int(parts[3]); await asyncio.to_thread(reassign_thread, identifier, actor, new_owner)
+            new_owner = int(parts[3]); changed = await asyncio.to_thread(reassign_thread, identifier, actor, new_owner)
             await query.answer("Обращение передано")
-            await notify_support_owner(new_owner, identifier, "")
+            if changed:
+                await notify_support_owner(new_owner, identifier, "")
             return await support_detail(query.message, actor, identifier)
         raise ValueError("Действие недоступно")
     except (ValueError, PermissionError, Conflict, SupportConflict) as exc:
@@ -1124,7 +1130,7 @@ def receipt_pages(data, max_chars=2800):
             lines.append("  Особенность: " + str(feature.get("description") or ""))
         for component in item.get("components", []):
             label = str(component.get("replacement_name") or component.get("name") or "Элемент")
-            state = " · не выдано" if component.get("state") in {"missing", "faulty"} else ""
+            state = " (не выдано)" if component.get("state") in {"missing", "faulty"} else ""
             lines.append("  Комплект: " + label + state)
     exceptions = data.get("exceptions", [])
     if exceptions:
@@ -1166,13 +1172,13 @@ async def begin_customer_receipt(query,state,booking_id):
 async def send_customer_receipt_page(message,booking_id,nonce,pages,page,seen):
     rows=[]
     nav=[]
-    if page>0: nav.append(button("← Назад",f"cw:receiptpage:{booking_id}:{nonce}:{page-1}"))
-    if page+1<len(pages): nav.append(button("Далее →",f"cw:receiptpage:{booking_id}:{nonce}:{page+1}"))
+    if page>0: nav.append(button("Назад",f"cw:receiptpage:{booking_id}:{nonce}:{page-1}"))
+    if page+1<len(pages): nav.append(button("Далее",f"cw:receiptpage:{booking_id}:{nonce}:{page+1}"))
     if nav: rows.append(nav)
     link=app_button("Открыть защищённую заявку",booking_id)
     if link: rows.append([link])
     rows.append([button("Назад к заявке",f"cw:open:{booking_id}")])
-    await message.answer(f"Перечень выдачи · {page+1}/{len(pages)}\n\n{pages[page]}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(f"Перечень выдачи, страница {page+1}/{len(pages)}\n\n{pages[page]}",reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def customer_receipt_page(query,state,booking_id,nonce,page):
@@ -1243,7 +1249,7 @@ async def customer_edit_dates(message: Message,state: FSMContext):
         return await message.answer(f'Не удалось проверить сроки: {exc}. Введите две даты через | или −.')
     lines=[{'article_id':row['article_id'],'quantity':row['quantity']} for row in data['customer_edit_before']['lines']]
     await state.update_data(customer_edit_proposed={'start':start.isoformat(),'end':end.isoformat(),'lines':lines});await state.set_state(CustomerEdit.lines)
-    examples='\n'.join(f"{item['id']} · {html.escape(item.get('title') or item['name'])} · доступно {item['available_quantity']}" for item in items[:20])
+    examples='\n'.join(f"{item['id']}: {html.escape(item.get('title') or item['name'])} (доступно {item['available_quantity']})" for item in items[:20])
     await message.answer('Укажите полный состав как ID:количество, например 12:2, 18:1. Чтобы оставить состав, отправьте −. Для поиска отправьте название. Доступность будет проверена при сохранении.\n\n'+(examples or 'Каталог пуст.'),parse_mode=ParseMode.HTML)
 
 
@@ -1261,7 +1267,7 @@ async def customer_edit_lines(message: Message,state: FSMContext):
             try: items=await asyncio.to_thread(edit_availability,data['customer_edit_booking'],message.from_user.id,datetime.fromisoformat(proposed['start']),datetime.fromisoformat(proposed['end']))
             except (ValueError,Conflict) as exc: return await message.answer(f'Не удалось загрузить каталог: {exc}')
             found=[item for item in items if text and text.casefold() in ' '.join(str(item.get(key) or '') for key in ('title','name','sku','brand')).casefold()]
-            lines='\n'.join(f"{item['id']} · {html.escape(item.get('title') or item['name'])} · доступно {item['available_quantity']}" for item in found[:20])
+            lines='\n'.join(f"{item['id']}: {html.escape(item.get('title') or item['name'])} (доступно {item['available_quantity']})" for item in found[:20])
             return await message.answer(lines or 'Ничего не найдено. Введите другое название или состав как ID:количество.',parse_mode=ParseMode.HTML)
         selected=[{'article_id':int(part.split(':')[0]),'quantity':int(part.split(':')[1])} for part in text.split(',')]
         if len(selected)>30 or len({row['article_id'] for row in selected})!=len(selected) or any(row['article_id']<1 or not 1<=row['quantity']<=30 for row in selected):
@@ -1317,14 +1323,14 @@ async def staff_choices(message,actor,booking_id,page,kind):
     else:
         if booking.status!='return_inspection': raise Conflict('Результат доступен при проверке возврата')
         choices=booking.assets
-        label=lambda item:f"{item.equipment.name} · {item.equipment.inventory_number}"
+        label=lambda item:f"{item.equipment.name} ({item.equipment.inventory_number})"
         callback=lambda item:f"wf:finding:{booking_id}:{item.equipment_id}"
         title='Выберите экземпляр для фиксации результата:'
     page=max(0,min(page,max(0,(len(choices)-1)//PAGE_SIZE)))
     rows=[[button(label(item)[:60],callback(item))] for item in choices[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
     nav=[]
-    if page:nav.append(button('← Назад',f'wf:{kind}:{booking_id}:{page-1}'))
-    if (page+1)*PAGE_SIZE<len(choices):nav.append(button('Далее →',f'wf:{kind}:{booking_id}:{page+1}'))
+    if page:nav.append(button('Назад',f'wf:{kind}:{booking_id}:{page-1}'))
+    if (page+1)*PAGE_SIZE<len(choices):nav.append(button('Далее',f'wf:{kind}:{booking_id}:{page+1}'))
     if nav: rows.append(nav)
     rows.append([button('К заявке',f'sw:open:{booking_id}')])
     await message.answer(title,reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))

@@ -4,6 +4,9 @@
   const tapAnimations = new WeakMap();
   const activeAnimations = new Set();
   const reduced = root.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const desktop = root.matchMedia?.("(min-width: 769px)");
+  const availabilityDelay = index => (Math.floor(index / 7) + index % 7) * (desktop?.matches ? 9 : 24);
+  const rangeStep = length => Math.min(desktop?.matches ? 26 : 80, (desktop?.matches ? 200 : 600) / Math.max(1, length - 1));
   reduced?.addEventListener("change", () => {
     if (reduced.matches) for (const animation of activeAnimations) animation.cancel();
   });
@@ -33,7 +36,7 @@
       if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value.slice(0, 10)) return "Проверьте дату и время.";
     }
     if (start.slice(0, 10) < minimum) return "Выберите текущую или будущую дату";
-    if (a < now) return "Начало аренды должно быть в будущем.";
+    if (a < Math.floor(now / 60_000) * 60_000) return "Начало аренды не может быть в прошлом.";
     if (b <= a) return "Конец должен быть строго позже начала.";
     return "";
   }
@@ -77,7 +80,7 @@
           restartReveal ||= button.classList.contains("calendar-status-reveal");
           button.classList.remove("calendar-status-reveal");
           if (button.dataset.availability && !reduced?.matches) {
-            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
+            button.style.setProperty("--availability-reveal-delay", `${availabilityDelay(index)}ms`);
             reveals.push([button, "calendar-status-reveal"]);
           }
         }
@@ -90,12 +93,14 @@
           button.classList.remove("calendar-day-pop", "calendar-day-reveal");
           tapAnimations.get(button)?.cancel();
           if (!this.radialFill && day === motion.clickedDay && typeof button.animate === "function" && !reduced?.matches) {
-            const animation = track(button.animate([{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
+            const frames = desktop?.matches ? [{opacity: .75}, {opacity: 1}]
+              : [{transform: "scale(1)"}, {transform: "scale(1.08)", offset: .45}, {transform: "scale(1)"}];
+            const animation = track(button.animate(frames, {duration: desktop?.matches ? 160 : 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
             tapAnimations.set(button, animation);
           }
           const rangePosition = motion.revealRange ? range.indexOf(button) : -1;
           if (!reduced?.matches && (rangePosition >= 0 || (this.radialFill && day === motion.clickedDay))) {
-            const delay = Math.max(0, rangePosition) * Math.min(80, 600 / Math.max(1, range.length - 1));
+            const delay = Math.max(0, rangePosition) * rangeStep(range.length);
             button.style.setProperty("--range-reveal-delay", `${delay}ms`);
             reveals.push([button, "calendar-day-reveal"]);
           }
@@ -137,7 +142,7 @@
           if (day >= this.range.start && day <= this.range.end) revealDays.push(day);
         }
       }
-      const revealStep = revealDays.length > 1 ? Math.min(80, 600 / (revealDays.length - 1)) : 0;
+      const revealStep = revealDays.length > 1 ? rangeStep(revealDays.length) : 0;
       const revealPositions = new Map(revealDays.map((day, index) => [day, index]));
       const dayFormatter = new Intl.DateTimeFormat("ru-RU", {timeZone: "UTC", day: "numeric", month: "long", year: "numeric"});
       for (let index = 0; index < 42; index += 1) {
@@ -160,7 +165,7 @@
           button.classList.add(`calendar-availability-${availability}`);
           button.dataset.availability = availability;
           if (this.radialFill && !reduced?.matches) {
-            button.style.setProperty("--availability-reveal-delay", `${(Math.floor(index / 7) + index % 7) * 24}ms`);
+            button.style.setProperty("--availability-reveal-delay", `${availabilityDelay(index)}ms`);
             button.classList.add("calendar-status-reveal");
           }
         }
@@ -207,7 +212,9 @@
       }
       this.element.append(header, weekdays, grid);
       if (changingMonth && !doc.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof grid.animate === "function") {
-        track(grid.animate([{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}], {duration: 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
+        const frames = desktop?.matches ? [{opacity: .78}, {opacity: 1}]
+          : [{opacity: .35, transform: "translateY(4px)"}, {opacity: 1, transform: "none"}];
+        track(grid.animate(frames, {duration: desktop?.matches ? 160 : 280, easing: "cubic-bezier(.22, 1, .36, 1)"}));
       }
       if (focusDay) grid.querySelector(`[data-date="${focusDay}"]`)?.focus({ preventScroll: true });
     }

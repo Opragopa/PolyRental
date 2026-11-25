@@ -13,6 +13,10 @@ class SupportConflict(Exception):
     pass
 
 
+def operator_can_read(uid):
+    return uid in configured_ids("PII_ADMIN_IDS") and staff_allows(uid, "operator")
+
+
 def _seal(thread_id, sender_id, direction, message):
     nonce = os.urandom(12)
     aad = f'support-v1:{thread_id}:{sender_id}:{direction}'.encode()
@@ -36,7 +40,7 @@ def submit_question(customer_id, booking_id, screen, question):
         session.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))'), {'key':f'support:{customer_id}:{number}'})
         thread = session.scalar(select(SupportThread).where(SupportThread.customer_id == customer_id,
                                                             SupportThread.request_number == number).with_for_update())
-        eligible_assignee = booking.assignee_id if booking and booking.assignee_id in configured_ids("PII_ADMIN_IDS") and staff_allows(booking.assignee_id, "operator") else None
+        eligible_assignee = booking.assignee_id if booking and operator_can_read(booking.assignee_id) else None
         if thread is None:
             thread = SupportThread(customer_id=customer_id, booking_id=booking_id, request_number=number,
                                    screen=screen, owner_id=eligible_assignee, status='new')
@@ -52,9 +56,12 @@ def submit_question(customer_id, booking_id, screen, question):
             session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='routed_to_assignee'))
         message = f"Предложение по приложению:\n{question}" if screen == 'feedback' else question
         encrypted, nonce = _seal(thread.id, customer_id, 'client', message)
-        session.add(SupportMessage(thread_id=thread.id, sender_id=customer_id, direction='client', ciphertext=encrypted, nonce=nonce))
+        row = SupportMessage(thread_id=thread.id, sender_id=customer_id, direction='client',
+                             ciphertext=encrypted, nonce=nonce, operator_copy_at=datetime.now(timezone.utc))
+        session.add(row)
         session.add(SupportActivity(thread_id=thread.id, actor_id=customer_id, action='client_message'))
-        return {'id':thread.id, 'owner_id':thread.owner_id, 'request_number':number}
+        session.flush()
+        return {'id':thread.id, 'owner_id':thread.owner_id, 'request_number':number, 'message_id':row.id}
 
 
 def support_threads_page(customer_id=None, page=0, page_size=20, thread_id=None):
@@ -99,7 +106,7 @@ def claim_thread(thread_id, actor_id):
 
 
 def reassign_thread(thread_id, actor_id, new_owner):
-    if new_owner not in configured_ids("PII_ADMIN_IDS") or not staff_allows(new_owner, "operator"):
+    if not operator_can_read(new_owner):
         raise ValueError("Назначить можно только сотрудника с доступом к персональным данным")
     with Session.begin() as session:
         thread = session.scalar(select(SupportThread).where(SupportThread.id == thread_id).with_for_update())
@@ -111,7 +118,12 @@ def reassign_thread(thread_id, actor_id, new_owner):
             raise SupportConflict('Переназначить обращение может владелец или администратор')
         if thread.owner_id != new_owner:
             thread.owner_id = new_owner
+            now = datetime.now(timezone.utc)
+            session.execute(text("UPDATE support_messages SET operator_copy_at=:now WHERE thread_id=:id AND operator_copy_at IS NOT NULL"),
+                            {"now": now, "id": thread.id})
             session.add(SupportActivity(thread_id=thread.id, actor_id=actor_id, action=f'owner:{new_owner}'))
+            return True
+        return False
 
 
 def read_messages(thread_id, actor_id):
@@ -232,3 +244,70 @@ async def retry_support_replies():
                               SupportMessage.delivered_at.is_(None)).order_by(SupportMessage.id).limit(50)).all()
     for message_id in ids:
         await deliver_reply(message_id)
+
+
+async def deliver_operator_copy(message_id):
+    token = os.getenv("BOT_TOKEN", "")
+    if not token:
+        return False
+    from aiogram.exceptions import TelegramForbiddenError
+    from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions
+    from .bot import make_bot
+    from .chat_workflows import support_app_button
+    from .operator_preferences import next_actionable_time
+    with Session.begin() as session:
+        target = session.scalar(select(SupportMessage.thread_id).where(SupportMessage.id == message_id))
+        if target is None:
+            return False
+        # Claim, reassignment and delivery all lock the thread before touching messages.
+        thread = session.get(SupportThread, target, with_for_update={"skip_locked": True})
+        if not thread or not thread.owner_id or not operator_can_read(thread.owner_id):
+            return False
+        message = session.get(SupportMessage, message_id, with_for_update={"skip_locked": True})
+        now = datetime.now(timezone.utc)
+        if not message or message.direction != "client" or message.operator_copy_at is None or message.operator_copy_at > now:
+            return False
+        due = next_actionable_time(thread.owner_id, now)
+        if due > now + timedelta(microseconds=1):
+            message.operator_copy_at = due
+            return False
+        request = f" · Заявка {thread.request_number}" if thread.request_number else ""
+        button = support_app_button(thread.id)
+        markup = InlineKeyboardMarkup(inline_keyboard=[[button]]) if button else None
+        try:
+            body = _open(message)
+            async with make_bot(token) as bot:
+                await asyncio.wait_for(bot.send_message(
+                    thread.owner_id, f"Поддержка · Обращение №{thread.id}{request}\n\n{body}",
+                    parse_mode=None, reply_markup=markup, link_preview_options=LinkPreviewOptions(is_disabled=True),
+                ), timeout=10)
+        except TelegramForbiddenError:
+            message.operator_copy_at = None
+            return False
+        except Exception:
+            message.operator_copy_at = now + timedelta(minutes=5)
+            return False
+        message.operator_copy_at = None
+        message.delivered_at = datetime.now(timezone.utc)
+        return True
+
+
+def pending_operator_copies(thread_id=None):
+    eligible = [uid for uid in configured_ids("PII_ADMIN_IDS") if staff_allows(uid, "operator")]
+    if not eligible:
+        return []
+    with Session() as session:
+        query = select(SupportMessage.id).join(SupportThread).where(
+            SupportThread.owner_id.in_(eligible), SupportMessage.operator_copy_at.is_not(None))
+        if thread_id is None:
+            query = query.where(SupportMessage.operator_copy_at <= datetime.now(timezone.utc))
+        else:
+            query = query.where(SupportMessage.thread_id == thread_id)
+        return session.scalars(query.order_by(SupportMessage.operator_copy_at, SupportMessage.id).limit(50)).all()
+
+
+async def deliver_thread_copies(thread_id=None):
+    ids = await asyncio.to_thread(pending_operator_copies, thread_id)
+    for message_id in ids:
+        await deliver_operator_copy(message_id)
+    return bool(ids)

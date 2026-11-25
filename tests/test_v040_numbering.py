@@ -8,7 +8,7 @@ from docx import Document
 
 from app.db import Audit, Booking, RequestNumberCounter, Session
 from app.miniapp import booking_view
-from app.rental import create_booking, get_booking, now, save_equipment
+from app.rental import create_booking, customer_history_page, get_booking, now, save_equipment
 from app.request_numbers import parse_request_number
 from app.documents import render_document
 from app.rental import resolve_booking_number
@@ -42,6 +42,10 @@ def test_numbers_are_atomic_and_idempotent():
     assert booking_view(get_booking(ids[0]))["human_number"] == numbers[0]
     assert resolve_booking_number(numbers[0]) == ids[0]
     assert resolve_booking_number(numbers[0][-4:]) == ids[0]
+    short = str(parsed[0][1])
+    matched, count = customer_history_page(1, "all", 0, number=short)
+    assert count == 1 and [booking.id for booking in matched] == [ids[0]]
+    assert customer_history_page(2, "all", 0, number=short)[1] == 0
     document = Document(BytesIO(render_document(ids[0], "contract")))
     assert numbers[0] in "\n".join(p.text for p in document.paragraphs)
     with Session() as session:

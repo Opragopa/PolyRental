@@ -18,7 +18,7 @@ def headers(user_id):
 def test_support_encryption_owner_permissions_and_client_status(monkeypatch):
     configure(monkeypatch)
     import app.miniapp as miniapp
-    monkeypatch.setattr(miniapp, 'notify_support_owner', AsyncMock())
+    monkeypatch.setattr(miniapp, 'deliver_operator_copy', AsyncMock())
     monkeypatch.setattr(miniapp, 'deliver_reply', AsyncMock(return_value=False))
     booking_id = pending_booking()
     transition(booking_id, 'confirmed', 100)
@@ -61,6 +61,43 @@ def test_support_claim_is_atomic(monkeypatch):
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(claim, (100, 200)))
     assert sorted(outcomes) == ['claimed', 'conflict']
+
+
+def test_private_copy_waits_for_assignment_and_uses_current_operator(monkeypatch):
+    import asyncio
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from app.support import deliver_operator_copy, deliver_thread_copies, reassign_thread
+    configure(monkeypatch)
+    monkeypatch.setenv("PII_ADMIN_IDS", "100,200")
+    monkeypatch.setenv("PUBLIC_URL", "https://example.test")
+    sent = AsyncMock()
+    class Bot:
+        async def __aenter__(self):
+            return SimpleNamespace(send_message=sent)
+        async def __aexit__(self, *_):
+            pass
+    monkeypatch.setattr("app.bot.make_bot", lambda _: Bot())
+    result = submit_question(42, None, "bot", "Можно получить камеру в 09:00? <текст>")
+    assert not asyncio.run(deliver_operator_copy(result["message_id"]))
+    assert not sent.called
+    claim_thread(result["id"], 200)
+    monkeypatch.setattr("app.operator_preferences.next_actionable_time", lambda _uid, now: now + timedelta(hours=1))
+    assert not asyncio.run(deliver_operator_copy(result["message_id"]))
+    assert not sent.called
+    reassign_thread(result["id"], 200, 100)
+    monkeypatch.setattr("app.operator_preferences.next_actionable_time", lambda _uid, now: now)
+    monkeypatch.setenv("PII_ADMIN_IDS", "200")
+    assert not asyncio.run(deliver_operator_copy(result["message_id"]))
+    assert not sent.called
+    monkeypatch.setenv("PII_ADMIN_IDS", "100,200")
+    assert asyncio.run(deliver_thread_copies(result["id"]))
+    assert not asyncio.run(deliver_operator_copy(result["message_id"]))
+    sent.assert_awaited_once()
+    args, kwargs = sent.await_args
+    assert args[0] == 100 and args[1].endswith("Можно получить камеру в 09:00? <текст>")
+    assert kwargs["parse_mode"] is None
+    assert kwargs["reply_markup"].inline_keyboard[0][0].web_app.url.endswith(f"startapp=support_{result['id']}")
 
 
 def test_resolved_general_support_is_retained_then_purged(monkeypatch):

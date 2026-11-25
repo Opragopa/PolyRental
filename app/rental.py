@@ -1210,8 +1210,8 @@ def customer_history_page(customer_id, category, page, page_size=10, number="", 
             conditions.append(Booking.id == booking_id)
         number = number.strip().upper()
         if number:
-            if len(number) == 4 and number.isascii() and number.isdigit():
-                conditions.extend((func.length(Booking.human_number) == 8, func.right(Booking.human_number, 4) == number))
+            if len(number) <= 4 and number.isascii() and number.isdigit():
+                conditions.extend((func.length(Booking.human_number) == 8, func.right(Booking.human_number, 4) == number.zfill(4)))
             else:
                 parse_request_number(number)
                 conditions.append(Booking.human_number == number)
@@ -1378,14 +1378,17 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
                       defect="", estimated_cost=0, charge_customer=False, actor_name="", expected_components_signature=None):
     from .inventory import require_role
     require_role(actor_id)
-    if stage not in {"pre_issue", "check_in"} or result not in {"pass", "fail"}:
+    if stage not in {"pre_issue", "check_in"} or not (
+        result in {"pass", "fail"} or stage == "pre_issue" and result == "partial"
+    ):
         raise ValueError("Неверный результат проверки")
     with Session.begin() as session:
-        booking = session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+        booking = session.scalar(select(Booking).where(
+            Booking.id == booking_id, Booking.deleted_at.is_(None)).with_for_update())
         expected_status = "preparing" if stage == "pre_issue" else "return_inspection"
         if not booking or booking.status != expected_status:
             raise ValueError("Проверка недоступна на текущем этапе заказа")
-        _claim_stage(session, booking, actor_id, actor_name, bypass_owner=stage == "check_in")
+        lease = _claim_stage(session, booking, actor_id, actor_name, bypass_owner=stage == "check_in")
         assigned = session.get(BookingAsset, (booking_id, equipment_id))
         if not assigned or assigned.deleted_at is not None:
             raise ValueError("Экземпляр не назначен заказу")
@@ -1399,6 +1402,11 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
         record = session.scalar(select(Inspection).where(
             Inspection.booking_id == booking_id, Inspection.equipment_id == equipment_id,
             Inspection.stage == stage))
+        if stage == "pre_issue" and result in {"pass", "partial"} and asset.condition != "available":
+            raise Conflict("Экземпляр неисправен или недоступен. Замените его в составе заявки")
+        if result == "partial":
+            checklist = {f"component:{index}": True for index, item in enumerate(components)
+                         if item["state"] not in {"missing", "faulty"} and (checklist or {}).get(f"component:{index}")}
         if record is None:
             record = Inspection(booking_id=booking_id, equipment_id=equipment_id, stage=stage,
                                 actor_id=actor_id)
@@ -1423,6 +1431,8 @@ def record_inspection(booking_id, equipment_id, stage, result, checklist, notes,
                 ticket.defect = (defect or notes or ticket.defect or "Требуется диагностика")[:4000]
                 ticket.estimated_cost = Decimal(str(estimated_cost))
                 ticket.charge_customer = bool(charge_customer)
+        return {"stage": lease.stage, "actor_id": lease.actor_id, "actor_name": lease.actor_name,
+                "expires_at": lease.expires_at.isoformat(), "expired": False}
 
 
 def mark_act_signed(booking_id, actor_id):

@@ -34,6 +34,7 @@
       if (node.contains(element) || node.closest("[hidden], [inert]")) return;
       const obstruction = getComputedStyle(node);
       if (!["sticky", "fixed"].includes(obstruction.position) || obstruction.visibility === "hidden") return;
+      if (node.matches('.tabs') && obstruction.flexDirection === 'column') return;
       const box = node.getBoundingClientRect();
       if (!box.height || box.right <= rect.left || box.left >= rect.right) return;
       const bottomEdge = node.matches('.tabs, .action-bar, [data-scroll-obstruction="bottom"], .equipment-preview-dialog .action-row');
@@ -68,11 +69,11 @@
     if (active) finish(active, true);
   }
 
-  function move(request, owner, destination) {
+  function move(request, owner, destination, instant = false) {
     const limit = owner.scrollHeight - owner.clientHeight;
     const target = Math.max(0, Math.min(destination, limit));
     if (Math.abs(owner.scrollTop - target) < 1) return finish(request);
-    if (reduced.matches) {
+    if (instant || reduced.matches) {
       scroll(owner, target, "instant");
       return finish(request);
     }
@@ -104,13 +105,14 @@
   /**
    * @param {Element | null | undefined} element
    * @param {{block?: "center" | "start" | "nearest", valid?: () => boolean, since?: number,
-   *   after?: PromiseLike<unknown>}} [options]
+   *   after?: PromiseLike<unknown>, instant?: boolean}} [options]
    */
-  function reveal(element, {block = "center", valid = () => true, since = interaction, after} = {}) {
+  function reveal(element, {block = "center", valid = () => true, since = interaction, after, instant = false} = {}) {
     if (!element || since !== interaction) return Promise.resolve(false);
     const visible = () => element.isConnected && !element.closest("[hidden], [inert]") && valid();
     return requestScroll(visible, request => {
       function measure() {
+        const deadline = performance.now() + 2000;
         let previous, stable = 0;
         const tick = () => {
           if (active !== request) return;
@@ -124,20 +126,20 @@
             Number.isFinite(animation.effect?.getComputedTiming().endTime));
           const loading = [...element.querySelectorAll('[aria-busy="true"]')]
             .some(node => node.getClientRects().length);
-          if (stable < 3 || moving(element) || moving(element.parentElement) || loading) {
+          if (performance.now() < deadline && (stable < 3 || moving(element) || moving(element.parentElement) || loading)) {
             request.frame = requestAnimationFrame(tick);
             return;
           }
           const owner = scrollOwner(element);
           if (!owner) return finish(request);
           const [top, bottom] = viewport(owner, element);
-          const inset = 12;
+          const inset = block === "start" ? (parseFloat(getComputedStyle(element).scrollMarginBlockStart) || 12) : 12;
           const available = bottom - top - 2 * inset;
           if (available <= 0) return finish(request);
           if (block === "nearest" && rect.top >= top && rect.bottom <= bottom) return finish(request);
           const destination = rect.height > available || block === "start" ? top + inset :
             top + (bottom - top - rect.height) / 2;
-          move(request, owner, owner.scrollTop + rect.top - destination);
+          move(request, owner, owner.scrollTop + rect.top - destination, instant);
         };
         request.frame = requestAnimationFrame(tick);
       }
@@ -165,6 +167,9 @@
   });
   Object.assign(window, {PolyRentalViewportFocus: {
     reveal, cancel, checkpoint: () => interaction, inProgress: () => active !== null,
-    restore: (top, valid = () => true) => requestScroll(valid, request => move(request, root(), top)),
+    restore: (top, valid = () => true, {instant = false} = {}) => requestScroll(valid, request => {
+      if (!valid()) return finish(request, true);
+      move(request, root(), top, instant);
+    }),
   }});
 })();

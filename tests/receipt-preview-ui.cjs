@@ -1,4 +1,4 @@
-/* Real PDF rendering, synthetic bytes only; no native browser PDF plug-in. */
+/* Receipt downloads use synthetic data and never start the embedded viewer. */
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const {fixture,base} = require('./completion-ui.cjs');
@@ -23,43 +23,50 @@ function samplePdf() {
   const engine=process.env.PLAYWRIGHT_BROWSER||'chromium';
   const browser=await(engine==='webkit'?webkit:chromium).launch({headless:true,...(engine==='chromium'&&process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
   try {
-    for (const admin of [false,true]) {
-      const {page,errors}=await fixture(browser,{admin,role:'admin',order:base('returned'),receipt:{body:samplePdf()}});
-      if(admin) { // Synthetic fixture normally has no PII access; enable only this permitted preview action.
-        await page.route('**/api/miniapp/me',route=>route.fulfill({json:{id:100,admin:true,pii_admin:true,staff_role:'admin'}}));
-        await page.reload(); await page.locator('.request-toggle').click();
+    for (const surface of ['site','miniapp']) {
+      for (const admin of [false,true]) {
+        const filename = 'receipt-synthetic.pdf';
+        const {page,errors}=await fixture(browser,{surface,admin,role:'admin',piiAdmin:admin,order:base('returned'),
+          receipt:{body:samplePdf(),headers:{'content-disposition':`attachment; filename="${filename}"`}}});
+        if (!admin) await page.locator('.customer-actions > summary').click();
+        const downloadAction = page.getByRole('button',{name:'Скачать расписку',exact:true});
+        assert.equal(await downloadAction.count(),1);
+        const downloaded = page.waitForEvent('download');
+        await downloadAction.click();
+        const file = await downloaded;
+        assert.equal(file.suggestedFilename(), filename);
+        assert.equal(await file.failure(),null);
+        assert.equal(await page.locator('.receipt-preview-dialog').count(),0);
+        assert.deepEqual(errors,[]);
+        await page.close();
       }
-      await page.locator(admin ? '.request-more-actions > summary' : '.customer-actions > summary').first().click();
-      await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
-      await page.locator('[data-preview-ready="true"]').waitFor({timeout:20000});
-      assert.ok(await page.locator('.receipt-pages canvas').count()>=1);
-      if(!suppliedPdf) assert.equal(await page.locator('.receipt-pages canvas').count(),2);
-      assert.equal(await page.locator('.workflow-dialog iframe').count(),0);
-      assert.ok(await page.locator('.receipt-pages canvas').first().evaluate(canvas=>{
-        const bytes=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
-        return canvas.width>0&&[...bytes].some((value,i)=>i%4!==3&&value<200);
-      }),'PDF page contains rendered text, not a blank canvas');
-      assert.ok(await page.getByRole('button',{name:'Скачать PDF',exact:true}).isVisible());
-      await page.getByRole('button',{name:'Назад к заявке',exact:true}).click();
-      await page.locator('.workflow-dialog').waitFor({state:'detached'});
-      assert.equal(await page.locator('.receipt-pages canvas').count(),0);
-      assert.deepEqual(errors,[]); await page.close();
     }
-    {
-      const {page}=await fixture(browser,{receipt:{body:Buffer.from('invalid pdf')}});
+    for (const method of ['downloadFile','openLink']) {
+      const {page,errors}=await fixture(browser,{order:base('returned')});
+      const url = 'https://polyrental.test/api/miniapp/document-download/temporary-test';
+      await page.route('**/receipt/download-link', route=>route.fulfill({json:{url, file_name:'receipt-synthetic.pdf'}}));
+      await page.evaluate(method=>{
+        const tg = window.Telegram.WebApp;
+        tg.version = method === 'downloadFile' ? '8.0' : '7.0';
+        tg[method] = value=>{ window.chosenDownload = value; };
+      }, method);
       await page.locator('.customer-actions > summary').click();
-      await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
-      await page.getByText('Не удалось показать страницы. Скачайте сохранённый PDF, чтобы открыть его на устройстве.',{exact:true}).waitFor();
-      assert.ok(await page.getByRole('button',{name:'Скачать PDF',exact:true}).isVisible());
+      await page.getByRole('button',{name:'Скачать расписку',exact:true}).click();
+      await page.waitForFunction(()=>window.chosenDownload);
+      assert.deepEqual(await page.evaluate(()=>window.chosenDownload),
+        method === 'downloadFile' ? {url,file_name:'receipt-synthetic.pdf'} : url);
+      assert.equal(await page.locator('.receipt-preview-dialog').count(),0);
+      assert.deepEqual(errors,[]);
       await page.close();
     }
     {
-      const {page}=await fixture(browser,{receipt:{status:404,type:'application/json',body:JSON.stringify({detail:'Срок хранения расписки истёк'})}});
+      const {page}=await fixture(browser,{receipt:{status:410,type:'application/json',body:JSON.stringify({detail:'Срок хранения расписки истёк'})}});
       await page.locator('.customer-actions > summary').click();
-      await page.getByRole('button',{name:'Предпросмотр расписки',exact:true}).click();
+      await page.getByRole('button',{name:'Скачать расписку',exact:true}).click();
       await page.getByText('Срок хранения расписки истёк',{exact:true}).waitFor();
-      assert.equal(await page.locator('.workflow-dialog').count(),0); await page.close();
+      assert.equal(await page.locator('.workflow-dialog').count(),0);
+      await page.close();
     }
-    console.log(`Receipt preview (${engine}): customer/staff PDF pages, cleanup and API errors passed`);
+    console.log(`Receipt downloads (${engine}): browser, native and external handoff passed`);
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

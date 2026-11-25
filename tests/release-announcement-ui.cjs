@@ -1,10 +1,11 @@
-const {chromium} = require('playwright');
+const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {fixture,base} = require('./completion-ui.cjs');
-const notes = JSON.parse(fs.readFileSync('app/assets/releases.json','utf8'))[0];
+const notes = JSON.parse(fs.readFileSync('app/assets/releases.json','utf8')).find(release => release.version === '0.5.1');
 (async()=>{
- const browser=await chromium.launch({headless:true,channel:'chrome'});
+ const engine = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? webkit : chromium;
+ const browser=await engine.launch({headless:true,...(engine === chromium && process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
  try {
   for(const admin of [false,true]) {
    const {page,errors}=await fixture(browser,{admin,role:'admin',order:base('pending'),width:320});
@@ -26,7 +27,10 @@ const notes = JSON.parse(fs.readFileSync('app/assets/releases.json','utf8'))[0];
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    assert.equal(await release.locator('.dialog-card').evaluate(el=>el.scrollWidth>el.clientWidth),false);
    await release.locator('.dialog-card').evaluate(el=>el.scrollTop=0);
-   fs.mkdirSync('artifacts/release-051',{recursive:true});await release.screenshot({path:`artifacts/release-051/${admin?'staff':'client'}.png`});
+   if (process.env.QA_SCREENSHOTS) {
+    fs.mkdirSync('artifacts/release-051',{recursive:true});
+    await release.screenshot({path:`artifacts/release-051/${admin?'staff':'client'}.png`});
+   }
    await release.getByRole('button',{name:'Помогите нам стать лучше'}).click();
    const support=page.locator('#support-dialog');await support.waitFor({state:'visible'});
    await page.waitForFunction(()=>document.querySelector('#release-dialog').hidden);assert.equal(acks,1);
@@ -47,14 +51,14 @@ const notes = JSON.parse(fs.readFileSync('app/assets/releases.json','utf8'))[0];
    assert.deepEqual(errors,[]);await page.close();
   }
   // On a first visit the instruction finishes before release notes appear.
-  const {page,errors}=await fixture(browser,{order:base('pending')});
+  const {page,errors}=await fixture(browser,{order:base('pending'),width:1280,isMobile:false});
   await page.route('**/api/miniapp/release',route=>route.fulfill({json:{release:{...notes,seen:false,items:notes.items.slice(0,3)}}}));
   await page.route('**/api/miniapp/profile',route=>route.fulfill({json:{display_name:'QA',onboarding_seen:false,start_screen:'booking'}}));
   await page.route('**/api/miniapp/onboarding/show',route=>route.fulfill({json:{first_show:true}}));
   await page.reload();await page.locator('#onboarding-dialog').waitFor({state:'visible'});
   assert.equal(await page.locator('#release-dialog').isHidden(),true);
   await page.locator('#onboarding-skip').click();await page.locator('#release-dialog').waitFor({state:'visible'});
-  await page.keyboard.press('Escape');assert.equal(await page.locator('#release-dialog').isHidden(),true);
+  await page.keyboard.press('Escape');await page.locator('#release-dialog').waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);await page.close();
   console.log('Release window: once per account, hotfix, staff/client, onboarding order, focus, feedback retry and confirmation passed');
  } finally {await browser.close();}

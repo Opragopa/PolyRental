@@ -413,6 +413,39 @@ def test_component_exceptions_do_not_remove_physical_asset_and_skip_return_check
     record_inspection(booking_id,equipment,"check_in","pass",{"component:0":True,"component:1":True},"",100)
 
 
+def test_partial_pickup_check_persists_and_does_not_unlock_readiness(monkeypatch):
+    from app.db import Article
+    from app.handover import asset_components, composition_signature
+    from app.miniapp import admin_booking_view, booking_view
+
+    booking_id = ready_booking(monkeypatch)
+    booking = get_booking(booking_id)
+    line = booking.lines[0]
+    equipment_id = booking.assets[0].equipment_id
+    with Session.begin() as session:
+        session.get(Article, line.article_id).composition = "Аккумулятор\nКабель"
+        signature = composition_signature(asset_components(session, booking_id, equipment_id))
+    # Previously completed checks must be replaceable with partial progress.
+    for asset in booking.assets:
+        record_inspection(booking_id, asset.equipment_id, "pre_issue", "pass",
+                          {"component:0": True, "component:1": True}, "", 100)
+    with pytest.raises(Conflict, match="Комплектация изменилась"):
+        record_inspection(booking_id, equipment_id, "pre_issue", "partial", {}, "", 100,
+                          expected_components_signature="0" * 64)
+    record_inspection(booking_id, equipment_id, "pre_issue", "partial",
+                      {"component:0": True, "component:1": False, "unknown": True},
+                      "", 100, expected_components_signature=signature)
+    persisted = get_booking(booking_id)
+    inspection = next(item for item in admin_booking_view(persisted)["inspections"]
+                      if item["equipment_id"] == equipment_id)
+    assert inspection["result"] == "partial"
+    assert inspection["checklist"] == {"component:0": True, "__composition_signature": signature}
+    assert booking_view(persisted)["pickup_items"][0]["composition"] == ["Аккумулятор", "Кабель"]
+    assert "inspections" not in booking_view(persisted)
+    with pytest.raises(Conflict, match="предвыдачная проверка"):
+        transition(booking_id, "ready", 100)
+
+
 def test_other_trusted_staff_can_sign_without_taking_the_assignee(monkeypatch):
     booking_id=ready_booking(monkeypatch);transition(booking_id,"ready",100)
     from app.handover import set_trusted_signer
